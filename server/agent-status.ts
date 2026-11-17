@@ -38,6 +38,10 @@ export function setAgentState(state: AgentState, detail = ''): void {
 }
 
 export function getAgentStatus(): AgentStatus & { label: string } {
+  // 오류 표시가 계속 남아 있지 않도록 5분이 지나면 대기 상태로 돌린다.
+  if (current.state === 'error' && Date.now() - new Date(current.since).getTime() > 5 * 60 * 1000) {
+    current = { ...current, state: 'idle', detail: '', since: new Date().toISOString(), startedAt: null };
+  }
   return { ...current, label: LABELS[current.state] };
 }
 
