@@ -15,8 +15,7 @@
     "build:server": "tsc -p tsconfig.server.json",
     "start": "node server-dist/index.js",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json",
-    "preview": "vite preview",
-    "postinstall": "node scripts/postinstall.js"
+    "preview": "vite preview"
   },
   "dependencies": {
     "better-sqlite3": "^11.10.0",
