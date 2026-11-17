@@ -21,6 +21,7 @@ export interface VaultItemView {
   title: string;
   type: VaultType;
   masked: string;
+  usernameMasked: string | null;
   hint: string;
   updatedAt: string;
   lastUsedAt: string | null;
@@ -103,15 +104,13 @@ function encryptionKey(): Buffer {
   return masterKey as Buffer;
 }
 
-function preview(value: string, type: VaultType): { masked: string; hint: string } {
-  if (type === 'login' && value.includes('@')) {
-    return { masked: maskEmail(value), hint: '2단계 인증 사용 중' };
-  }
+function preview(value: string, type: VaultType, username?: string | null): { masked: string; usernameMasked: string | null; hint: string } {
   if (type === 'memo') {
     const firstLine = value.split('\n')[0] || '';
-    return { masked: firstLine.slice(0, 42), hint: '메모' };
+    return { masked: firstLine.slice(0, 42), usernameMasked: null, hint: '메모' };
   }
-  return { masked: maskSecret(value), hint: value.length > 0 ? `${value.length}자` : '' };
+  const usernameMasked = username ? (username.includes('@') ? maskEmail(username) : maskSecret(username)) : null;
+  return { masked: maskSecret(value), usernameMasked, hint: '' };
 }
 
 export function vaultCount(): number {
@@ -130,7 +129,7 @@ export function listItems(query = ''): VaultItemView[] {
     } catch {
       secret = '';
     }
-    const { masked, hint } = preview(secret, row.type);
+    const { masked, usernameMasked, hint } = preview(secret, row.type, row.username);
     const haystack = `${row.title} ${row.notes || ''} ${row.type} ${row.username || ''} ${masked}`.toLowerCase();
     if (query && !haystack.includes(query.toLowerCase())) continue;
     out.push({
@@ -138,7 +137,8 @@ export function listItems(query = ''): VaultItemView[] {
       title: row.title,
       type: row.type,
       masked,
-      hint,
+      usernameMasked,
+      hint: row.notes ? row.notes.slice(0, 48) : hint,
       updatedAt: row.updated_at,
       lastUsedAt: row.last_used_at,
     });

@@ -274,16 +274,16 @@ export default function Setup() {
         </ol>
 
         {/* mascot stage */}
-        <div className="relative mt-6 flex items-end justify-center">
-          <Mascot name="pimong" hero size={148} className="-mr-4 hidden translate-y-3 animate-float sm:block" />
-          <Mascot name="pongi" hero size={132} className="-ml-2 hidden translate-y-5 animate-float sm:block" />
-          <div className="absolute -top-2 left-1/2 hidden -translate-x-1/2 rounded-2xl rounded-bl-md bg-white px-4 py-2 text-[13px] font-medium text-[#6B677A] shadow-card sm:block">
+        <div className="relative mt-4 flex h-[150px] items-end justify-center sm:h-[170px]">
+          <Mascot name="pimong" hero size={158} className="-mr-5 translate-y-5 animate-float" />
+          <Mascot name="pongi" hero size={142} className="-ml-3 translate-y-6 animate-float" />
+          <div className="absolute left-1/2 top-0 hidden -translate-x-1/2 rounded-2xl rounded-bl-md bg-white px-4 py-2 text-[13px] font-medium text-[#6B677A] shadow-card sm:block">
             {step === 0 ? '이 서버의 주인이 누구인지 알려주세요!' : step === 1 ? 'AI 키를 연결하면 더 똑똑해져요!' : step === 2 ? '취향을 알려주면 더 친해질 수 있어요!' : '준비가 끝났어요!'}
           </div>
         </div>
 
         {/* card */}
-        <div className="relative -mt-6 rounded-[34px] bg-white px-5 py-8 shadow-soft sm:px-12 sm:py-10">
+        <div className="relative -mt-8 rounded-[34px] bg-white px-5 py-8 shadow-soft sm:px-12 sm:py-10">
           <div className="flex flex-col items-center">
             <Logo size={30} withText={false} />
             <h1 className="mt-3 text-center text-[26px] font-bold tracking-[-0.02em] sm:text-[32px]">Pomong Agent Setup</h1>

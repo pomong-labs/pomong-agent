@@ -110,6 +110,7 @@ export interface VaultItem {
   title: string;
   type: 'apikey' | 'login' | 'memo';
   masked: string;
+  usernameMasked: string | null;
   hint: string;
   updatedAt: string;
   lastUsedAt: string | null;

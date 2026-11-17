@@ -13,15 +13,15 @@ export default function MobileTabBar() {
   const moreActive = ['/more', '/tasks', '/settings'].includes(location.pathname);
 
   return (
-    <nav className="pointer-events-none sticky bottom-0 z-20 w-full pb-safe lg:hidden">
-      <div className="pointer-events-auto mx-3 mb-1 flex items-stretch justify-between rounded-[26px] border border-[#F1EFF8] bg-white/95 px-2 py-2 shadow-[0_-6px_24px_rgba(90,80,160,0.08)] backdrop-blur">
+    <nav className="z-20 w-full shrink-0 border-t border-[#F1EFF8] bg-white pb-safe lg:hidden">
+      <div className="flex items-stretch justify-between px-3 pt-1.5">
         {tabs.map((tab) => {
           const active = tab.to === '/more' ? moreActive : tab.end ? location.pathname === '/' : location.pathname.startsWith(tab.to);
           return (
             <NavLink
               key={tab.to}
               to={tab.to}
-              className={`flex flex-1 flex-col items-center gap-1 rounded-[20px] py-2 text-[11px] font-medium transition ${
+              className={`flex flex-1 flex-col items-center gap-1 rounded-[18px] py-2 text-[11px] font-medium transition ${
                 active ? 'bg-[#F1ECFF] text-[#7C63F6]' : 'text-[#8A8A9A]'
               }`}
             >

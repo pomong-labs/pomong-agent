@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Cpu, HardDrive, MemoryStick, Menu, RefreshCw } from 'lucide-react';
+import { Box, Cpu, Database, Globe, HardDrive, MemoryStick, Menu, RefreshCw, Terminal } from 'lucide-react';
 import Gauge from '../components/Gauge';
 import Mascot from '../components/Mascot';
 import { api, type SystemStats } from '../lib/api';
@@ -13,10 +13,20 @@ const COLORS = {
   disk: { from: '#BCF4DE', to: '#12B886', solid: '#12B886', soft: '#EBFBF3' },
 } as const;
 
+const processIcon = (name: string) => {
+  const n = name.toLowerCase();
+  if (/postgres|mysql|redis|sqlite/.test(n)) return Database;
+  if (/nginx|apache|caddy|httpd/.test(n)) return Globe;
+  if (/ssh|bash|sh$|zsh/.test(n)) return Terminal;
+  if (/node|python|java|deno|bun/.test(n)) return Cpu;
+  return Box;
+};
+
 export default function Monitor() {
   const [stats, setStats] = useState<SystemStats | null>(null);
   const [history, setHistory] = useState<{ t: number; cpu: number; ram: number; disk: number }[]>([]);
   const [mode, setMode] = useState<ViewMode>('ring');
+  const [showAllLogs, setShowAllLogs] = useState(false);
 
   const load = () =>
     api
@@ -201,13 +211,16 @@ export default function Monitor() {
                     <div key={p.pid} className={`${i > 2 ? 'hidden lg:block' : ''}`}>
                       <div className="flex items-center gap-3 py-2.5 lg:py-3">
                         <span
-                          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-[12px] font-bold uppercase"
+                          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl"
                           style={{
                             background: [COLORS.cpu.soft, COLORS.ram.soft, COLORS.disk.soft][i % 3],
                             color: [COLORS.cpu.solid, COLORS.ram.solid, COLORS.disk.solid][i % 3],
                           }}
                         >
-                          {p.name.slice(0, 2)}
+                          {(() => {
+                            const Icon = processIcon(p.name);
+                            return <Icon size={17} strokeWidth={2} />;
+                          })()}
                         </span>
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-[14px] font-semibold text-[#3B3947]">{p.name}</p>
@@ -233,10 +246,12 @@ export default function Monitor() {
               <div className="pa-card p-4 lg:p-6">
                 <div className="flex items-center justify-between">
                   <h2 className="text-[16px] font-bold text-[#1F1D2B] lg:text-[19px]">최근 시스템 로그</h2>
-                  <span className="text-[13px] font-medium text-[#8B72F6]">전체 보기</span>
+                  <button className="text-[13px] font-medium text-[#8B72F6]" onClick={() => setShowAllLogs((v) => !v)}>
+                    {showAllLogs ? '접기' : '전체 보기'}
+                  </button>
                 </div>
                 <ul className="mt-2 divide-y divide-[#F5F3FA]">
-                  {stats.logs.slice(0, 5).map((log) => (
+                  {stats.logs.slice(0, showAllLogs ? 8 : 5).map((log) => (
                     <li key={log.id} className="flex items-start gap-3 py-3">
                       <span className="w-[42px] shrink-0 text-[12.5px] text-[#A8A5B8]">{formatTime(log.at)}</span>
                       <span

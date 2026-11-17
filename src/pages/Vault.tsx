@@ -132,8 +132,8 @@ export default function Vault() {
       return;
     }
     try {
-      const r = await api.get<{ secret: string }>(`/api/vault/items/${item.id}/reveal`);
-      setRevealed((prev) => ({ ...prev, [item.id]: r.secret }));
+      const r = await api.get<{ secret: string; username: string }>(`/api/vault/items/${item.id}/reveal`);
+      setRevealed((prev) => ({ ...prev, [item.id]: r.username ? `${r.username}\n${r.secret}` : r.secret }));
     } catch (err) {
       flash(err instanceof Error ? err.message : '표시할 수 없습니다.');
     }
@@ -298,6 +298,13 @@ export default function Vault() {
             {visible.map((item) => {
               const meta = TYPE_META[item.type];
               const shown = revealed[item.id];
+              const shownLines = shown ? shown.split('\n') : null;
+              const topLine = item.usernameMasked
+                ? shownLines && shownLines.length > 1
+                  ? shownLines[0]
+                  : item.usernameMasked
+                : null;
+              const secretLine = shownLines ? (shownLines.length > 1 ? shownLines[1] : shownLines[0]) : item.masked;
               return (
                 <div key={item.id} className="relative rounded-[24px] bg-white p-4 shadow-card ring-1 ring-[#F6F4FB] lg:p-5">
                   <div className="flex items-start gap-3">
@@ -321,8 +328,15 @@ export default function Vault() {
                         </p>
                       ) : (
                         <div className="mt-2 flex items-center gap-1.5">
-                          <div className="min-w-0 flex-1 truncate rounded-xl bg-[#FAF9FD] px-3 py-2 font-mono text-[13px] text-[#3B3947] ring-1 ring-[#F2F0F8]">
-                            {shown ?? item.masked}
+                          <div className="min-w-0 flex-1 space-y-1">
+                            {topLine ? (
+                              <div className="truncate rounded-xl bg-[#F7F6FB] px-3 py-1.5 font-mono text-[12.5px] text-[#6B677A] ring-1 ring-[#F2F0F8]">
+                                {topLine}
+                              </div>
+                            ) : null}
+                            <div className="min-w-0 truncate rounded-xl bg-[#FAF9FD] px-3 py-2 font-mono text-[13px] text-[#3B3947] ring-1 ring-[#F2F0F8]">
+                              {secretLine}
+                            </div>
                           </div>
                           <button
                             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[#8A8A9A] ring-1 ring-[#F0EEF6] transition hover:bg-[#FAF9FF]"
@@ -345,7 +359,9 @@ export default function Vault() {
                         <p className="text-[12px] text-[#A8A5B8]">
                           {item.type === 'memo'
                             ? `수정 ${formatDate(item.updatedAt)}`
-                            : `등록 ${formatDate(item.updatedAt)}${item.lastUsedAt ? ` · 마지막 사용 ${formatRelative(item.lastUsedAt)}` : ''}`}
+                            : item.hint
+                              ? item.hint
+                              : `등록 ${formatDate(item.updatedAt)}${item.lastUsedAt ? ` · 마지막 사용 ${formatRelative(item.lastUsedAt)}` : ''}`}
                         </p>
                         <button className="text-[#D9D5E4] transition hover:text-[#E5484D]" onClick={() => remove(item)} aria-label="삭제">
                           <Trash2 size={14} />
@@ -397,7 +413,7 @@ export default function Vault() {
 
       {/* floating add (mobile) */}
       <button
-        className="absolute bottom-24 right-5 flex h-14 w-14 items-center justify-center rounded-full text-white shadow-float sm:hidden"
+        className="absolute bottom-4 right-5 flex h-14 w-14 items-center justify-center rounded-full text-white shadow-float sm:hidden"
         style={{ background: 'linear-gradient(135deg,#FFA6C1,#F2568B)' }}
         onClick={() => setShowAdd(true)}
         aria-label="새 항목 추가"
