@@ -244,7 +244,7 @@ export default function Setup() {
   }
 
   return (
-    <div className="relative min-h-full overflow-hidden bg-pomong-bg px-4 pb-14 pt-8 sm:px-8">
+    <div className="pa-scroll relative h-full overflow-y-auto overflow-x-hidden bg-pomong-bg px-4 pb-14 pt-8 sm:px-8">
       {/* soft decorations */}
       <div className="pointer-events-none absolute -left-24 top-24 h-72 w-72 rounded-full bg-[#FFE4EE] opacity-40 blur-3xl" />
       <div className="pointer-events-none absolute -right-16 top-10 h-64 w-64 rounded-full bg-[#E4F4FF] opacity-50 blur-3xl" />

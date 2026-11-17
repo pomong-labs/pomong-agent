@@ -36,7 +36,7 @@ export default function Login() {
   };
 
   return (
-    <div className="relative flex min-h-full items-center justify-center overflow-hidden bg-pomong-bg px-4 py-10">
+    <div className="pa-scroll relative flex h-full items-center justify-center overflow-y-auto overflow-x-hidden bg-pomong-bg px-4 py-10">
       <div className="pointer-events-none absolute -left-20 top-10 h-72 w-72 rounded-full bg-[#FFE4EE] opacity-40 blur-3xl" />
       <div className="pointer-events-none absolute -right-16 bottom-0 h-72 w-72 rounded-full bg-[#E4F4FF] opacity-50 blur-3xl" />
 
