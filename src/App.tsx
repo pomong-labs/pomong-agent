@@ -3,7 +3,7 @@ import { Navigate, Outlet, Route, Routes, useNavigate } from 'react-router-dom';
 import AppShell from './components/AppShell';
 import Mascot from './components/Mascot';
 import { api, ApiError } from './lib/api';
-import { AppStoreProvider } from './lib/store';
+import { AppStoreProvider, useAppStore } from './lib/store';
 import Chat from './pages/Chat';
 import Login from './pages/Login';
 import Monitor from './pages/Monitor';
@@ -25,6 +25,7 @@ function Splash() {
 function RequireAuth() {
   const [state, setState] = useState<'loading' | 'ok' | 'login' | 'setup'>('loading');
   const navigate = useNavigate();
+  const { refreshAll } = useAppStore();
 
   useEffect(() => {
     api
@@ -38,6 +39,10 @@ function RequireAuth() {
         }
       });
   }, []);
+
+  useEffect(() => {
+    if (state === 'ok') void refreshAll();
+  }, [state, refreshAll]);
 
   useEffect(() => {
     if (state === 'login') navigate('/login', { replace: true });

@@ -128,6 +128,7 @@ export interface VaultItem {
   masked: string;
   usernameMasked: string | null;
   hint: string;
+  notes: string;
   updatedAt: string;
   lastUsedAt: string | null;
 }

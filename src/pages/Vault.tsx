@@ -184,7 +184,7 @@ export default function Vault() {
         type: item.type,
         username: r.username || '',
         secret: r.secret,
-        notes: item.hint && item.hint !== '메모' ? item.hint : '',
+        notes: item.notes || '',
       });
     } catch (err) {
       flash(err instanceof Error ? err.message : '항목을 열지 못했습니다.');

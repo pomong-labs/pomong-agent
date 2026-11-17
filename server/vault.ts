@@ -23,6 +23,7 @@ export interface VaultItemView {
   masked: string;
   usernameMasked: string | null;
   hint: string;
+  notes: string;
   updatedAt: string;
   lastUsedAt: string | null;
 }
@@ -139,6 +140,7 @@ export function listItems(query = ''): VaultItemView[] {
       masked,
       usernameMasked,
       hint: row.notes ? row.notes.slice(0, 48) : hint,
+      notes: row.notes || '',
       updatedAt: row.updated_at,
       lastUsedAt: row.last_used_at,
     });

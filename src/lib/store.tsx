@@ -22,6 +22,7 @@ interface AppStoreValue {
   models: ModelsResponse | null;
   refreshModels: () => Promise<void>;
   refreshProfile: () => Promise<void>;
+  refreshAll: () => Promise<void>;
   selectModel: (provider: string, model?: string) => Promise<{ ok: boolean; message?: string; needsKey?: boolean }>;
   messages: ChatMessage[];
   messagesLoaded: boolean;
@@ -156,6 +157,28 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     };
   }, [sending]);
 
+  const loadMessages = useCallback(async () => {
+    try {
+      const r = await api.get<{ messages: ChatMessage[] }>('/api/chat/messages');
+      setMessages(r.messages);
+    } catch {
+      /* not signed in yet */
+    } finally {
+      setMessagesLoaded(true);
+    }
+  }, []);
+
+  /** 로그인/설정 완료 직후 프로필·모델·대화를 다시 불러온다. */
+  const refreshAll = useCallback(async () => {
+    await Promise.all([refreshProfile(), refreshModels(), loadMessages()]);
+    try {
+      const me = await api.get<{ aiConfigured: boolean }>('/api/auth/me');
+      setAiReady(me.aiConfigured);
+    } catch {
+      /* ignore */
+    }
+  }, [refreshProfile, refreshModels, loadMessages]);
+
   const selectModel = useCallback(
     async (provider: string, model?: string) => {
       try {
@@ -223,6 +246,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       models,
       refreshModels,
       refreshProfile,
+      refreshAll,
       selectModel,
       messages,
       messagesLoaded,
@@ -237,7 +261,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       visibleState,
       keyboardOpen,
     }),
-    [profile, models, refreshModels, refreshProfile, selectModel, messages, messagesLoaded, sending, error, aiReady, send, clearChat, draft, agent, visibleState, keyboardOpen]
+    [profile, models, refreshModels, refreshProfile, refreshAll, selectModel, messages, messagesLoaded, sending, error, aiReady, send, clearChat, draft, agent, visibleState, keyboardOpen]
   );
 
   return <AppStore.Provider value={value}>{children}</AppStore.Provider>;
