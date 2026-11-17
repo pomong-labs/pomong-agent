@@ -264,9 +264,16 @@ export async function runTool(name: string, args: Record<string, unknown>): Prom
     }
     case 'time_now': {
       const now = new Date();
-      return {
-        content: `${now.toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })} (Asia/Seoul, ${now.toISOString()})`,
-      };
+      const label = now.toLocaleString('ko-KR', {
+        timeZone: 'Asia/Seoul',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        weekday: 'long',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+      return { content: `${label} (Asia/Seoul, ${now.toISOString()})` };
     }
     default:
       return { content: `알 수 없는 도구입니다: ${name}` };

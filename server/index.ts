@@ -445,7 +445,15 @@ function serverContextForPrompt(): string {
     .filter((t) => !t.done)
     .slice(0, 12)
     .map((t) => `- [할 일] ${t.title}${t.due ? ` (마감 ${t.due})` : ''}${t.priority !== 'normal' ? ` [우선순위 ${t.priority}]` : ''}`);
-  const now = new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' });
+  const now = new Date().toLocaleString('ko-KR', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    weekday: 'long',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
   return [
     `현재 시각: ${now} (Asia/Seoul)`,
     `서버: ${s.hostname} (${s.osName})`,
