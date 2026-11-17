@@ -502,8 +502,8 @@ function detectMeta(text: string): ChatMeta | null {
 app.get('/api/chat/messages', requireAuth, (req, res) => {
   const session = String(req.query.session || 'default');
   const rows = db
-    .prepare('SELECT id, role, content, meta, created_at FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT 100')
-    .all(session) as { id: number; role: string; content: string; meta: string | null; created_at: string }[];
+    .prepare('SELECT id, role, content, meta, model, created_at FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT 100')
+    .all(session) as { id: number; role: string; content: string; meta: string | null; model: string | null; created_at: string }[];
   res.json({
     ok: true,
     messages: rows.reverse().map((r) => ({
@@ -511,6 +511,7 @@ app.get('/api/chat/messages', requireAuth, (req, res) => {
       role: r.role,
       content: r.content,
       meta: r.meta ? JSON.parse(r.meta) : null,
+      model: r.model,
       createdAt: r.created_at,
     })),
   });

@@ -223,6 +223,9 @@ export default function Chat() {
 }
 
 function AssistantBubble({ message, character, agentName }: { message: ChatMessage; character: string; agentName: string }) {
+  const { models } = useAppStore();
+  const answeredModel = message.model ? message.model.split(':').slice(-1)[0] : '';
+  const answeredLabel = answeredModel ? models?.labels?.[answeredModel] || answeredModel : '';
   return (
     <div className="flex items-start gap-2.5 animate-fade-up lg:gap-3.5">
       <div className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#FFF0F5] ring-1 ring-[#FFE4EE] sm:flex lg:h-11 lg:w-11">
@@ -234,6 +237,11 @@ function AssistantBubble({ message, character, agentName }: { message: ChatMessa
         {message.meta?.type === 'tasks' && message.meta.tasks ? <TasksCard tasks={message.meta.tasks} /> : null}
         <div className="mt-2.5 flex items-center gap-1 text-[11.5px] text-[#C0BCCD]">
           {formatClock(message.createdAt)}
+          {answeredLabel ? (
+            <span className="ml-1 rounded-full bg-[#FAF9FD] px-1.5 py-0.5 text-[10.5px] font-medium text-[#B4B1C2]" title="실제 응답한 모델">
+              {answeredLabel}
+            </span>
+          ) : null}
           {message.meta?.tools?.length ? (
             <span className="ml-1 rounded-full bg-[#F7F5FF] px-1.5 py-0.5 text-[10.5px] font-medium text-[#9B98AB]">
               도구 {message.meta.tools.length}회
