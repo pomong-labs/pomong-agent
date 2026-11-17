@@ -23,6 +23,8 @@ export interface ToolCall {
   id: string;
   name: string;
   args: Record<string, unknown>;
+  /** Gemini 3.x: functionCall 파트를 되돌려 보낼 때 필요한 서명 */
+  signature?: string;
 }
 
 export const PROVIDERS: Record<ProviderId, { label: string; defaultModel: string; models: string[]; console: string }> = {
@@ -218,6 +220,7 @@ function splitSystem(messages: AgentMessage[]): { system: string; turns: ToolRun
 
 type GeminiPart = {
   text?: string;
+  thoughtSignature?: string;
   functionCall?: { name?: string; args?: Record<string, unknown> };
   functionResponse?: { name?: string; response?: Record<string, unknown> };
 };
@@ -247,7 +250,12 @@ async function geminiStep(
     if (turn.role === 'assistant') {
       const parts: GeminiPart[] = [];
       if (turn.content.trim()) parts.push({ text: turn.content });
-      for (const call of turn.toolCalls || []) parts.push({ functionCall: { name: call.name, args: call.args } });
+      for (const call of turn.toolCalls || []) {
+        // Gemini 3.x는 functionCall에 thoughtSignature를 함께 돌려보내야 도구 루프를 이어갈 수 있다.
+        const part: GeminiPart = { functionCall: { name: call.name, args: call.args } };
+        if (call.signature) part.thoughtSignature = call.signature;
+        parts.push(part);
+      }
       if (!parts.length) parts.push({ text: '' });
       const last = contents[contents.length - 1];
       if (last && last.role === 'model') last.parts.push(...parts);
@@ -292,6 +300,7 @@ async function geminiStep(
       id: `gemini-${Date.now()}-${i}`,
       name: String(p.functionCall?.name),
       args: (p.functionCall?.args || {}) as Record<string, unknown>,
+      signature: p.thoughtSignature,
     }));
   return { text, model: modelName, toolCalls };
 }
