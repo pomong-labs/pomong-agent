@@ -72,7 +72,7 @@ export default function Monitor() {
   return (
     <div className="relative flex h-full min-h-0 flex-col">
       <header className="flex items-center gap-3 px-4 pb-2 pt-4 lg:px-10 lg:pb-3 lg:pt-8">
-        <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[#F0F8FF] ring-1 ring-[#E3F2FF] lg:hidden">
+        <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[#F0F8FF] ring-1 ring-[#E3F2FF]">
           <Mascot name="pongi" hero size={30} />
         </div>
         <div className="min-w-0 flex-1">
@@ -272,14 +272,12 @@ export default function Monitor() {
         )}
       </div>
 
-      {/* mascot bubble (desktop) */}
-      <div className="pointer-events-none absolute bottom-10 right-6 hidden xl:block">
-        <div className="relative flex flex-col items-center">
-          <div className="rounded-2xl rounded-br-md bg-white px-4 py-2.5 text-[13.5px] font-medium text-[#6B677A] shadow-card">
-            {stats?.status === 'healthy' ? '서버 아주 쾌적해요!' : '조금 살펴볼까요?'}
-          </div>
-          <Mascot name="pongi" hero size={120} className="mt-1 animate-float" />
-        </div>
+      {/* mascot bubble — small, in the page header, never over the data cards */}
+      <div className="pointer-events-none absolute right-6 top-3 hidden items-center gap-1.5 md:flex lg:right-10">
+        <span className="rounded-2xl rounded-br-md bg-white px-3 py-1 text-[12px] font-medium text-[#6B677A] shadow-card">
+          {stats?.status === 'healthy' ? '서버 아주 쾌적해요!' : '조금 살펴볼까요?'}
+        </span>
+        <Mascot name="pongi" hero size={26} />
       </div>
     </div>
   );
