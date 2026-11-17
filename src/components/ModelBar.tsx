@@ -50,15 +50,15 @@ export default function ModelBar() {
 
   return (
     <div ref={wrapRef} className="relative">
-      <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
-        <span className="flex shrink-0 items-center gap-1 pl-1 pr-0.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-[#B4B1C2]">
+      <div className="flex flex-wrap items-center gap-1.5 pb-0.5">
+        <span className="flex items-center gap-1 pl-1 pr-0.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-[#B4B1C2]">
           <Sparkles size={11} /> 모델
         </span>
         {providers.map((provider) => {
           const isActive = active?.provider === provider.id;
           const label = provider.id === 'gemini' && isActive ? modelLabel(models?.labels, active?.model || '') : PROVIDER_LABEL[provider.id] || provider.label;
           return (
-            <div key={provider.id} className="relative shrink-0">
+            <div key={provider.id} className="relative">
               <button
                 type="button"
                 onClick={() => {
