@@ -6,7 +6,7 @@ import { api } from '../lib/api';
 
 export default function More() {
   const navigate = useNavigate();
-  const [version, setVersion] = useState('0.1.1');
+  const [version, setVersion] = useState('0.2.0');
 
   useEffect(() => {
     api

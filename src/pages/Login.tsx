@@ -12,7 +12,7 @@ export default function Login() {
   const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [version, setVersion] = useState('0.1.1');
+  const [version, setVersion] = useState('0.2.0');
 
   useEffect(() => {
     api

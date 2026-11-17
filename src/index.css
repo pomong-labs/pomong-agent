@@ -15,11 +15,32 @@
     height: 100%;
   }
 
+  html {
+    /* iOS Safari/PWA: 주소창·키보드에 따라 보이는 영역 높이가 바뀌므로 JS가 --app-height를 채운다 */
+    --app-height: 100%;
+    background: #f6f6fa;
+  }
+
+  #root {
+    height: var(--app-height, 100%);
+    overflow: hidden;
+  }
+
   body {
     @apply bg-[#F6F6FA] text-pomong-ink antialiased;
     font-family: 'Spoqa Han Sans Neo', 'Apple SD Gothic Neo', system-ui, -apple-system, sans-serif;
     -webkit-tap-highlight-color: transparent;
     overscroll-behavior-y: none;
+    overflow: hidden;
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* 키보드가 올라오면 하단 탭바는 숨겨 화면을 넓게 쓴다 */
+  html.kb-open .pa-tabbar {
+    display: none !important;
   }
 
   ::selection {

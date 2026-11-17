@@ -201,6 +201,8 @@ export default function Monitor() {
             ) : null}
 
             {/* processes + logs */}
+            <SystemDetail stats={stats} history={history} />
+
             <div className="mt-3 grid grid-cols-1 gap-3 lg:mt-5 lg:grid-cols-[1.6fr_1fr] lg:gap-5">
               <div className="pa-card p-4 lg:p-6">
                 <div className="flex items-center justify-between">
@@ -282,6 +284,96 @@ export default function Monitor() {
         <Mascot name={healthy ? 'pongi-check' : 'pongi-alert'} size={28} />
       </div>
     </div>
+  );
+}
+
+function SystemDetail({ stats, history }: { stats: SystemStats; history: { t: number; cpu: number; ram: number; disk: number }[] }) {
+  const summary = (key: 'cpu' | 'ram' | 'disk') => {
+    if (!history.length) return { min: 0, avg: 0, max: 0 };
+    const values = history.map((h) => h[key]);
+    return {
+      min: Math.min(...values),
+      avg: values.reduce((a, b) => a + b, 0) / values.length,
+      max: Math.max(...values),
+    };
+  };
+  const rows = [
+    { key: 'cpu' as const, label: 'CPU', color: COLORS.cpu.solid },
+    { key: 'ram' as const, label: 'RAM', color: COLORS.ram.solid },
+    { key: 'disk' as const, label: '디스크', color: COLORS.disk.solid },
+  ];
+  const details = [
+    ['호스트', stats.hostname],
+    ['운영체제', stats.osName],
+    ['CPU 모델', stats.cpuModel],
+    ['코어 / 클럭', `${stats.cores}코어 · ${(stats.cpuMhz / 1000).toFixed(2)} GHz`],
+    ['부하 (1/5/15분)', `${stats.load1} / ${stats.load5} / ${stats.load15}`],
+    ['가동 시간', formatUptime(stats.uptimeSec)],
+    ['메모리', `${stats.ramUsedGB} / ${stats.ramTotalGB} GB`],
+    ['디스크', `${stats.diskUsedGB} / ${stats.diskTotalGB} GB`],
+  ] as const;
+
+  return (
+    <div className="pa-card mt-3 p-4 lg:mt-5 lg:p-6">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-[16px] font-bold text-[#1F1D2B] lg:text-[19px]">시스템 상세</h2>
+        <span className="text-[12px] text-[#9B98AB]">최근 {Math.max(1, Math.round((history.length * 3) / 60))}분 샘플 기준</span>
+      </div>
+      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        {rows.map((row) => {
+          const s = summary(row.key);
+          return (
+            <div key={row.key} className="rounded-2xl bg-[#FAF9FD] px-3.5 py-3">
+              <div className="flex items-center justify-between text-[12.5px] font-semibold text-[#5B5866]">
+                <span>{row.label} 추이</span>
+                <span style={{ color: row.color }}>지금 {Math.round(stats[row.key])}%</span>
+              </div>
+              <Sparkline history={history} metric={row.key} color={row.color} />
+              <p className="mt-1 text-[11.5px] text-[#9B98AB]">
+                최소 {Math.round(s.min)}% · 평균 {Math.round(s.avg)}% · 최대 {Math.round(s.max)}%
+              </p>
+            </div>
+          );
+        })}
+      </div>
+      <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4">
+        {details.map(([label, value]) => (
+          <div key={label} className="min-w-0">
+            <dt className="text-[11.5px] text-[#A8A5B8]">{label}</dt>
+            <dd className="truncate text-[13px] font-semibold text-[#3B3947]" title={value}>
+              {value}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+function Sparkline({
+  history,
+  metric,
+  color,
+}: {
+  history: { t: number; cpu: number; ram: number; disk: number }[];
+  metric: 'cpu' | 'ram' | 'disk';
+  color: string;
+}) {
+  const data = history.slice(-40);
+  if (data.length < 2) return <div className="mt-2 h-8 rounded-lg bg-white/70" />;
+  const w = 240;
+  const h = 34;
+  const points = data
+    .map((d, i) => {
+      const x = (i / (data.length - 1)) * w;
+      const y = h - (Math.min(100, d[metric]) / 100) * (h - 4) - 2;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(' ');
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} className="mt-2 h-9 w-full" preserveAspectRatio="none">
+      <polyline points={points} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   );
 }
 

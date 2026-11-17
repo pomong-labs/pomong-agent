@@ -62,6 +62,29 @@ CREATE TABLE IF NOT EXISTS logs (
 `);
 
 /* ------------------------------------------------------------------ */
+/* Schema migrations (기존 data/ 를 지우지 않고 컬럼만 더한다)          */
+/* ------------------------------------------------------------------ */
+
+function columnsOf(table: string): Set<string> {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  return new Set(rows.map((r) => r.name));
+}
+
+{
+  const taskCols = columnsOf('tasks');
+  if (!taskCols.has('priority')) db.exec("ALTER TABLE tasks ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal'");
+  if (!taskCols.has('notes')) db.exec('ALTER TABLE tasks ADD COLUMN notes TEXT');
+  if (!taskCols.has('updated_at')) db.exec('ALTER TABLE tasks ADD COLUMN updated_at TEXT');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_open ON tasks(done, priority, due)');
+}
+
+{
+  const msgCols = columnsOf('messages');
+  if (!msgCols.has('model')) db.exec('ALTER TABLE messages ADD COLUMN model TEXT');
+}
+
+
+/* ------------------------------------------------------------------ */
 /* Settings                                                            */
 /* ------------------------------------------------------------------ */
 

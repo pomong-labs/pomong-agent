@@ -2,10 +2,20 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, Check, Eye, EyeOff, KeyRound, ShieldCheck, Sparkles } from 'lucide-react';
 import Mascot from '../components/Mascot';
+import MascotFace from '../components/MascotFace';
 import Logo from '../components/Logo';
 import { api, ApiError } from '../lib/api';
 
 type ProviderId = 'gemini' | 'openai' | 'claude';
+
+const SETUP_MASCOTS = [
+  { id: 'poding', name: '포딩' },
+  { id: 'pimong', name: '피몽' },
+  { id: 'lamong', name: '라몽' },
+  { id: 'pongi', name: '퐁이' },
+  { id: 'mello', name: '멜로' },
+  { id: 'minti', name: '민티' },
+];
 
 const STEPS = [
   { n: 1, label: '계정', color: '#FFB7CA', tint: '#FFF0F4' },
@@ -75,6 +85,7 @@ export default function Setup() {
   // step 3
   const [nickname, setNickname] = useState('');
   const [agentName, setAgentName] = useState('Pomong');
+  const [character, setCharacter] = useState('pimong');
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
   const [language, setLanguage] = useState<'ko' | 'en'>('ko');
 
@@ -145,7 +156,7 @@ export default function Setup() {
   };
 
   const savePrefs = async () => {
-    await api.post('/api/setup/preferences', { nickname, agentName, theme, language });
+    await api.post('/api/setup/preferences', { nickname, agentName, character, theme, language });
   };
 
   const next = async () => {
@@ -277,8 +288,7 @@ export default function Setup() {
         <div className="relative mt-12 flex h-[152px] items-end justify-center">
           {step === 2 ? (
             <>
-              <Mascot name="lamong" size={132} className="-mr-4 animate-float" />
-              <Mascot name="minti" size={140} className="-ml-3 animate-float" />
+              <MascotFace character={character} state="responding" size={136} className="animate-float" />
             </>
           ) : (
             <>
@@ -429,10 +439,30 @@ export default function Setup() {
                   <Field label="내 닉네임" hint="선택">
                     <input className="pa-input" placeholder="예: 지민" value={nickname} onChange={(e) => setNickname(e.target.value)} />
                   </Field>
-                  <Field label="에이전트 이름">
+                  <Field label="AI 이름">
                     <input className="pa-input" value={agentName} onChange={(e) => setAgentName(e.target.value)} />
                   </Field>
                 </div>
+                <Field label="AI 캐릭터" hint="나중에 설정에서 바꿀 수 있어요">
+                  <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+                    {SETUP_MASCOTS.map((m) => {
+                      const active = character === m.id;
+                      return (
+                        <button
+                          key={m.id}
+                          type="button"
+                          onClick={() => setCharacter(m.id)}
+                          className={`flex flex-col items-center gap-1 rounded-2xl border-[1.5px] px-2 py-2.5 transition ${
+                            active ? 'border-[#C9B8FF] bg-[#F8F5FF]' : 'border-[#E9E7F2] bg-white hover:bg-[#FBFAFF]'
+                          }`}
+                        >
+                          <MascotFace character={m.id} state={active ? 'responding' : 'idle'} size={42} />
+                          <span className={`text-[12px] font-semibold ${active ? 'text-[#7C63F6]' : 'text-[#6B677A]'}`}>{m.name}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </Field>
                 <Field label="테마">
                   <div className="grid grid-cols-2 gap-3">
                     <button
@@ -496,6 +526,7 @@ export default function Setup() {
                   <SummaryRow label="관리자 계정" value={username || 'admin'} />
                   <SummaryRow label="AI 서비스" value={connected ? PROVIDERS.find((p) => p.id === provider)?.label || '연결됨' : '나중에 설정'} />
                   <SummaryRow label="에이전트" value={agentName || 'Pomong'} />
+                  <SummaryRow label="캐릭터" value={SETUP_MASCOTS.find((m) => m.id === character)?.name || '피몽'} />
                   <SummaryRow label="보안" value="AES-256-GCM 금고 사용 가능" />
                 </dl>
               </div>

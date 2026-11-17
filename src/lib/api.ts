@@ -51,6 +51,7 @@ export interface Profile {
   theme: 'light' | 'dark';
   language: 'ko' | 'en';
   agentName: string;
+  character: string;
 }
 
 export interface ProcessInfo {
@@ -84,17 +85,31 @@ export interface SystemStats {
   sampledAt: string;
 }
 
+export type TaskPriority = 'high' | 'normal' | 'low';
+
 export interface Task {
   id: string;
   title: string;
   done: boolean;
   due: string | null;
+  priority: TaskPriority;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface TaskCounts {
+  all: number;
+  open: number;
+  done: number;
+  high: number;
 }
 
 export interface ChatMeta {
   type: 'server_stats' | 'tasks';
   stats?: SystemStats;
   tasks?: Task[];
+  tools?: string[];
 }
 
 export interface ChatMessage {
@@ -103,6 +118,7 @@ export interface ChatMessage {
   content: string;
   meta: ChatMeta | null;
   createdAt: string;
+  model?: string | null;
 }
 
 export interface VaultItem {
@@ -131,10 +147,36 @@ export interface MeResponse {
   aiConfigured: boolean;
 }
 
+export interface ProviderInfo {
+  id: ProviderId;
+  label: string;
+  models: string[];
+  defaultModel: string;
+  console: string;
+  connected: boolean;
+  connectedAt: string | null;
+  active: boolean;
+}
+
+export interface ModelsResponse {
+  ok: true;
+  active: { provider: ProviderId; model: string };
+  providers: ProviderInfo[];
+  labels: Record<string, string>;
+  lastGoodGeminiModel: string | null;
+}
+
+export interface MascotInfo {
+  id: string;
+  name: string;
+}
+
 export interface SettingsResponse {
   ok: true;
   profile: Profile;
   version: string;
+  mascots: MascotInfo[];
+  active: { provider: ProviderId; model: string };
   provider: { provider: ProviderId; label: string; model: string; connectedAt: string } | null;
-  providers: { id: ProviderId; label: string; models: string[]; defaultModel: string; console: string }[];
+  providers: ProviderInfo[];
 }

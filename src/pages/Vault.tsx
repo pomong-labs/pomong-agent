@@ -10,6 +10,7 @@ import {
   KeyRound,
   Lock,
   MoreVertical,
+  Pencil,
   Plus,
   Search,
   ShieldCheck,
@@ -61,6 +62,14 @@ export default function Vault() {
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState('');
   const [showAdd, setShowAdd] = useState(false);
+  const [editingItem, setEditingItem] = useState<{
+    id: string;
+    title: string;
+    type: 'apikey' | 'login' | 'memo';
+    username: string;
+    secret: string;
+    notes: string;
+  } | null>(null);
   const [revealed, setRevealed] = useState<Record<string, string>>({});
 
   const flash = (msg: string) => {
@@ -147,6 +156,38 @@ export default function Vault() {
       loadItems();
     } catch (err) {
       flash(err instanceof Error ? err.message : '복사할 수 없습니다.');
+    }
+  };
+
+  const copyField = async (item: VaultItem, field: 'username' | 'secret') => {
+    try {
+      const r = await api.get<{ secret: string; username: string }>(`/api/vault/items/${item.id}/reveal`);
+      const value = field === 'username' ? r.username : r.secret;
+      if (!value) {
+        flash(field === 'username' ? '저장된 아이디가 없습니다' : '복사할 값이 없습니다');
+        return;
+      }
+      const ok = await copyText(value);
+      flash(ok ? (field === 'username' ? '아이디를 복사했습니다' : '비밀번호를 복사했습니다') : '복사 권한이 없습니다');
+      loadItems();
+    } catch (err) {
+      flash(err instanceof Error ? err.message : '복사할 수 없습니다.');
+    }
+  };
+
+  const openEdit = async (item: VaultItem) => {
+    try {
+      const r = await api.get<{ secret: string; username: string }>(`/api/vault/items/${item.id}/reveal`);
+      setEditingItem({
+        id: item.id,
+        title: item.title,
+        type: item.type,
+        username: r.username || '',
+        secret: r.secret,
+        notes: item.hint && item.hint !== '메모' ? item.hint : '',
+      });
+    } catch (err) {
+      flash(err instanceof Error ? err.message : '항목을 열지 못했습니다.');
     }
   };
 
@@ -258,7 +299,7 @@ export default function Vault() {
               <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-[#B7B4C6]" />
               <input
                 className="pa-input pl-11"
-                placeholder="항목 검색"
+                placeholder="제목·메모로 검색"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
               />
@@ -274,18 +315,19 @@ export default function Vault() {
           <div className="mt-3 flex items-center gap-2 overflow-x-auto no-scrollbar">
             {(
               [
-                ['all', '전체'],
-                ['apikey', 'API 키'],
-                ['login', '로그인'],
-                ['memo', '메모'],
+                ['all', '전체', items.length],
+                ['apikey', 'API 키', items.filter((i) => i.type === 'apikey').length],
+                ['login', '로그인', items.filter((i) => i.type === 'login').length],
+                ['memo', '메모', items.filter((i) => i.type === 'memo').length],
               ] as const
-            ).map(([value, label]) => (
+            ).map(([value, label, count]) => (
               <button
                 key={value}
                 onClick={() => setFilter(value)}
                 className={`pa-chip shrink-0 ${filter === value ? 'pa-chip-active' : ''}`}
               >
                 {label}
+                <span className={`ml-1.5 text-[12px] ${filter === value ? 'text-white/80' : 'text-[#B4B1C2]'}`}>{count}</span>
               </button>
             ))}
           </div>
@@ -327,31 +369,49 @@ export default function Vault() {
                           {shown ?? item.masked}
                         </p>
                       ) : (
-                        <div className="mt-2 flex items-center gap-1.5">
-                          <div className="min-w-0 flex-1 space-y-1">
-                            {topLine ? (
-                              <div className="truncate rounded-xl bg-[#F7F6FB] px-3 py-1.5 font-mono text-[12.5px] text-[#6B677A] ring-1 ring-[#F2F0F8]">
+                        <div className="mt-2 space-y-1.5">
+                          {topLine ? (
+                            <div className="flex items-center gap-1.5">
+                              <div className="min-w-0 flex-1 truncate rounded-xl bg-[#F7F6FB] px-3 py-1.5 font-mono text-[12.5px] text-[#6B677A] ring-1 ring-[#F2F0F8]">
                                 {topLine}
                               </div>
-                            ) : null}
-                            <div className="min-w-0 truncate rounded-xl bg-[#FAF9FD] px-3 py-2 font-mono text-[13px] text-[#3B3947] ring-1 ring-[#F2F0F8]">
+                              {item.type === 'login' ? (
+                                <button
+                                  className="shrink-0 rounded-lg bg-[#F7F6FB] px-2 py-1.5 text-[11px] font-semibold text-[#8A8A9A] ring-1 ring-[#F0EEF6] active:scale-95"
+                                  onClick={() => copyField(item, 'username')}
+                                  aria-label="아이디 복사"
+                                >
+                                  ID
+                                </button>
+                              ) : null}
+                              <button
+                                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[#8A8A9A] ring-1 ring-[#F0EEF6] active:scale-95"
+                                onClick={() => copy(item)}
+                                aria-label="복사"
+                              >
+                                <Copy size={14} />
+                              </button>
+                            </div>
+                          ) : null}
+                          <div className="flex items-center gap-1.5">
+                            <div className="min-w-0 flex-1 truncate rounded-xl bg-[#FAF9FD] px-3 py-2 font-mono text-[13px] text-[#3B3947] ring-1 ring-[#F2F0F8]">
                               {secretLine}
                             </div>
+                            <button
+                              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#FAF9FD] text-[#8A8A9A] ring-1 ring-[#F0EEF6] active:scale-95"
+                              onClick={() => copyField(item, 'secret')}
+                              aria-label={item.type === 'login' ? '비밀번호 복사' : '복사'}
+                            >
+                              <Copy size={14} />
+                            </button>
+                            <button
+                              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[#8A8A9A] ring-1 ring-[#F0EEF6] active:scale-95"
+                              onClick={() => reveal(item)}
+                              aria-label="보기"
+                            >
+                              {shown ? <EyeOff size={14} /> : <Eye size={14} />}
+                            </button>
                           </div>
-                          <button
-                            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[#8A8A9A] ring-1 ring-[#F0EEF6] transition hover:bg-[#FAF9FF]"
-                            onClick={() => copy(item)}
-                            aria-label="복사"
-                          >
-                            <Copy size={15} />
-                          </button>
-                          <button
-                            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[#8A8A9A] ring-1 ring-[#F0EEF6] transition hover:bg-[#FAF9FF]"
-                            onClick={() => reveal(item)}
-                            aria-label="보기"
-                          >
-                            {shown ? <EyeOff size={15} /> : <Eye size={15} />}
-                          </button>
                         </div>
                       )}
 
@@ -363,9 +423,14 @@ export default function Vault() {
                               ? item.hint
                               : `등록 ${formatDate(item.updatedAt)}${item.lastUsedAt ? ` · 마지막 사용 ${formatRelative(item.lastUsedAt)}` : ''}`}
                         </p>
-                        <button className="text-[#D9D5E4] transition hover:text-[#E5484D]" onClick={() => remove(item)} aria-label="삭제">
-                          <Trash2 size={14} />
-                        </button>
+                        <div className="flex items-center gap-1">
+                          <button className="rounded-lg p-1.5 text-[#C9C5D6] transition hover:text-[#7C63F6]" onClick={() => openEdit(item)} aria-label="수정">
+                            <Pencil size={14} />
+                          </button>
+                          <button className="rounded-lg p-1.5 text-[#D9D5E4] transition hover:text-[#E5484D]" onClick={() => remove(item)} aria-label="삭제">
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -428,7 +493,7 @@ export default function Vault() {
       ) : null}
 
       {showAdd ? (
-        <AddItemModal
+        <ItemModal
           onClose={() => setShowAdd(false)}
           onSaved={() => {
             setShowAdd(false);
@@ -438,24 +503,51 @@ export default function Vault() {
           }}
         />
       ) : null}
+
+      {editingItem ? (
+        <ItemModal
+          initial={editingItem}
+          onClose={() => setEditingItem(null)}
+          onSaved={() => {
+            setEditingItem(null);
+            loadItems();
+            loadStatus();
+            flash('수정했습니다');
+          }}
+        />
+      ) : null}
     </div>
   );
 }
 
-function AddItemModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
-  const [title, setTitle] = useState('');
-  const [type, setType] = useState<'apikey' | 'login' | 'memo'>('apikey');
-  const [secret, setSecret] = useState('');
-  const [username, setUsername] = useState('');
-  const [notes, setNotes] = useState('');
+function ItemModal({
+  initial,
+  onClose,
+  onSaved,
+}: {
+  initial?: { id: string; title: string; type: 'apikey' | 'login' | 'memo'; username: string; secret: string; notes: string };
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [title, setTitle] = useState(initial?.title || '');
+  const [type, setType] = useState<'apikey' | 'login' | 'memo'>(initial?.type || 'apikey');
+  const [secret, setSecret] = useState(initial?.secret || '');
+  const [username, setUsername] = useState(initial?.username || '');
+  const [notes, setNotes] = useState(initial?.notes || '');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const editing = Boolean(initial);
 
   const save = async () => {
     setBusy(true);
     setError('');
     try {
-      await api.post('/api/vault/items', { title, type, secret, notes, username: type === 'login' ? username : undefined });
+      const payload = { title, type, secret, notes, username: type === 'login' ? username : undefined };
+      if (editing && initial) {
+        await api.patch(`/api/vault/items/${initial.id}`, payload);
+      } else {
+        await api.post('/api/vault/items', payload);
+      }
       onSaved();
     } catch (err) {
       setError(err instanceof Error ? err.message : '저장하지 못했습니다.');
@@ -468,7 +560,7 @@ function AddItemModal({ onClose, onSaved }: { onClose: () => void; onSaved: () =
     <div className="fixed inset-0 z-40 flex items-end justify-center bg-[#1F1D2B]/30 p-0 backdrop-blur-sm sm:items-center sm:p-6">
       <div className="w-full max-w-[480px] animate-pop rounded-t-[28px] bg-white p-5 shadow-2xl sm:rounded-[28px] sm:p-6">
         <div className="flex items-center justify-between">
-          <h2 className="text-[19px] font-bold">새 항목 추가</h2>
+          <h2 className="text-[19px] font-bold">{editing ? '항목 수정' : '새 항목 추가'}</h2>
           <button className="rounded-xl p-2 text-[#A8A5B8] hover:bg-[#FAF9FF]" onClick={onClose} aria-label="닫기">
             <X size={18} />
           </button>

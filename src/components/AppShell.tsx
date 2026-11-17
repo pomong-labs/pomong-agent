@@ -1,10 +1,9 @@
-import { useEffect, useState } from 'react';
-import { NavLink, Outlet } from 'react-router-dom';
+import { useLocation, NavLink, Outlet } from 'react-router-dom';
 import { Activity, ListChecks, Lock, MessageCircle, Settings as SettingsIcon } from 'lucide-react';
 import Logo from './Logo';
 import MiniStatus from './MiniStatus';
 import MobileTabBar from './MobileTabBar';
-import { api } from '../lib/api';
+import { useAppStore } from '../lib/store';
 import { t } from '../lib/i18n';
 
 export interface ShellContext {
@@ -20,17 +19,12 @@ const nav = [
 ];
 
 export default function AppShell() {
-  const [profile, setProfile] = useState<{ nickname: string; agentName: string }>({ nickname: '', agentName: 'Pomong' });
-
-  useEffect(() => {
-    api
-      .get<{ profile: { nickname: string; agentName: string } }>('/api/settings')
-      .then((r) => setProfile(r.profile))
-      .catch(() => undefined);
-  }, []);
+  const { profile, keyboardOpen } = useAppStore();
+  const location = useLocation();
+  const onChat = location.pathname === '/';
 
   return (
-    <div className="h-full w-full bg-[#F6F6FA] lg:p-4">
+    <div className="fixed inset-x-0 top-0 w-full bg-[#F6F6FA] lg:p-4" style={{ height: 'var(--app-height, 100%)' }}>
       <div className="mx-auto flex h-full w-full max-w-[1600px] overflow-hidden bg-white lg:rounded-[30px] lg:shadow-soft">
         <aside className="hidden w-[300px] shrink-0 flex-col border-r border-[#F0EFF6] px-6 py-8 lg:flex">
           <div className="px-1">
@@ -63,8 +57,11 @@ export default function AppShell() {
         </aside>
 
         <main className="relative flex min-w-0 flex-1 flex-col bg-[#FCFCFE]">
-          <div className="flex min-h-0 flex-1 flex-col">
-            <Outlet context={{ profile } satisfies ShellContext} />
+          <div
+            className="flex min-h-0 flex-1 flex-col"
+            style={onChat && keyboardOpen ? { paddingTop: 0 } : undefined}
+          >
+            <Outlet context={{ profile: { nickname: profile.nickname, agentName: profile.agentName } } satisfies ShellContext} />
           </div>
           <MobileTabBar />
         </main>

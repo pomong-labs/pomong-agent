@@ -14,7 +14,7 @@ export default function MobileTabBar() {
   const moreActive = ['/more', '/tasks', '/settings'].includes(location.pathname);
 
   return (
-    <nav className="z-20 w-full shrink-0 border-t border-[#F1EFF8] bg-white pb-safe lg:hidden">
+    <nav className="pa-tabbar z-20 w-full shrink-0 border-t border-[#F1EFF8] bg-white pb-safe lg:hidden">
       <div className="flex items-stretch justify-between px-3 pt-1.5">
         {tabs.map((tab) => {
           const active = tab.to === '/more' ? moreActive : tab.end ? location.pathname === '/' : location.pathname.startsWith(tab.to);

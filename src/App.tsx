@@ -3,6 +3,7 @@ import { Navigate, Outlet, Route, Routes, useNavigate } from 'react-router-dom';
 import AppShell from './components/AppShell';
 import Mascot from './components/Mascot';
 import { api, ApiError } from './lib/api';
+import { AppStoreProvider } from './lib/store';
 import Chat from './pages/Chat';
 import Login from './pages/Login';
 import Monitor from './pages/Monitor';
@@ -50,20 +51,22 @@ function RequireAuth() {
 
 export default function App() {
   return (
-    <Routes>
-      <Route path="/setup" element={<Setup />} />
-      <Route path="/login" element={<Login />} />
-      <Route element={<RequireAuth />}>
-        <Route element={<AppShell />}>
-          <Route index element={<Chat />} />
-          <Route path="monitor" element={<Monitor />} />
-          <Route path="vault" element={<Vault />} />
-          <Route path="tasks" element={<Tasks />} />
-          <Route path="settings" element={<SettingsPage />} />
-          <Route path="more" element={<More />} />
+    <AppStoreProvider>
+      <Routes>
+        <Route path="/setup" element={<Setup />} />
+        <Route path="/login" element={<Login />} />
+        <Route element={<RequireAuth />}>
+          <Route element={<AppShell />}>
+            <Route index element={<Chat />} />
+            <Route path="monitor" element={<Monitor />} />
+            <Route path="vault" element={<Vault />} />
+            <Route path="tasks" element={<Tasks />} />
+            <Route path="settings" element={<SettingsPage />} />
+            <Route path="more" element={<More />} />
+          </Route>
         </Route>
-      </Route>
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </AppStoreProvider>
   );
 }

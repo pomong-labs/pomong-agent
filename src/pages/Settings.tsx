@@ -1,17 +1,20 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Check, ExternalLink, LogOut, ShieldCheck, Sparkles } from 'lucide-react';
-import Mascot from '../components/Mascot';
-import { api, type SettingsResponse } from '../lib/api';
+import MascotFace from '../components/MascotFace';
+import { api, type ProviderId, type SettingsResponse } from '../lib/api';
+import { useAppStore } from '../lib/store';
 
 export default function SettingsPage() {
   const navigate = useNavigate();
+  const { refreshProfile, refreshModels } = useAppStore();
   const [data, setData] = useState<SettingsResponse | null>(null);
   const [nickname, setNickname] = useState('');
   const [agentName, setAgentName] = useState('Pomong');
+  const [character, setCharacter] = useState('pimong');
   const [savedFlash, setSavedFlash] = useState('');
 
-  const [provider, setProvider] = useState<'gemini' | 'openai' | 'claude'>('gemini');
+  const [provider, setProvider] = useState<ProviderId>('gemini');
   const [model, setModel] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [keyBusy, setKeyBusy] = useState(false);
@@ -24,10 +27,9 @@ export default function SettingsPage() {
         setData(r);
         setNickname(r.profile.nickname);
         setAgentName(r.profile.agentName);
-        if (r.provider) {
-          setProvider(r.provider.provider);
-          setModel(r.provider.model);
-        }
+        setCharacter(r.profile.character || 'pimong');
+        setProvider(r.active.provider);
+        setModel(r.active.model);
       })
       .catch(() => undefined);
 
@@ -36,10 +38,11 @@ export default function SettingsPage() {
   }, []);
 
   const saveProfile = async () => {
-    await api.put('/api/settings/profile', { nickname, agentName });
+    await api.put('/api/settings/profile', { nickname, agentName, character });
     setSavedFlash('저장했습니다');
-    window.setTimeout(() => setSavedFlash(''), 1600);
-    load();
+    window.setTimeout(() => setSavedFlash(''), 1800);
+    await load();
+    await refreshProfile();
   };
 
   const saveKey = async () => {
@@ -49,11 +52,25 @@ export default function SettingsPage() {
       const r = await api.post<{ message: string }>('/api/settings/api-key', { provider, apiKey, model: model || undefined });
       setKeyMsg({ ok: true, text: r.message });
       setApiKey('');
-      load();
+      await load();
+      await refreshModels();
     } catch (err) {
       setKeyMsg({ ok: false, text: err instanceof Error ? err.message : '연결에 실패했습니다.' });
     } finally {
       setKeyBusy(false);
+    }
+  };
+
+  const useModel = async (nextProvider: ProviderId, nextModel: string) => {
+    setKeyMsg(null);
+    try {
+      await api.post('/api/models/select', { provider: nextProvider, model: nextModel });
+      setProvider(nextProvider);
+      setModel(nextModel);
+      await load();
+      await refreshModels();
+    } catch (err) {
+      setKeyMsg({ ok: false, text: err instanceof Error ? err.message : '모델을 바꾸지 못했습니다.' });
     }
   };
 
@@ -63,6 +80,14 @@ export default function SettingsPage() {
   };
 
   const selected = data?.providers.find((p) => p.id === provider);
+  const mascots = data?.mascots || [
+    { id: 'poding', name: '포딩' },
+    { id: 'pimong', name: '피몽' },
+    { id: 'lamong', name: '라몽' },
+    { id: 'pongi', name: '퐁이' },
+    { id: 'mello', name: '멜로' },
+    { id: 'minti', name: '민티' },
+  ];
 
   return (
     <div className="pa-scroll h-full min-h-0 overflow-y-auto px-4 pb-8 pt-5 lg:px-10 lg:pt-9">
@@ -70,9 +95,9 @@ export default function SettingsPage() {
         <header className="flex items-center">
           <div>
             <h1 className="text-[26px] font-bold tracking-[-0.02em] lg:text-[34px]">설정</h1>
-            <p className="mt-1 text-[13.5px] text-pomong-sub lg:text-[16px]">포몽의 이름과 AI 연결을 관리해요</p>
+            <p className="mt-1 text-[13.5px] text-pomong-sub lg:text-[16px]">AI 이름·캐릭터와 모델 연결을 관리해요</p>
           </div>
-          <Mascot name="minti" size={56} className="ml-auto lg:hidden" />
+          <MascotFace character={character} size={56} className="ml-auto lg:hidden" />
         </header>
 
         {/* profile */}
@@ -84,10 +109,43 @@ export default function SettingsPage() {
               <input className="pa-input" value={nickname} placeholder="닉네임" onChange={(e) => setNickname(e.target.value)} />
             </label>
             <label className="block">
-              <span className="mb-1.5 block text-[13px] font-semibold text-[#5B5866]">에이전트 이름</span>
+              <span className="mb-1.5 block text-[13px] font-semibold text-[#5B5866]">AI 이름</span>
               <input className="pa-input" value={agentName} onChange={(e) => setAgentName(e.target.value)} />
             </label>
           </div>
+
+          <div className="mt-5">
+            <div className="flex items-baseline justify-between">
+              <span className="text-[13px] font-semibold text-[#5B5866]">AI 캐릭터</span>
+              <span className="text-[11.5px] text-[#B4B1C2]">말풍선·상단바 얼굴이 함께 바뀌어요</span>
+            </div>
+            <div className="mt-2.5 grid grid-cols-3 gap-2 sm:grid-cols-6">
+              {mascots.map((m) => {
+                const active = character === m.id;
+                return (
+                  <button
+                    key={m.id}
+                    onClick={() => setCharacter(m.id)}
+                    className={`flex flex-col items-center gap-1 rounded-2xl border-[1.5px] px-2 py-2.5 transition ${
+                      active ? 'border-[#C9B8FF] bg-[#F8F5FF]' : 'border-[#EFEDF6] bg-white hover:bg-[#FBFAFF]'
+                    }`}
+                    aria-pressed={active}
+                  >
+                    <span className="relative">
+                      <MascotFace character={m.id} state={active ? 'responding' : 'idle'} size={44} />
+                      {active ? (
+                        <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-[#8B72F8] text-white">
+                          <Check size={10} strokeWidth={4} />
+                        </span>
+                      ) : null}
+                    </span>
+                    <span className={`text-[12px] font-semibold ${active ? 'text-[#7C63F6]' : 'text-[#6B677A]'}`}>{m.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           <div className="mt-4 flex items-center gap-3">
             <button className="pa-btn-primary px-5 py-2.5" onClick={saveProfile}>
               저장
@@ -104,18 +162,18 @@ export default function SettingsPage() {
         <section className="mt-4 rounded-[24px] bg-white p-5 shadow-card ring-1 ring-[#F6F4FB] lg:p-6">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <h2 className="text-[16px] font-bold text-[#1F1D2B]">AI 서비스 연결</h2>
+              <h2 className="text-[16px] font-bold text-[#1F1D2B]">AI 모델</h2>
               <p className="mt-1 text-[13px] text-pomong-sub">
-                {data?.provider
-                  ? `${data.provider.label} · ${data.provider.model} 연결됨`
-                  : '아직 연결된 AI가 없습니다. 키를 연결하면 대화할 수 있어요.'}
+                {data?.active ? `지금은 ${selected?.label || data.active.provider} · ${data.active.model} 로 답해요` : '아직 연결된 AI가 없습니다.'}
               </p>
             </div>
-            {data?.provider ? (
+            {selected?.connected ? (
               <span className="flex items-center gap-1 rounded-full bg-[#EAFBF1] px-3 py-1.5 text-[12px] font-semibold text-[#12B886]">
                 <Check size={12} strokeWidth={3} /> 연결됨
               </span>
-            ) : null}
+            ) : (
+              <span className="rounded-full bg-[#FFF6E7] px-3 py-1.5 text-[12px] font-semibold text-[#E49B18]">키 필요</span>
+            )}
           </div>
 
           <div className="mt-4 grid grid-cols-3 gap-2">
@@ -124,13 +182,18 @@ export default function SettingsPage() {
                 key={p.id}
                 onClick={() => {
                   setProvider(p.id);
-                  setModel(p.defaultModel);
+                  setModel(p.id === data?.active.provider ? data.active.model : p.defaultModel);
+                  setKeyMsg(null);
                 }}
-                className={`rounded-2xl border-[1.5px] py-3 text-[14px] font-semibold transition ${
+                className={`relative rounded-2xl border-[1.5px] py-3 text-[14px] font-semibold transition ${
                   provider === p.id ? 'border-[#C9B8FF] bg-[#F8F5FF] text-[#7C63F6]' : 'border-[#EFEDF6] bg-white text-[#5B5866]'
                 }`}
               >
                 {p.label}
+                <span
+                  className={`absolute right-2 top-2 h-1.5 w-1.5 rounded-full ${p.connected ? 'bg-[#22C55E]' : 'bg-[#DAD6E6]'}`}
+                  aria-hidden
+                />
               </button>
             ))}
           </div>
@@ -152,16 +215,24 @@ export default function SettingsPage() {
               <input
                 className="pa-input font-mono text-[13px]"
                 type="password"
-                placeholder={data?.provider ? '새 키로 교체하려면 입력' : 'API 키 입력'}
+                placeholder={selected?.connected ? '새 키로 교체하려면 입력' : 'API 키 입력'}
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
               />
             </label>
           </div>
 
-          <div className="mt-3 flex flex-wrap items-center gap-3">
-            <button className="pa-btn-primary px-5 py-2.5" onClick={saveKey} disabled={keyBusy || !apiKey.trim()}>
-              {keyBusy ? '확인 중…' : '연결 테스트 후 저장'}
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button className="pa-btn-primary px-4 py-2.5" onClick={saveKey} disabled={keyBusy || !apiKey.trim()}>
+              {keyBusy ? '확인 중…' : '키 연결'}
+            </button>
+            <button
+              className="pa-btn-ghost px-4 py-2.5"
+              onClick={() => useModel(provider, model)}
+              disabled={!selected?.connected}
+              title={selected?.connected ? '이 모델로 대화하기' : '먼저 키를 연결해 주세요'}
+            >
+              이 모델 사용
             </button>
             {selected ? (
               <a
@@ -179,6 +250,29 @@ export default function SettingsPage() {
               {keyMsg.text}
             </p>
           ) : null}
+          {data?.providers.some((p) => p.connected) ? (
+            <div className="mt-4 rounded-2xl bg-[#FAF8FF] px-4 py-3">
+              <p className="text-[12px] font-semibold text-[#8A8A9A]">연결된 AI</p>
+              <ul className="mt-1.5 space-y-1">
+                {data.providers
+                  .filter((p) => p.connected)
+                  .map((p) => (
+                    <li key={p.id} className="flex items-center justify-between text-[13px]">
+                      <span className="font-medium text-[#4B4856]">
+                        {p.label} {p.active ? <span className="ml-1 rounded-md bg-[#F3EEFF] px-1.5 py-0.5 text-[10.5px] font-semibold text-[#7C63F6]">사용 중</span> : null}
+                      </span>
+                      <button
+                        className="text-[12px] font-semibold text-[#8B72F6] disabled:text-[#C9C5D6]"
+                        disabled={p.active}
+                        onClick={() => useModel(p.id, p.id === data.active.provider ? data.active.model : p.defaultModel)}
+                      >
+                        전환
+                      </button>
+                    </li>
+                  ))}
+              </ul>
+            </div>
+          ) : null}
         </section>
 
         {/* security / about */}
@@ -187,7 +281,7 @@ export default function SettingsPage() {
           <ul className="mt-3 divide-y divide-[#F6F4FB] text-[13.5px]">
             <li className="flex items-center justify-between py-3">
               <span className="text-pomong-sub">버전</span>
-              <span className="font-semibold text-[#3B3947]">v{data?.version || '0.1.1'}</span>
+              <span className="font-semibold text-[#3B3947]">v{data?.version || '0.2.0'}</span>
             </li>
             <li className="flex items-center justify-between py-3">
               <span className="text-pomong-sub">데이터 보관</span>
@@ -206,7 +300,7 @@ export default function SettingsPage() {
         </section>
 
         <p className="mt-6 flex items-center justify-center gap-1.5 text-[12px] text-[#B4B1C2]">
-          <Sparkles size={12} /> Pomong Agent v{data?.version || '0.1.1'} · Pomong Labs
+          <Sparkles size={12} /> Pomong Agent v{data?.version || '0.2.0'} · Pomong Labs
         </p>
       </div>
     </div>
