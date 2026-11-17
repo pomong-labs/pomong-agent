@@ -1,0 +1,31 @@
+services:
+  pomong-agent:
+    build: .
+    image: pomong-agent:0.1.0
+    container_name: pomong-agent
+    restart: unless-stopped
+    ports:
+      # keep the app on the loopback interface and let nginx (or another proxy) publish it
+      - "127.0.0.1:3100:3100"
+    environment:
+      NODE_ENV: production
+      PORT: "3100"
+      DATA_DIR: /app/data
+      TZ: Asia/Seoul
+    volumes:
+      # app data (SQLite database, setup token, keys) — back this folder up
+      - ./data:/app/data
+      # host metrics: process list + host identity (read-only)
+      - /proc:/host/proc:ro
+      - /etc/os-release:/host/etc/os-release:ro
+      - /etc/hostname:/host/etc/hostname:ro
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3100/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 6s
+      retries: 3
+      start_period: 25s
