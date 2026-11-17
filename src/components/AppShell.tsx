@@ -5,17 +5,18 @@ import Logo from './Logo';
 import MiniStatus from './MiniStatus';
 import MobileTabBar from './MobileTabBar';
 import { api } from '../lib/api';
+import { t } from '../lib/i18n';
 
 export interface ShellContext {
   profile: { nickname: string; agentName: string };
 }
 
 const nav = [
-  { to: '/', label: 'Chat', icon: MessageCircle, end: true },
-  { to: '/monitor', label: 'Monitor', icon: Activity },
-  { to: '/vault', label: 'Vault', icon: Lock },
-  { to: '/tasks', label: 'Tasks', icon: ListChecks },
-  { to: '/settings', label: 'Settings', icon: SettingsIcon },
+  { to: '/', label: t.nav.chat, icon: MessageCircle, end: true },
+  { to: '/monitor', label: t.nav.monitor, icon: Activity },
+  { to: '/vault', label: t.nav.vault, icon: Lock },
+  { to: '/tasks', label: t.nav.tasks, icon: ListChecks },
+  { to: '/settings', label: t.nav.settings, icon: SettingsIcon },
 ];
 
 export default function AppShell() {

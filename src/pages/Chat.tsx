@@ -4,6 +4,7 @@ import Mascot from '../components/Mascot';
 import { StatsCard, TasksCard } from '../components/Cards';
 import { api, ApiError, type ChatMessage, type SystemStats } from '../lib/api';
 import { formatClock } from '../lib/format';
+import { t } from '../lib/i18n';
 
 function renderInline(text: string, keyPrefix: string) {
   const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).filter(Boolean);
@@ -134,7 +135,7 @@ export default function Chat() {
           </div>
           <div className="mt-1 hidden items-center gap-1.5 text-[13.5px] font-medium text-[#8A8A9A] lg:flex">
             <span className="h-2 w-2 rounded-full bg-[#22C55E]" />
-            Online · <span className="text-[#12B886]">Ready</span>
+            {t.status.online} · <span className="text-[#12B886]">{t.status.standby}</span>
           </div>
           <div className="mt-1 lg:hidden">
             <MobileStatusPill stats={stats} />
@@ -204,7 +205,7 @@ export default function Chat() {
           {sending ? (
             <div className="flex items-start gap-2.5 lg:gap-3.5">
               <div className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#FFF0F5] ring-1 ring-[#FFE4EE] sm:flex lg:h-11 lg:w-11">
-                <Mascot name="pimong" hero size={26} />
+                <Mascot name="pimong-think" size={26} />
               </div>
               <div className="flex items-center gap-1.5 rounded-[24px] bg-white px-5 py-4 shadow-card ring-1 ring-[#F6F4FB]">
                 <Dot delay="0ms" />
@@ -215,7 +216,13 @@ export default function Chat() {
           ) : null}
 
           {error ? (
-            <div className="rounded-2xl bg-[#FFF1F1] px-4 py-3 text-[13.5px] font-medium text-[#E5484D]">{error}</div>
+            <div className="flex items-start gap-3 rounded-2xl bg-[#FFF1F1] px-4 py-3.5">
+              <Mascot name="pimong-surprised" size={40} className="mt-0.5 shrink-0" />
+              <div className="min-w-0">
+                <p className="text-[13px] font-semibold text-[#E5484D]">앗, 응답을 받지 못했어요</p>
+                <p className="mt-1 break-words text-[13px] font-medium leading-relaxed text-[#C25459]">{error}</p>
+              </div>
+            </div>
           ) : null}
         </div>
       </div>
@@ -286,7 +293,7 @@ function MobileStatusPill({ stats }: { stats: SystemStats | null }) {
   return (
     <span className="inline-flex items-center gap-1.5 rounded-full bg-[#EAFBF1] px-2.5 py-1 text-[12px] font-semibold text-[#12B886]">
       <span className="h-1.5 w-1.5 rounded-full bg-[#22C55E]" />
-      CPU {stats ? Math.round(stats.cpu) : '–'}% · {stats?.status === 'healthy' ? 'Healthy' : 'Check'}
+      {t.common.cpu} {stats ? Math.round(stats.cpu) : '–'}% · {stats?.status === 'healthy' ? t.status.healthy : t.status.checkNeeded}
     </span>
   );
 }
@@ -297,7 +304,7 @@ function EmptyState({ onPick }: { onPick: (text: string) => void }) {
     <div className="flex flex-col items-center gap-5 pt-6 text-center lg:pt-16">
       <div className="relative">
         <div className="absolute inset-0 -z-10 rounded-full bg-[#FFEAF1] blur-2xl" />
-        <Mascot name="pimong" hero size={120} className="animate-float" />
+        <Mascot name="pimong-cheer" size={120} className="animate-float" />
       </div>
       <div>
         <h2 className="text-[22px] font-bold tracking-[-0.02em] lg:text-[26px]">안녕하세요, 저는 포몽이에요!</h2>

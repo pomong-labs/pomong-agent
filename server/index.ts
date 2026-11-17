@@ -19,7 +19,7 @@ import {
   setCookie,
 } from './auth';
 import { currentStats, getHistory, startSampler } from './system';
-import { PROVIDERS, runChat, testProvider, type ChatMessage, type ProviderId } from './providers';
+import { PROVIDERS, normalizeModel, runChat, testProvider, type ChatMessage, type ProviderId } from './providers';
 import * as vault from './vault';
 
 ensureDataDir();
@@ -96,7 +96,17 @@ interface ProviderConfig {
 }
 
 function providerConfig(): ProviderConfig | null {
-  return getJson<ProviderConfig | null>('provider', null);
+  const config = getJson<ProviderConfig | null>('provider', null);
+  if (!config) return null;
+  // 구형 모델(예: gemini-2.5-flash)이 저장되어 있으면 현재 모델로 자동 마이그레이션한다.
+  const normalized = normalizeModel(config.provider, config.model);
+  if (normalized !== config.model) {
+    const updated: ProviderConfig = { ...config, model: normalized };
+    setJson('provider', updated);
+    addLog('info', `${PROVIDERS[config.provider].label} 모델을 ${config.model} → ${normalized} 로 자동 업데이트했습니다`);
+    return updated;
+  }
+  return config;
 }
 
 function aiConfigured(): boolean {
@@ -237,7 +247,7 @@ app.post('/api/setup/provider', requireSetup, async (req, res) => {
   const { encrypt, serverKey } = await import('./crypto');
   const config: ProviderConfig = {
     provider,
-    model: body.model || PROVIDERS[provider].defaultModel,
+    model: normalizeModel(provider, body.model),
     apiKeyEnc: encrypt(apiKey, serverKey()),
     connectedAt: new Date().toISOString(),
   };
@@ -445,7 +455,7 @@ app.post('/api/chat/messages', requireAuth, async (req, res) => {
     const info = db
       .prepare('INSERT INTO messages(session_id, role, content, meta, created_at) VALUES(?,?,?,?,?)')
       .run(session, 'assistant', result.text, payload, new Date().toISOString());
-    addLog('info', `AI 응답 · ${PROVIDERS[config.provider].label}`);
+    addLog('info', `AI 응답 · ${PROVIDERS[config.provider].label} (${result.model})`);
     const stats = currentStats();
     const tasks = db
       .prepare('SELECT id, title, done, due FROM tasks ORDER BY done, created_at DESC LIMIT 12')
@@ -657,7 +667,7 @@ app.post('/api/settings/api-key', requireAuth, async (req, res) => {
   const { encrypt, serverKey } = await import('./crypto');
   const config: ProviderConfig = {
     provider,
-    model: model || PROVIDERS[provider].defaultModel,
+    model: normalizeModel(provider, model),
     apiKeyEnc: encrypt(apiKey.trim(), serverKey()),
     connectedAt: new Date().toISOString(),
   };
@@ -739,6 +749,9 @@ app.get('*', (req, res, next) => {
 /* ------------------------------ boot ------------------------------ */
 
 const token = setupDone() ? null : ensureSetupToken();
+
+// 저장된 AI 설정을 현재 모델로 정리한다 (구형 모델 → 최신 모델 자동 마이그레이션).
+providerConfig();
 
 app.listen(PORT, HOST, () => {
   startSampler(3000);

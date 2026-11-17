@@ -171,7 +171,7 @@ export default function Vault() {
         <div className="w-full max-w-[400px] text-center">
           <div className="relative mx-auto w-fit">
             <div className="absolute inset-0 -z-10 rounded-full bg-[#FFF6E0] blur-2xl" />
-            <Mascot name={configuring ? 'poding' : 'poding'} hero size={132} className="mx-auto animate-float" />
+            <Mascot name="poding-key" size={132} className="mx-auto animate-float" />
           </div>
           <h1 className="mt-3 text-[26px] font-bold tracking-[-0.02em]">
             {configuring ? '금고를 만들어요' : '금고가 잠겨 있어요'}
@@ -375,7 +375,7 @@ export default function Vault() {
 
             {visible.length === 0 ? (
               <div className="col-span-full rounded-[24px] border border-dashed border-[#E7E3F3] bg-white/60 px-6 py-12 text-center">
-                <Mascot name="poding" hero size={72} className="mx-auto opacity-90" />
+                <Mascot name="poding-key" size={72} className="mx-auto opacity-90" />
                 <p className="mt-3 text-[14px] text-pomong-sub">
                   {items.length === 0 ? '아직 저장된 항목이 없어요. 첫 항목을 추가해 보세요.' : '검색 결과가 없습니다.'}
                 </p>

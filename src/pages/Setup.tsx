@@ -8,10 +8,10 @@ import { api, ApiError } from '../lib/api';
 type ProviderId = 'gemini' | 'openai' | 'claude';
 
 const STEPS = [
-  { n: 1, label: 'Account', color: '#FFB7CA', tint: '#FFF0F4' },
-  { n: 2, label: 'AI Key', color: '#A78BFA', tint: '#F3EEFF' },
-  { n: 3, label: 'Style', color: '#7CB7F5', tint: '#EFF7FF' },
-  { n: 4, label: 'Done', color: '#5ED3A8', tint: '#EBFBF3' },
+  { n: 1, label: '계정', color: '#FFB7CA', tint: '#FFF0F4' },
+  { n: 2, label: 'AI 키', color: '#A78BFA', tint: '#F3EEFF' },
+  { n: 3, label: '꾸미기', color: '#7CB7F5', tint: '#EFF7FF' },
+  { n: 4, label: '완료', color: '#5ED3A8', tint: '#EBFBF3' },
 ];
 
 const PROVIDERS: { id: ProviderId; label: string; accent: string }[] = [
@@ -275,8 +275,17 @@ export default function Setup() {
 
         {/* mascot stage */}
         <div className="relative mt-12 flex h-[152px] items-end justify-center">
-          <Mascot name="pimong" hero size={150} className="-mr-4 animate-float" />
-          <Mascot name="pongi" hero size={134} className="-ml-3 animate-float" />
+          {step === 2 ? (
+            <>
+              <Mascot name="lamong" size={132} className="-mr-4 animate-float" />
+              <Mascot name="minti" size={140} className="-ml-3 animate-float" />
+            </>
+          ) : (
+            <>
+              <Mascot name="pimong" hero size={150} className="-mr-4 animate-float" />
+              <Mascot name="pongi" hero size={134} className="-ml-3 animate-float" />
+            </>
+          )}
           <div className="absolute -top-9 left-1/2 hidden -translate-x-1/2 whitespace-nowrap rounded-2xl rounded-bl-md bg-white px-4 py-2 text-[13px] font-medium text-[#6B677A] shadow-card sm:block">
             {step === 0 ? '이 서버의 주인이 누구인지 알려주세요!' : step === 1 ? 'AI 키를 연결하면 더 똑똑해져요!' : step === 2 ? '취향을 알려주면 더 친해질 수 있어요!' : '준비가 끝났어요!'}
           </div>
@@ -286,7 +295,7 @@ export default function Setup() {
         <div className="relative -mt-9 rounded-[34px] bg-white px-5 py-8 shadow-soft sm:px-12 sm:py-10">
           <div className="flex flex-col items-center">
             <Logo size={30} withText={false} />
-            <h1 className="mt-3 text-center text-[26px] font-bold tracking-[-0.02em] sm:text-[32px]">Pomong Agent Setup</h1>
+            <h1 className="mt-3 text-center text-[26px] font-bold tracking-[-0.02em] sm:text-[32px]">포몽 에이전트 설정</h1>
             <p className="mt-2 text-center text-[14.5px] text-pomong-sub">
               {step === 0 && '먼저 관리자 계정을 만들어 주세요.'}
               {step === 1 && 'AI 서비스 연결을 설정해 주세요.'}
@@ -331,7 +340,7 @@ export default function Setup() {
             {step === 1 ? (
               <div className="mx-auto max-w-[560px] space-y-6">
                 <div>
-                  <p className="mb-2.5 text-[14px] font-semibold text-[#3B3947]">1. AI Provider 선택</p>
+                  <p className="mb-2.5 text-[14px] font-semibold text-[#3B3947]">1. AI 서비스 선택</p>
                   <div className="grid grid-cols-3 overflow-hidden rounded-2xl border border-[#E9E7F2]">
                     {PROVIDERS.map((p) => {
                       const active = provider === p.id;
@@ -381,7 +390,7 @@ export default function Setup() {
                       </button>
                       {connected ? (
                         <span className="flex items-center gap-1 rounded-full bg-[#EAFBF1] px-3 py-1.5 text-[12.5px] font-semibold text-[#12B886]">
-                          <Check size={13} strokeWidth={3} /> Connected
+                          <Check size={13} strokeWidth={3} /> 연결됨
                         </span>
                       ) : (
                         <button
@@ -418,7 +427,7 @@ export default function Setup() {
               <div className="mx-auto max-w-[520px] space-y-4">
                 <div className="grid gap-4 sm:grid-cols-2">
                   <Field label="내 닉네임" hint="선택">
-                    <input className="pa-input" placeholder="현준" value={nickname} onChange={(e) => setNickname(e.target.value)} />
+                    <input className="pa-input" placeholder="예: 지민" value={nickname} onChange={(e) => setNickname(e.target.value)} />
                   </Field>
                   <Field label="에이전트 이름">
                     <input className="pa-input" value={agentName} onChange={(e) => setAgentName(e.target.value)} />
@@ -485,7 +494,7 @@ export default function Setup() {
                 </div>
                 <dl className="mt-6 divide-y divide-[#F1EFF7] overflow-hidden rounded-2xl border border-[#F1EFF7]">
                   <SummaryRow label="관리자 계정" value={username || 'admin'} />
-                  <SummaryRow label="AI Provider" value={connected ? PROVIDERS.find((p) => p.id === provider)?.label || '연결됨' : '나중에 설정'} />
+                  <SummaryRow label="AI 서비스" value={connected ? PROVIDERS.find((p) => p.id === provider)?.label || '연결됨' : '나중에 설정'} />
                   <SummaryRow label="에이전트" value={agentName || 'Pomong'} />
                   <SummaryRow label="보안" value="AES-256-GCM 금고 사용 가능" />
                 </dl>
@@ -505,7 +514,7 @@ export default function Setup() {
               onClick={back}
               disabled={busy}
             >
-              <ArrowLeft size={17} /> Back
+              <ArrowLeft size={17} /> 이전
             </button>
             <button className="pa-btn-primary w-full sm:w-auto sm:min-w-[200px]" onClick={next} disabled={busy || !canNext}>
               {step === 3 ? (
@@ -514,11 +523,16 @@ export default function Setup() {
                 </>
               ) : (
                 <>
-                  Next Step <ArrowRight size={17} />
+                  다음 단계 <ArrowRight size={17} />
                 </>
               )}
             </button>
           </div>
+        </div>
+
+        <div className="mt-10 flex flex-col items-center gap-1.5 pb-2">
+          <span className="text-[11px] tracking-[0.08em] text-[#C0BCCD]">MADE BY</span>
+          <img src="/pomong-labs-logo.png" alt="Pomong Labs" className="h-6 w-auto opacity-85" draggable={false} />
         </div>
       </div>
     </div>

@@ -104,7 +104,7 @@ export default function SettingsPage() {
         <section className="mt-4 rounded-[24px] bg-white p-5 shadow-card ring-1 ring-[#F6F4FB] lg:p-6">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <h2 className="text-[16px] font-bold text-[#1F1D2B]">AI Provider</h2>
+              <h2 className="text-[16px] font-bold text-[#1F1D2B]">AI 서비스 연결</h2>
               <p className="mt-1 text-[13px] text-pomong-sub">
                 {data?.provider
                   ? `${data.provider.label} · ${data.provider.model} 연결됨`
@@ -113,7 +113,7 @@ export default function SettingsPage() {
             </div>
             {data?.provider ? (
               <span className="flex items-center gap-1 rounded-full bg-[#EAFBF1] px-3 py-1.5 text-[12px] font-semibold text-[#12B886]">
-                <Check size={12} strokeWidth={3} /> Connected
+                <Check size={12} strokeWidth={3} /> 연결됨
               </span>
             ) : null}
           </div>

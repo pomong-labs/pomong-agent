@@ -53,7 +53,7 @@ export default function Tasks() {
             <h1 className="text-[26px] font-bold tracking-[-0.02em] lg:text-[34px]">할 일</h1>
             <p className="mt-1 text-[13.5px] text-pomong-sub lg:text-[16px]">포몽이와 함께 오늘 할 일을 정리해요</p>
           </div>
-          <Mascot name="lamong" hero={false} size={54} className="ml-auto lg:hidden" />
+          <Mascot name="mello-check" size={56} className="ml-auto lg:hidden" />
         </header>
 
         <div className="mt-5 flex flex-col gap-2 rounded-[24px] bg-white p-3 shadow-card ring-1 ring-[#F6F4FB] sm:flex-row sm:items-center">

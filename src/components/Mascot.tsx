@@ -1,4 +1,18 @@
-export type MascotName = 'pimong' | 'pongi' | 'poding' | 'lamong' | 'mello' | 'minti';
+export type MascotName =
+  | 'pimong'
+  | 'pongi'
+  | 'poding'
+  | 'lamong'
+  | 'mello'
+  | 'minti'
+  // 상황별 표정·소품
+  | 'pimong-cheer'
+  | 'pimong-think'
+  | 'pimong-surprised'
+  | 'pongi-check'
+  | 'pongi-alert'
+  | 'poding-key'
+  | 'mello-check';
 
 const HERO = new Set<MascotName>(['pimong', 'pongi', 'poding']);
 

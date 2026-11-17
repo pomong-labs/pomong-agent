@@ -43,13 +43,15 @@ export default function Monitor() {
     return () => clearInterval(id);
   }, []);
 
+  const healthy = stats?.status === 'healthy';
+
   const metrics = stats
     ? [
         {
           key: 'cpu' as const,
           label: 'CPU',
           value: stats.cpu,
-          detail: `${stats.cores} cores · ${(stats.cpuMhz / 1000).toFixed(1)} GHz`,
+          detail: `${stats.cores}코어 · ${(stats.cpuMhz / 1000).toFixed(1)} GHz`,
           icon: Cpu,
         },
         {
@@ -61,7 +63,7 @@ export default function Monitor() {
         },
         {
           key: 'disk' as const,
-          label: 'Disk',
+          label: '디스크',
           value: stats.disk,
           detail: `${stats.diskUsedGB} GB / ${stats.diskTotalGB} GB`,
           icon: HardDrive,
@@ -73,7 +75,7 @@ export default function Monitor() {
     <div className="relative flex h-full min-h-0 flex-col">
       <header className="flex items-center gap-3 px-4 pb-2 pt-4 lg:px-10 lg:pb-3 lg:pt-8">
         <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[#F0F8FF] ring-1 ring-[#E3F2FF]">
-          <Mascot name="pongi" hero size={30} />
+          <Mascot name={healthy ? 'pongi-check' : 'pongi-alert'} size={32} />
         </div>
         <div className="min-w-0 flex-1">
           <h1 className="text-[22px] font-bold tracking-[-0.02em] lg:text-[34px]">서버 관제실</h1>
@@ -81,7 +83,7 @@ export default function Monitor() {
             실시간 서버 상태
             {stats ? (
               <span className="ml-2 hidden text-[13px] text-[#B4B1C2] lg:inline">
-                {stats.hostname} · {stats.osName} · 가동 {formatUptime(stats.uptimeSec)} · load {stats.load1.toFixed(2)}
+                {stats.hostname} · {stats.osName} · 가동 {formatUptime(stats.uptimeSec)} · 부하 {stats.load1.toFixed(2)}
               </span>
             ) : null}
           </p>
@@ -203,8 +205,8 @@ export default function Monitor() {
               <div className="pa-card p-4 lg:p-6">
                 <div className="flex items-center justify-between">
                   <h2 className="text-[16px] font-bold text-[#1F1D2B] lg:text-[19px]">상위 프로세스</h2>
-                  <span className="text-[12.5px] text-[#9B98AB] lg:hidden">Top 3</span>
-                  <span className="hidden text-[13px] text-[#9B98AB] lg:block">실시간 · Top 5</span>
+                  <span className="text-[12.5px] text-[#9B98AB] lg:hidden">상위 3개</span>
+                  <span className="hidden text-[13px] text-[#9B98AB] lg:block">실시간 · 상위 5개</span>
                 </div>
                 <div className="mt-3 divide-y divide-[#F5F3FA]">
                   {stats.processes.slice(0, 5).map((p, i) => (
@@ -277,7 +279,7 @@ export default function Monitor() {
         <span className="rounded-2xl rounded-br-md bg-white px-3 py-1 text-[12px] font-medium text-[#6B677A] shadow-card">
           {stats?.status === 'healthy' ? '서버 아주 쾌적해요!' : '조금 살펴볼까요?'}
         </span>
-        <Mascot name="pongi" hero size={26} />
+        <Mascot name={healthy ? 'pongi-check' : 'pongi-alert'} size={28} />
       </div>
     </div>
   );

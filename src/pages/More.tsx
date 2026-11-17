@@ -51,7 +51,10 @@ export default function More() {
         <LogOut size={17} /> 로그아웃
       </button>
 
-      <p className="mt-8 text-center text-[12px] text-[#B4B1C2]">Pomong Agent v0.1.0 · Pomong Labs</p>
+      <div className="mt-8 flex flex-col items-center gap-2.5">
+        <p className="text-center text-[12px] text-[#B4B1C2]">Pomong Agent v0.1.1 · Pomong Labs</p>
+        <img src="/pomong-labs-logo.png" alt="Pomong Labs" className="h-5 w-auto opacity-80" draggable={false} />
+      </div>
     </div>
   );
 }
