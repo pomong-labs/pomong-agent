@@ -67,9 +67,20 @@ export function normalizeModel(provider: ProviderId, model: string | undefined |
   return LEGACY_MODEL_MAP[provider][name] || name;
 }
 
-/** 요청 모델 + 폴백 체인 (중복 제거) */
+/** 마지막으로 응답에 성공한 Gemini 모델 (앱 재시작 후에도 설정에 저장해 재사용) */
+let lastGoodGeminiModel: string | null = null;
+
+export function setLastGoodGeminiModel(model: string | null): void {
+  lastGoodGeminiModel = model;
+}
+
+export function getLastGoodGeminiModel(): string | null {
+  return lastGoodGeminiModel;
+}
+
+/** 요청 모델 + 폴백 체인 (마지막 성공 모델 우선, 중복 제거) */
 function geminiCandidates(model: string): string[] {
-  const list = [model, ...GEMINI_FALLBACK_CHAIN];
+  const list = [...(lastGoodGeminiModel ? [lastGoodGeminiModel] : []), model, ...GEMINI_FALLBACK_CHAIN];
   return list.filter((m, i) => m && list.indexOf(m) === i);
 }
 
@@ -82,9 +93,14 @@ export class ProviderError extends Error {
   }
 }
 
-/** 다른 모델로 넘어가 볼 만한 오류인지 (모델 없음·혼잡·일시 장애) */
-function isRetryable(status: number): boolean {
-  return status === 404 || status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
+/** 다른 모델로 넘어가 볼 만한 오류인지 (모델 없음·혼잡·일시 장애·응답 지연) */
+function isRetryableError(err: unknown): boolean {
+  if (err instanceof ProviderError) {
+    return [404, 429, 500, 502, 503, 504].includes(err.status);
+  }
+  // 시간 초과(모델이 응답하지 않고 대기)나 네트워크 순단도 다음 모델로 넘어가 본다.
+  const name = err instanceof Error ? err.name : '';
+  return name === 'TimeoutError' || name === 'AbortError' || name === 'TypeError';
 }
 
 function timeout(ms: number): AbortSignal {
@@ -164,7 +180,8 @@ async function geminiChat(
         contents: turns.map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })),
         generationConfig: { temperature: 0.7, maxOutputTokens: 1600 },
       }),
-      signal: timeout(60000),
+      // 모델이 응답하지 않고 매달려 있으면 다음 후보로 빨리 넘어가도록 시도당 시간을 제한한다.
+      signal: timeout(18000),
     }
   );
   const body = await res.text();
@@ -187,14 +204,18 @@ export async function runChat(
   const turns = messages.filter((m) => m.role !== 'system');
 
   if (provider === 'gemini') {
-    // 신규 사용자에게 닫힌 모델(404)이나 일시적 혼잡(503)이면 다음 모델로 자동 폴백한다.
+    // 신규 사용자에게 닫힌 모델(404)이나 혼잡·지연이면 다음 모델로 자동 폴백한다.
+    const startedAt = Date.now();
     let lastError: unknown = null;
     for (const candidate of geminiCandidates(modelName)) {
+      if (lastError && Date.now() - startedAt > 75000) break; // 전체 예산을 넘기면 여기서 멈춘다
       try {
-        return await geminiChat(candidate, apiKey, system, turns);
+        const result = await geminiChat(candidate, apiKey, system, turns);
+        lastGoodGeminiModel = result.model;
+        return result;
       } catch (err) {
         lastError = err;
-        if (!(err instanceof ProviderError) || !isRetryable(err.status)) throw err;
+        if (!isRetryableError(err)) throw err;
       }
     }
     throw lastError instanceof Error ? lastError : new Error('Gemini 응답을 받지 못했습니다.');

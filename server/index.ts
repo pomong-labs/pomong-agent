@@ -19,7 +19,16 @@ import {
   setCookie,
 } from './auth';
 import { currentStats, getHistory, startSampler } from './system';
-import { PROVIDERS, normalizeModel, runChat, testProvider, type ChatMessage, type ProviderId } from './providers';
+import {
+  PROVIDERS,
+  getLastGoodGeminiModel,
+  normalizeModel,
+  runChat,
+  setLastGoodGeminiModel,
+  testProvider,
+  type ChatMessage,
+  type ProviderId,
+} from './providers';
 import * as vault from './vault';
 
 ensureDataDir();
@@ -455,6 +464,14 @@ app.post('/api/chat/messages', requireAuth, async (req, res) => {
     const info = db
       .prepare('INSERT INTO messages(session_id, role, content, meta, created_at) VALUES(?,?,?,?,?)')
       .run(session, 'assistant', result.text, payload, new Date().toISOString());
+    // 실제로 응답한 모델을 기억해 두면 다음 대화부터는 그 모델로 바로 시도한다.
+    if (config.provider === 'gemini') {
+      const good = getLastGoodGeminiModel();
+      if (good && getJson<string | null>('gemini.lastGoodModel', null) !== good) {
+        setJson('gemini.lastGoodModel', good);
+        if (good !== config.model) addLog('info', `${config.model} 대신 ${good} 모델로 응답했습니다`);
+      }
+    }
     addLog('info', `AI 응답 · ${PROVIDERS[config.provider].label} (${result.model})`);
     const stats = currentStats();
     const tasks = db
@@ -752,6 +769,8 @@ const token = setupDone() ? null : ensureSetupToken();
 
 // 저장된 AI 설정을 현재 모델로 정리한다 (구형 모델 → 최신 모델 자동 마이그레이션).
 providerConfig();
+// 지난번에 실제로 응답한 Gemini 모델을 기억해 두고 우선 시도한다.
+setLastGoodGeminiModel(getJson<string | null>('gemini.lastGoodModel', null));
 
 app.listen(PORT, HOST, () => {
   startSampler(3000);
