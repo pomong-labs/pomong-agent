@@ -11,7 +11,7 @@ const tabs = [
 
 export default function MobileTabBar() {
   const location = useLocation();
-  const moreActive = ['/more', '/tasks', '/settings'].includes(location.pathname);
+  const moreActive = ['/more', '/tasks', '/settings', '/tools'].includes(location.pathname);
 
   return (
     <nav className="pa-tabbar z-20 w-full shrink-0 border-t border-[#F1EFF8] bg-white pb-safe lg:hidden">

@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { db } from './db';
 import { currentStats } from './system';
 import * as vault from './vault';
+import { weatherReport } from './weather';
 import type { ToolSpec } from './providers';
 
 export type TaskPriority = 'high' | 'normal' | 'low';
@@ -180,9 +181,75 @@ export const TOOL_SPECS: ToolSpec[] = [
     parameters: { type: 'object', properties: {} },
   },
   {
+    name: 'weather_get',
+    description:
+      '지정한 지역의 현재 날씨와 오늘·주간 예보를 조회한다. 사용자가 날씨·기온·비·눈·우산·옷차림을 물으면 사용한다. 한국 지명("강원도 인제", "서울", "익산")과 영문 도시명("Tokyo") 모두 된다.',
+    parameters: {
+      type: 'object',
+      properties: {
+        location: { type: 'string', description: '지역명 (예: "강원도 인제", "서울", "익산", "Tokyo")' },
+        days: { type: 'number', description: '예보 일수 1~7 (기본 3)' },
+      },
+      required: ['location'],
+    },
+  },
+  {
     name: 'time_now',
     description: '현재 날짜와 시각(Asia/Seoul)을 조회한다. 날짜 계산이 필요할 때 사용한다.',
     parameters: { type: 'object', properties: {} },
+  },
+];
+
+/** 앱 '더보기 → 도구 목록' 화면에 보여줄 도구 설명 */
+export interface ToolCatalogEntry {
+  name: string;
+  label: string;
+  summary: string;
+  example: string;
+}
+
+export const TOOL_CATALOG: ToolCatalogEntry[] = [
+  {
+    name: 'weather_get',
+    label: '날씨 조회',
+    summary: '지역의 현재 날씨와 최대 7일 예보를 확인해요. (Open-Meteo · API 키 불필요)',
+    example: '강원도 인제 내일 날씨 알려줘',
+  },
+  {
+    name: 'tasks_list',
+    label: '할 일 조회',
+    summary: '진행 중·완료된 할 일 목록을 확인해요.',
+    example: '오늘 할 일 뭐 있어?',
+  },
+  {
+    name: 'tasks_add',
+    label: '할 일 추가',
+    summary: '마감일·우선순위를 붙여 새 할 일을 등록해요.',
+    example: '내일 오후 3시에 약 먹기 추가해줘',
+  },
+  {
+    name: 'tasks_complete',
+    label: '할 일 완료',
+    summary: '말한 할 일을 찾아 완료 처리해요.',
+    example: '우유 사기 다 했어',
+  },
+  {
+    name: 'vault_list',
+    label: '금고 목록',
+    summary: '금고에 저장된 항목 이름과 종류만 확인해요. 비밀값은 AI에게 전달되지 않아요.',
+    example: '금고에 뭐 저장돼 있어?',
+  },
+  {
+    name: 'server_stats',
+    label: '서버 상태',
+    summary: '이 서버의 CPU·RAM·디스크·부하·가동 시간을 확인해요.',
+    example: '지금 서버 상태 어때?',
+  },
+  {
+    name: 'time_now',
+    label: '현재 시각',
+    summary: '오늘 날짜와 시각을 확인해 날짜 계산을 정확히 해요.',
+    example: '이번 주 금요일이 며칠이야?',
   },
 ];
 
@@ -261,6 +328,13 @@ export async function runTool(name: string, args: Record<string, unknown>): Prom
         ].join('\n'),
         meta: 'server_stats',
       };
+    }
+    case 'weather_get': {
+      const location = String(args.location || '').trim();
+      if (!location) return { content: '어느 지역의 날씨를 알려드릴까요? 지역 이름을 말씀해 주세요.' };
+      const days = Number(args.days) || 3;
+      const report = await weatherReport(location, days);
+      return { content: report.content };
     }
     case 'time_now': {
       const now = new Date();

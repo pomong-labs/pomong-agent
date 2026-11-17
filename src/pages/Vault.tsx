@@ -148,17 +148,6 @@ export default function Vault() {
     }
   };
 
-  const copy = async (item: VaultItem) => {
-    try {
-      const r = await api.get<{ secret: string; username: string }>(`/api/vault/items/${item.id}/reveal`);
-      const ok = await copyText(item.type === 'login' && r.username ? `${r.username}` : r.secret);
-      flash(ok ? '복사했습니다' : '복사 권한이 없습니다');
-      loadItems();
-    } catch (err) {
-      flash(err instanceof Error ? err.message : '복사할 수 없습니다.');
-    }
-  };
-
   const copyField = async (item: VaultItem, field: 'username' | 'secret') => {
     try {
       const r = await api.get<{ secret: string; username: string }>(`/api/vault/items/${item.id}/reveal`);
@@ -376,18 +365,18 @@ export default function Vault() {
                                 {topLine}
                               </div>
                               {item.type === 'login' ? (
-                                <button
-                                  className="shrink-0 rounded-lg bg-[#F7F6FB] px-2 py-1.5 text-[11px] font-semibold text-[#8A8A9A] ring-1 ring-[#F0EEF6] active:scale-95"
-                                  onClick={() => copyField(item, 'username')}
-                                  aria-label="아이디 복사"
+                                <span
+                                  className="shrink-0 rounded-lg bg-[#F7F6FB] px-2 py-1.5 text-[11px] font-semibold text-[#B4B1C2] ring-1 ring-[#F0EEF6]"
+                                  aria-hidden
                                 >
-                                  ID
-                                </button>
+                                  아이디
+                                </span>
                               ) : null}
                               <button
                                 className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[#8A8A9A] ring-1 ring-[#F0EEF6] active:scale-95"
-                                onClick={() => copy(item)}
-                                aria-label="복사"
+                                onClick={() => copyField(item, 'username')}
+                                aria-label="아이디 복사"
+                                title="아이디 복사"
                               >
                                 <Copy size={14} />
                               </button>

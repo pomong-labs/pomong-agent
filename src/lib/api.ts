@@ -52,6 +52,8 @@ export interface Profile {
   language: 'ko' | 'en';
   agentName: string;
   character: string;
+  /** AI 말투: polite=존댓말, casual=편한 반말 */
+  tone: 'polite' | 'casual';
 }
 
 export interface ProcessInfo {
@@ -180,4 +182,11 @@ export interface SettingsResponse {
   active: { provider: ProviderId; model: string };
   provider: { provider: ProviderId; label: string; model: string; connectedAt: string } | null;
   providers: ProviderInfo[];
+}
+
+export interface ToolCatalogEntry {
+  name: string;
+  label: string;
+  summary: string;
+  example: string;
 }

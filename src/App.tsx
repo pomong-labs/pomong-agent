@@ -11,6 +11,7 @@ import More from './pages/More';
 import SettingsPage from './pages/Settings';
 import Setup from './pages/Setup';
 import Tasks from './pages/Tasks';
+import Tools from './pages/Tools';
 import Vault from './pages/Vault';
 
 function Splash() {
@@ -66,6 +67,7 @@ export default function App() {
             <Route path="monitor" element={<Monitor />} />
             <Route path="vault" element={<Vault />} />
             <Route path="tasks" element={<Tasks />} />
+            <Route path="tools" element={<Tools />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="more" element={<More />} />
           </Route>

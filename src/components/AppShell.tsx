@@ -24,7 +24,14 @@ export default function AppShell() {
   const onChat = location.pathname === '/';
 
   return (
-    <div className="fixed inset-x-0 top-0 w-full bg-[#F6F6FA] lg:p-4" style={{ height: 'var(--app-height, 100%)' }}>
+    <div
+      className="fixed inset-x-0 top-0 w-full bg-[#F6F6FA] lg:p-4"
+      style={{
+        height: 'var(--app-height, 100%)',
+        // iOS가 키보드 때문에 화면을 밀어 올린 만큼(visualViewport.offsetTop) 셸도 따라 올린다.
+        transform: 'translate3d(var(--app-offset-x, 0px), var(--app-offset, 0px), 0)',
+      }}
+    >
       <div className="mx-auto flex h-full w-full max-w-[1600px] overflow-hidden bg-white lg:rounded-[30px] lg:shadow-soft">
         <aside className="hidden w-[300px] shrink-0 flex-col border-r border-[#F0EFF6] px-6 py-8 lg:flex">
           <div className="px-1">

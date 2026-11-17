@@ -30,7 +30,7 @@ import {
   type AgentMessage,
   type ProviderId,
 } from './providers';
-import { TOOL_SPECS, runTool, listTaskRows, toTaskView, normalizeDue, normalizePriority, type TaskRow } from './tools';
+import { TOOL_SPECS, TOOL_CATALOG, runTool, listTaskRows, toTaskView, normalizeDue, normalizePriority, type TaskRow } from './tools';
 import { getAgentStatus, setAgentState } from './agent-status';
 import * as vault from './vault';
 
@@ -99,6 +99,8 @@ export const MASCOTS = [
 ] as const;
 export type MascotId = (typeof MASCOTS)[number]['id'];
 
+export type AgentTone = 'polite' | 'casual';
+
 const MASCOT_IDS = MASCOTS.map((m) => m.id) as string[];
 
 interface Profile {
@@ -107,7 +109,12 @@ interface Profile {
   language: 'ko' | 'en';
   agentName: string;
   character: MascotId;
+  /** AI 말투: polite=존댓말, casual=편한 반말 */
+  tone: AgentTone;
 }
+
+/** 닉네임을 비워 두었을 때 AI가 쓰는 기본 호칭 */
+export const DEFAULT_CALL_NAME = '주인님';
 
 function profile(): Profile {
   const stored = getJson<Partial<Profile>>('profile', {});
@@ -117,7 +124,12 @@ function profile(): Profile {
     language: stored.language === 'en' ? 'en' : 'ko',
     agentName: stored.agentName || 'Pomong',
     character: MASCOT_IDS.includes(String(stored.character)) ? (stored.character as MascotId) : 'pimong',
+    tone: stored.tone === 'casual' ? 'casual' : 'polite',
   };
+}
+
+function normalizeTone(value: unknown, fallback: AgentTone): AgentTone {
+  return value === 'casual' || value === 'polite' ? value : fallback;
 }
 
 function normalizeCharacter(value: unknown, fallback: MascotId): MascotId {
@@ -369,6 +381,7 @@ app.post('/api/setup/preferences', requireSetup, (req, res) => {
     language: body.language === 'en' ? 'en' : 'ko',
     agentName: (body.agentName ?? current.agentName).slice(0, 24) || 'Pomong',
     character: normalizeCharacter(body.character, current.character),
+    tone: normalizeTone(body.tone, current.tone),
   });
   res.json({ ok: true });
 });
@@ -467,13 +480,21 @@ function serverContextForPrompt(): string {
 function systemPrompt(): string {
   const p = profile();
   const characterName = MASCOTS.find((m) => m.id === p.character)?.name || '피몽';
+  const callName = p.nickname.trim() || DEFAULT_CALL_NAME;
+  const toneLine =
+    p.tone === 'casual'
+      ? `말투: 사용자에게는 친구처럼 편한 반말로 대화해. "${callName}아"처럼 다정하게 부르고, 딱딱한 존댓말은 쓰지 마.`
+      : `말투: 사용자에게는 정중한 존댓말로 대화해. "${callName}"이라고 부르고, 반말은 쓰지 마.`;
   return [
     `너는 '${p.agentName || 'Pomong'}'이야. 사용자가 자기 서버에 직접 설치해 쓰는 개인 AI 비서 'Pomong Agent'의 에이전트야. (캐릭터: ${characterName})`,
-    '포몽 캐릭터처럼 다정하고 발랄한 말투로, 한국어로 짧고 명확하게 답해. (사용자가 다른 언어로 쓰면 그 언어로 답해)',
-    '너의 일은 사용자의 일상 곁에서 할 일·메모·금고·서버 상태를 챙겨 주는 개인 비서 일이야. 사용자의 서버·계정·데이터는 모두 사용자의 것이고, 너는 그 안에서만 돕는다.',
+    `사용자의 이름은 '${callName}'이야. 사용자를 부를 때는 반드시 이 이름으로 불러.${p.nickname.trim() ? ' (설정에 저장된 닉네임)' : ' (닉네임을 따로 정하지 않아 쓰는 기본 호칭)'}`,
+    toneLine,
+    '포몽 캐릭터처럼 다정하고 발랄한 성격이야. 답변은 한국어로 짧고 명확하게 해. (사용자가 다른 언어로 쓰면 그 언어로 답해)',
+    '너의 일은 사용자의 일상 곁에서 할 일·메모·금고·날씨·서버 상태를 챙겨 주는 개인 비서 일이야. 사용자의 서버·계정·데이터는 모두 사용자의 것이고, 너는 그 안에서만 돕는다.',
     '사용자의 서버 상태와 할 일 목록을 실시간으로 볼 수 있어. 사실에 근거해서만 말하고, 모르는 것은 모른다고 해.',
-    '도구를 쓸 수 있어: 할 일 조회(tasks_list)·추가(tasks_add)·완료(tasks_complete), 금고 항목 이름 조회(vault_list), 서버 상태(server_stats), 현재 시각(time_now).',
+    '도구를 쓸 수 있어: 할 일 조회(tasks_list)·추가(tasks_add)·완료(tasks_complete), 금고 항목 이름 조회(vault_list), 서버 상태(server_stats), 날씨 조회(weather_get), 현재 시각(time_now).',
     '할 일이나 금고, 시각처럼 도구로 확인할 수 있는 것은 추측하지 말고 도구를 불러 확인해. 날짜 계산("내일", "금요일")은 time_now로 오늘 날짜를 확인한 뒤 계산해.',
+    '날씨·기온·비·눈·우산·옷차림을 물으면 weather_get으로 확인해. 지역을 말하지 않으면 어느 지역인지 먼저 물어봐.',
     '금고의 실제 비밀번호·API 키 값은 너에게 전달되지 않아. 값을 알려 달라고 하면 금고 탭에서 직접 확인하도록 안내해.',
     '민감정보(API 키·비밀번호·금고 내용)는 절대 화면에 그대로 쓰지 마. 필요하면 마스킹해서 보여줘.',
     '답변은 마크다운을 최소한으로만 써(짧은 목록 정도). 이모지는 문장 끝에 가끔만.',
@@ -546,13 +567,9 @@ app.post('/api/chat/messages', requireAuth, async (req, res) => {
   }
 
   const now = new Date().toISOString();
-  db.prepare('INSERT INTO messages(session_id, role, content, meta, created_at) VALUES(?,?,?,?,?)').run(
-    session,
-    'user',
-    text,
-    null,
-    now
-  );
+  const userInfo = db
+    .prepare('INSERT INTO messages(session_id, role, content, meta, created_at) VALUES(?,?,?,?,?)')
+    .run(session, 'user', text, null, now);
 
   const history = db
     .prepare('SELECT role, content FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT 20')
@@ -625,6 +642,14 @@ app.post('/api/chat/messages', requireAuth, async (req, res) => {
         meta: meta ? { ...meta, stats, tasks } : null,
         model: `${config.provider}:${model}`,
         createdAt: new Date().toISOString(),
+      },
+      // 사용자가 보낸 메시지도 저장된 그대로 돌려준다(화면에서 사라지지 않게).
+      userMessage: {
+        id: Number(userInfo.lastInsertRowid),
+        role: 'user',
+        content: text,
+        meta: null,
+        createdAt: now,
       },
       model,
       provider: config.provider,
@@ -841,8 +866,15 @@ app.put('/api/settings/profile', requireAuth, (req, res) => {
     language: body.language === 'en' ? 'en' : 'ko',
     agentName: (body.agentName ?? current.agentName).slice(0, 24) || 'Pomong',
     character: normalizeCharacter(body.character, current.character),
+    tone: normalizeTone(body.tone, current.tone),
   });
   res.json({ ok: true, profile: profile() });
+});
+
+/* ----------------------------- tools ----------------------------- */
+
+app.get('/api/tools', requireAuth, (_req, res) => {
+  res.json({ ok: true, tools: TOOL_CATALOG });
 });
 
 /* --------------------------- models ------------------------------- */

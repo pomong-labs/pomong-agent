@@ -5,6 +5,25 @@ import MascotFace from '../components/MascotFace';
 import { api, type ProviderId, type SettingsResponse } from '../lib/api';
 import { useAppStore } from '../lib/store';
 
+/** 말투 선택지와 그 말투로 대화했을 때의 예시 (설정 화면에 그대로 보여 준다) */
+function toneOptions(callName: string, agentName: string) {
+  const agent = agentName || 'Pomong';
+  return [
+    {
+      id: 'polite' as const,
+      label: '존댓말',
+      hint: '정중하게',
+      example: `나: 오늘 날씨 어때?\n${agent}: ${callName}, 인제는 지금 흐리고 3도예요. 오후에 비 소식이 있으니 우산을 챙기시는 게 좋겠어요.`,
+    },
+    {
+      id: 'casual' as const,
+      label: '편한 반말',
+      hint: '친구처럼',
+      example: `나: 오늘 날씨 어때?\n${agent}: ${callName}아, 인제는 지금 흐리고 3도야. 오후에 비 온대, 우산 챙겨!`,
+    },
+  ];
+}
+
 export default function SettingsPage() {
   const navigate = useNavigate();
   const { refreshProfile, refreshModels } = useAppStore();
@@ -12,6 +31,7 @@ export default function SettingsPage() {
   const [nickname, setNickname] = useState('');
   const [agentName, setAgentName] = useState('Pomong');
   const [character, setCharacter] = useState('pimong');
+  const [tone, setTone] = useState<'polite' | 'casual'>('polite');
   const [savedFlash, setSavedFlash] = useState('');
 
   const [provider, setProvider] = useState<ProviderId>('gemini');
@@ -28,6 +48,7 @@ export default function SettingsPage() {
         setNickname(r.profile.nickname);
         setAgentName(r.profile.agentName);
         setCharacter(r.profile.character || 'pimong');
+        setTone(r.profile.tone === 'casual' ? 'casual' : 'polite');
         setProvider(r.active.provider);
         setModel(r.active.model);
       })
@@ -38,7 +59,7 @@ export default function SettingsPage() {
   }, []);
 
   const saveProfile = async () => {
-    await api.put('/api/settings/profile', { nickname, agentName, character });
+    await api.put('/api/settings/profile', { nickname, agentName, character, tone });
     setSavedFlash('저장했습니다');
     window.setTimeout(() => setSavedFlash(''), 1800);
     await load();
@@ -80,6 +101,7 @@ export default function SettingsPage() {
   };
 
   const selected = data?.providers.find((p) => p.id === provider);
+  const callName = nickname.trim() || '주인님';
   const mascots = data?.mascots || [
     { id: 'poding', name: '포딩' },
     { id: 'pimong', name: '피몽' },
@@ -95,7 +117,7 @@ export default function SettingsPage() {
         <header className="flex items-center">
           <div>
             <h1 className="text-[26px] font-bold tracking-[-0.02em] lg:text-[34px]">설정</h1>
-            <p className="mt-1 text-[13.5px] text-pomong-sub lg:text-[16px]">AI 이름·캐릭터와 모델 연결을 관리해요</p>
+            <p className="mt-1 text-[13.5px] text-pomong-sub lg:text-[16px]">AI 이름·캐릭터·말투와 모델 연결을 관리해요</p>
           </div>
           <MascotFace character={character} size={56} className="ml-auto lg:hidden" />
         </header>
@@ -140,6 +162,41 @@ export default function SettingsPage() {
                       ) : null}
                     </span>
                     <span className={`text-[12px] font-semibold ${active ? 'text-[#7C63F6]' : 'text-[#6B677A]'}`}>{m.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="mt-5">
+            <div className="flex items-baseline justify-between">
+              <span className="text-[13px] font-semibold text-[#5B5866]">AI 말투</span>
+              <span className="text-[11.5px] text-[#B4B1C2]">저장하면 다음 대화부터 적용돼요</span>
+            </div>
+            <div className="mt-2.5 grid gap-2 sm:grid-cols-2">
+              {toneOptions(callName, agentName).map((opt) => {
+                const active = tone === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    onClick={() => setTone(opt.id)}
+                    className={`rounded-2xl border-[1.5px] px-4 py-3 text-left transition ${
+                      active ? 'border-[#C9B8FF] bg-[#F8F5FF]' : 'border-[#EFEDF6] bg-white hover:bg-[#FBFAFF]'
+                    }`}
+                    aria-pressed={active}
+                  >
+                    <span className="flex items-center gap-2">
+                      <span className={`text-[14.5px] font-semibold ${active ? 'text-[#7C63F6]' : 'text-[#4B4856]'}`}>{opt.label}</span>
+                      <span className="text-[11.5px] font-medium text-[#B4B1C2]">{opt.hint}</span>
+                      {active ? (
+                        <span className="ml-auto flex h-5 w-5 items-center justify-center rounded-full bg-[#8B72F8] text-white">
+                          <Check size={12} strokeWidth={4} />
+                        </span>
+                      ) : null}
+                    </span>
+                    <span className={`mt-2 block whitespace-pre-line rounded-xl px-3 py-2 text-[12.5px] leading-relaxed ${active ? 'bg-white text-[#5B5866]' : 'bg-[#FAF9FD] text-[#6B677A]'}`}>
+                      {opt.example}
+                    </span>
                   </button>
                 );
               })}
@@ -281,7 +338,7 @@ export default function SettingsPage() {
           <ul className="mt-3 divide-y divide-[#F6F4FB] text-[13.5px]">
             <li className="flex items-center justify-between py-3">
               <span className="text-pomong-sub">버전</span>
-              <span className="font-semibold text-[#3B3947]">v{data?.version || '0.2.0'}</span>
+              <span className="font-semibold text-[#3B3947]">v{data?.version || '0.3.0'}</span>
             </li>
             <li className="flex items-center justify-between py-3">
               <span className="text-pomong-sub">데이터 보관</span>
@@ -300,7 +357,7 @@ export default function SettingsPage() {
         </section>
 
         <p className="mt-6 flex items-center justify-center gap-1.5 text-[12px] text-[#B4B1C2]">
-          <Sparkles size={12} /> Pomong Agent v{data?.version || '0.2.0'} · Pomong Labs
+          <Sparkles size={12} /> Pomong Agent v{data?.version || '0.3.0'} · Pomong Labs
         </p>
       </div>
     </div>
