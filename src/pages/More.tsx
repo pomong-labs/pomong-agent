@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ChevronRight, ListChecks, Lock, LogOut, Settings as SettingsIcon } from 'lucide-react';
 import Mascot from '../components/Mascot';
@@ -5,6 +6,14 @@ import { api } from '../lib/api';
 
 export default function More() {
   const navigate = useNavigate();
+  const [version, setVersion] = useState('0.1.1');
+
+  useEffect(() => {
+    api
+      .get<{ version: string }>('/api/version')
+      .then((r) => setVersion(r.version))
+      .catch(() => undefined);
+  }, []);
 
   const logout = async () => {
     await api.post('/api/auth/logout').catch(() => undefined);
@@ -52,7 +61,7 @@ export default function More() {
       </button>
 
       <div className="mt-8 flex flex-col items-center gap-2.5">
-        <p className="text-center text-[12px] text-[#B4B1C2]">Pomong Agent v0.1.1 · Pomong Labs</p>
+        <p className="text-center text-[12px] text-[#B4B1C2]">Pomong Agent v{version} · Pomong Labs</p>
         <img src="/pomong-labs-logo.png" alt="Pomong Labs" className="h-5 w-auto opacity-80" draggable={false} />
       </div>
     </div>

@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowRight, Eye, EyeOff } from 'lucide-react';
 import Logo from '../components/Logo';
@@ -12,6 +12,14 @@ export default function Login() {
   const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [version, setVersion] = useState('0.1.1');
+
+  useEffect(() => {
+    api
+      .get<{ version: string }>('/api/version')
+      .then((r) => setVersion(r.version))
+      .catch(() => undefined);
+  }, []);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -81,7 +89,7 @@ export default function Login() {
           </button>
 
           <p className="mt-5 text-center text-[12px] leading-relaxed text-[#A8A5B8]">
-            내 서버에서만 동작하는 개인 AI 비서 · v0.1.0
+            내 서버에서만 동작하는 개인 AI 비서 · v{version}
           </p>
         </form>
       </div>
