@@ -44,6 +44,7 @@ export const GEMINI_FALLBACK_CHAIN: string[] = [
   'gemini-3.6-flash',
   'gemini-3.5-flash',
   'gemini-3.1-flash-lite',
+  'gemini-flash-lite-latest',
 ];
 
 /** 지원이 종료된 구형 모델 → 현재 모델 매핑 (저장된 설정 자동 마이그레이션용) */
@@ -207,15 +208,19 @@ export async function runChat(
     // 신규 사용자에게 닫힌 모델(404)이나 혼잡·지연이면 다음 모델로 자동 폴백한다.
     const startedAt = Date.now();
     let lastError: unknown = null;
-    for (const candidate of geminiCandidates(modelName)) {
-      if (lastError && Date.now() - startedAt > 75000) break; // 전체 예산을 넘기면 여기서 멈춘다
-      try {
-        const result = await geminiChat(candidate, apiKey, system, turns);
-        lastGoodGeminiModel = result.model;
-        return result;
-      } catch (err) {
-        lastError = err;
-        if (!isRetryableError(err)) throw err;
+    // 혼잡(503)은 몇 초 뒤 풀리는 경우가 많아, 모두 실패하면 짧게 쉬었다가 한 번 더 시도한다.
+    for (let pass = 0; pass < 2; pass += 1) {
+      if (pass > 0) await new Promise((resolve) => setTimeout(resolve, 800));
+      for (const candidate of geminiCandidates(modelName)) {
+        if (lastError && Date.now() - startedAt > 75000) break; // 전체 예산을 넘기면 여기서 멈춘다
+        try {
+          const result = await geminiChat(candidate, apiKey, system, turns);
+          lastGoodGeminiModel = result.model;
+          return result;
+        } catch (err) {
+          lastError = err;
+          if (!isRetryableError(err)) throw err;
+        }
       }
     }
     throw lastError instanceof Error ? lastError : new Error('Gemini 응답을 받지 못했습니다.');
