@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { db } from './db';
 import { publish } from './events';
+import { findServiceInText } from './services';
 
 /**
  * 채팅 인라인 로그인 카드 (v0.5.1)
@@ -123,9 +124,56 @@ export function setStatus(id: string, status: LoginRequestStatus, patch: { vault
   return view;
 }
 
-/** 이번 턴에 만든 카드를 AI 답변 말풍선에 붙인다(새로고침해도 같은 자리에 보이게). */
-export function linkPendingToMessage(sessionId: string, messageId: number): void {
+/** 이번 턴에 만든 카드를 AI 답변 말풍선에 붙인다(새로고침해도 같은 자리에 보이게). */export function linkPendingToMessage(sessionId: string, messageId: number): void {
+  const pending = db
+    .prepare("SELECT id FROM login_requests WHERE session_id = ? AND message_id IS NULL AND status = 'pending'")
+    .all(sessionId) as { id: string }[];
   db.prepare(
     "UPDATE login_requests SET message_id = ? WHERE session_id = ? AND message_id IS NULL AND status = 'pending'"
   ).run(messageId, sessionId);
+  // v0.5.3: 말풍선에 붙은 사실을 화면에 바로 알린다(새로고침 없이 카드가 제자리에 뜨게).
+  for (const row of pending) {
+    const view = get(row.id);
+    if (view) publish({ type: 'login_request', title: `${view.service} 로그인 카드`, body: '', data: { request: view } });
+  }
+}
+
+/**
+ * 서버 로그인 카드 안전장치 (v0.5.3)
+ *
+ * 가벼운 모델이 `vault_find_for_site`만 부르고 `vault_request_login`을 빠뜨린 채
+ * "아래 로그인 카드에 입력해 주세요"라고 말하는 경우(IMG_3586)를 서버가 바로잡는다.
+ * 금고에 계정이 없었거나 답변에서 카드를 언급했는데 이번 턴에 카드가 없으면
+ * 서비스 카탈로그로 카드를 직접 만들고, 필요하면 답변 끝에 안내 문장을 붙인다.
+ */
+export function ensureLoginCard(input: {
+  sessionId: string;
+  prompt: string;
+  reply: string;
+  vaultEmptyTerm: string | null;
+  cardCreatedThisTurn: boolean;
+}): { card: LoginRequestView | null; service: string | null; reply: string } {
+  const reply = input.reply;
+  if (input.cardCreatedThisTurn) return { card: null, service: null, reply };
+  const wantsLogin = /로그인|연동|계정|연결/.test(input.prompt);
+  const mentionsCard = /로그인\s*카드|카드에[\s\S]{0,25}입력|카드에서[\s\S]{0,15}입력/.test(reply);
+  if (!mentionsCard && !(input.vaultEmptyTerm && wantsLogin)) return { card: null, service: null, reply };
+  const service =
+    findServiceInText(input.vaultEmptyTerm || '') || findServiceInText(input.prompt) || findServiceInText(reply);
+  if (!service) return { card: null, service: null, reply };
+  const existing = listForSession(input.sessionId).find(
+    (r) => r.status === 'pending' && r.service.toLowerCase() === service.name.toLowerCase()
+  );
+  const card =
+    existing ||
+    create({
+      sessionId: input.sessionId,
+      service: service.name,
+      loginUrl: service.loginUrl,
+      note: `${service.name} 계정을 한 번만 저장해 두면 다음부터는 제가 바로 로그인해요.`,
+    });
+  const finalReply = mentionsCard
+    ? reply
+    : `${reply.trim()}\n\n아래 카드에 계정 정보를 입력해 주시면 바로 로그인해서 이어서 진행할게요!`.trim();
+  return { card, service: service.name, reply: finalReply };
 }

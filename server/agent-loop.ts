@@ -1,4 +1,5 @@
 import { runAgentStep, type AgentMessage, type AgentPart, type ProviderId, type ToolSpec } from './providers';
+import type { ToolResult } from './tools';
 
 /**
  * 에이전트 도구 루프 (Phase 1 구조 그대로).
@@ -25,7 +26,8 @@ export interface AgentLoopOptions {
   deadline?: number;
   cancelled?: () => boolean;
   onStep?: (info: { index: number; text: string; tools: string[] }) => void;
-  onToolResult?: (name: string, content: string) => void;
+  /** v0.5.3: flags에는 '금고 계정 없음'같은 서버 판단용 신호가 들어온다. */
+  onToolResult?: (name: string, content: string, flags?: ToolResult['flags']) => void;
   /** 도구 실행 직전/직후 (작업 카드 단계 기록용) */
   onToolStart?: (name: string, args: Record<string, unknown>) => void;
   onToolEnd?: (name: string, content: string, durationMs: number, ok: boolean) => void;
@@ -43,6 +45,12 @@ export interface AgentLoopResult {
   /** 사람 승인이 필요해 멈춘 도구 (있으면 status=approval_needed) */
   needsApproval: string | null;
   cancelled: boolean;
+  /** v0.5.3: 빈 응답을 실제 진행 상황 문장으로 바뀔 때 쓴다. */
+  lastTool: { name: string; content: string } | null;
+  /** 실패한 도구의 오류 문구 */
+  lastError: string | null;
+  /** 사용자에게 화면을 넘겼는지(browser_handover 성공) */
+  handover: boolean;
 }
 
 export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoopResult> {
@@ -62,10 +70,27 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
   const blocked: string[] = [];
   let steps = 0;
   let needsApproval: string | null = null;
+  let lastTool: { name: string; content: string } | null = null;
+  let lastError: string | null = null;
+  let handover = false;
+
+  const done = (extra: Partial<AgentLoopResult> = {}): AgentLoopResult => ({
+    text: reply,
+    model,
+    steps,
+    tools: used,
+    blocked,
+    needsApproval,
+    cancelled: false,
+    lastTool,
+    lastError,
+    handover,
+    ...extra,
+  });
 
   for (let step = 0; step < Math.max(1, options.maxSteps); step += 1) {
     if (options.cancelled?.()) {
-      return { text: reply, model, steps, tools: used, blocked, needsApproval, cancelled: true };
+      return done({ cancelled: true });
     }
     if (options.deadline && Date.now() > options.deadline) {
       if (!reply.trim()) reply = '시간이 초과되어 작업을 멈췄습니다.';
@@ -125,11 +150,12 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
       const { runTool } = await import('./tools');
       const startedAt = Date.now();
       options.onToolStart?.(call.name, call.args);
-      let output: { content: string };
+      let output: ToolResult;
       try {
         output = await runTool(call.name, call.args, { session: options.sessionId });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        lastError = message;
         options.onToolEnd?.(call.name, message, Date.now() - startedAt, false);
         conversation.push({
           role: 'tool',
@@ -140,15 +166,46 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
         continue;
       }
       used.push(call.name);
+      lastTool = { name: call.name, content: output.content };
+      if (call.name === 'browser_handover') handover = true;
       options.onToolEnd?.(call.name, output.content, Date.now() - startedAt, true);
-      options.onToolResult?.(call.name, output.content);
+      options.onToolResult?.(call.name, output.content, output.flags);
       conversation.push({ role: 'tool', toolCallId: call.id, name: call.name, content: output.content });
     }
 
     if (needsApproval) break;
   }
 
-  return { text: reply, model, steps, tools: used, blocked, needsApproval, cancelled: false };
+  return done();
+}
+
+/**
+ * 모델이 빈 텍스트를 돌려줬을 때, 지금까지의 실제 상태를 알리는 문장 (v0.5.3).
+ * 예전에는 "확인했어요. 더 도와드릴 일이 있을까요?"라는, 실제 진행과 무관한 문구가 나갔다.
+ */
+export function buildEmptyReply(
+  result: AgentLoopResult,
+  context: { browserUsed?: boolean; loginCardService?: string | null } = {}
+): string {
+  const reason = (result.lastError || '').replace(/\s+/g, ' ').trim().slice(0, 90);
+  if (context.loginCardService) {
+    return `${context.loginCardService} 로그인 카드가 위에 떴어요. 카드에 계정 정보를 입력해 주시면 이어서 로그인할게요!`;
+  }
+  if (result.handover) {
+    return '로그인·인증 화면에서 멈췄어요. 브라우저 화면에서 직접 마무리해 주시면 그다음부터 제가 이어서 할게요.';
+  }
+  if (result.blocked.length) {
+    return `${result.blocked[0]} 작업은 허용되지 않아 진행하지 못했어요. 다른 방법으로 도와드릴까요?`;
+  }
+  if (context.browserUsed) {
+    const tail = reason ? ` (${reason})` : '';
+    return `브라우저 작업 중 다음 단계로 넘어가지 못했어요${tail}. 브라우저 탭의 화면 보기로 현재 상태를 확인해 보시겠어요?`;
+  }
+  if (result.tools.length) {
+    const tail = reason ? ` (${reason})` : '';
+    return `요청하신 작업을 끝까지 마치지 못했어요${tail}. 다시 한 번 시도해 볼까요?`;
+  }
+  return '요청을 이해하지 못했어요. 조금 더 구체적으로 말씀해 주시겠어요?';
 }
 
 /**

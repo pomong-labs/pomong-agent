@@ -29,6 +29,29 @@ export const DESKTOP_UA =
 export type ControlOwner = 'agent' | 'user';
 export type HandoverReason = 'login' | 'otp' | 'captcha' | 'payment' | 'identity' | 'manual';
 
+/**
+ * 사이트가 실제로 쓰지 않는 로그인 주소 (v0.5.3)
+ *
+ * 모델이 기억으로 /login 을 여는 경우가 많은데, 그런 사이트는 404 페이지를 열어
+ * 작업이 "메인 ↔ 404"를 오가며 멈춘다. 열기 전에 실제 주소로 바꾼다.
+ */
+const LOGIN_URL_FIXES: { test: RegExp; to: string; note: string }[] = [
+  {
+    test: /^https?:\/\/(www\.)?kmong\.com\/login\/?(\?.*)?$/i,
+    to: 'https://kmong.com/',
+    note: '크몽은 로그인 전용 주소(/login)가 없어 404가 뜹니다. 메인 페이지에서 오른쪽 위 로그인으로 들어가야 합니다.',
+  },
+];
+
+/** 사용자가 준 주소를 실제로 열 수 있는 주소로 보정한다. */
+export function normalizeUrl(url: string): { url: string; note: string | null } {
+  const trimmed = String(url || '').trim();
+  for (const fix of LOGIN_URL_FIXES) {
+    if (fix.test.test(trimmed)) return { url: fix.to, note: fix.note };
+  }
+  return { url: trimmed, note: null };
+}
+
 export const HANDOVER_LABELS: Record<HandoverReason, string> = {
   login: '로그인이 필요해요',
   otp: '인증번호가 필요해요',
@@ -623,7 +646,11 @@ export interface OpenResult {
 
 /** 모델이 부르는 browser_open */
 export async function openUrl(url: string, convId?: string): Promise<OpenResult> {
-  const absolute = /^https?:\/\//i.test(url) ? url : `https://${url.replace(/^\/*/, '')}`;
+  const guessed = /^https?:\/\//i.test(url) ? url : `https://${url.replace(/^\/*/, '')}`;
+  // v0.5.3: 존재하지 않는 로그인 주소로 404를 여는 일을 막는다.
+  const normalized = normalizeUrl(guessed);
+  const absolute = normalized.url;
+  const urlNote = normalized.note;
   const verdict = evaluateUrl(absolute);
   if (verdict.level === 'block') {
     throw new Error(`${verdict.host} 는 정책상 접근이 차단된 사이트입니다.`);
@@ -636,7 +663,7 @@ export async function openUrl(url: string, convId?: string): Promise<OpenResult>
   }
   guardAgent(session, verdict.level);
   const s = await ensureLive(session.id);
-  await withTimeout(
+  const response = await withTimeout(
     s.page.goto(absolute, { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch((err: unknown) => {
       throw new Error(`페이지를 열지 못했습니다: ${err instanceof Error ? err.message.slice(0, 160) : String(err)}`);
     }),
@@ -645,16 +672,23 @@ export async function openUrl(url: string, convId?: string): Promise<OpenResult>
   );
   const data = await takeSnapshot(s.page);
   touch(session.id, { url: data.url, title: data.title });
-  logAction(session.id, 'agent', 'browser.open', { url }, data.title, data.url);
+  logAction(session.id, 'agent', 'browser.open', { url, opened: absolute }, data.title, data.url);
   void saveState(s);
+  const notes: string[] = [];
+  if (urlNote) notes.push(`※ 주소 보정: ${urlNote} (${absolute} 로 열었습니다)`);
+  if (data.title.trim() === '404' || /^(404|페이지를 찾을 수 없습니다|Page not found|Not Found)/i.test(data.text.trim())) {
+    notes.push('⚠️ 이 주소는 404(없는 페이지)입니다. 주소를 추측해 다시 열지 말고, 사이트 메인 페이지에서 메뉴로 찾거나 사용자에게 주소를 확인해 달라고 하세요.');
+  } else if (response && response.status() >= 400) {
+    notes.push(`⚠️ 서버가 HTTP ${response.status()}로 응답했습니다. 이 화면에서는 작업을 계속할 수 없을 수 있습니다.`);
+  }
   if (data.handover) {
     // 로그인·캡차 화면이면 자동으로 사람에게 넘길 준비를 한다(요청은 모델이 한다).
-    const hint = `\n\n※ 이 화면은 '${HANDOVER_LABELS[data.handover]}' 상태입니다. 필요한 부분을 사용자에게 넘기려면 browser_handover를 부르세요.`;
-    return { sessionId: session.id, snapshot: formatSnapshot(data, session.id) + hint, policy: policyNote(verdict.level, verdict.host, verdict.note) };
+    notes.push(`※ 이 화면은 '${HANDOVER_LABELS[data.handover]}' 상태입니다. 필요한 부분을 사용자에게 넘기려면 browser_handover를 부르세요.`);
   }
+  const suffix = notes.length ? `\n\n${notes.join('\n')}` : '';
   return {
     sessionId: session.id,
-    snapshot: formatSnapshot(data, session.id),
+    snapshot: formatSnapshot(data, session.id) + suffix,
     policy: policyNote(verdict.level, verdict.host, verdict.note),
   };
 }
@@ -708,7 +742,9 @@ export async function typeInto(args: { ref?: string; text: string; submit?: bool
       '비밀번호·카드·인증번호 입력은 에이전트가 직접 타이핑할 수 없습니다(하드블록). 비밀번호는 browser_login_with_vault(또는 browser_fill_vault)를 사용하세요. 카드·인증번호는 browser_handover로 사용자에게 넘기세요.'
     );
   }
-  await handle.first().fill(String(args.text || ''));
+  // v0.5.3: React/SPA 입력창에도 확실히 들어가도록 실제 키 입력 + 검증으로 채운다.
+  const typed = await fillRef(s.page, String(args.ref || ''), String(args.text || ''));
+  if (!typed) throw new Error(`입력창에 글자를 넣지 못했어요: ${args.ref}`);
   if (args.submit) {
     await Promise.all([
       s.page.waitForLoadState('domcontentloaded', { timeout: 15_000 }).catch(() => undefined),
@@ -740,11 +776,8 @@ export async function fillFromVault(
   const selector = `[data-pomong-ref="${String(ref || '').replace(/[^a-zA-Z0-9_-]/g, '')}"]`;
   const handle = s.page.locator(selector).first();
   if (!(await handle.count())) throw new Error(`입력창을 찾지 못했습니다: ${ref}`);
-  await handle.fill(value);
-  await handle.evaluate((el) => {
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-    el.dispatchEvent(new Event('change', { bubbles: true }));
-  });
+  const filled = await fillRef(s.page, ref, value);
+  if (!filled) throw new Error(`입력창에 값을 넣지 못했어요: ${ref}. browser_snapshot으로 화면 요소를 다시 확인해 주세요.`);
   if (options.submit) {
     // v0.5.2: 로그인 버튼을 따로 부르지 않아도 되게 Enter로 바로 전송한다.
     await Promise.all([
@@ -780,6 +813,9 @@ export interface LoginRefs {
 /**
  * 로그인 화면에서 아이디·비밀번호·로그인 버튼의 ref를 스스로 찾아낸다.
  * (가벼운 모델이 ref를 잘못 짚거나 빠뜨려도 한 번의 호출로 끝나게 하려는 장치)
+ *
+ * v0.5.3: 로그인 버튼을 "화면에 보이는 로그인 글자"로만 고르던 것을 점수제로 바꿨다.
+ *         '로그인/회원가입' 같은 탭이나 '카카오로 로그인'을 눌러 엉뚱한 곳으로 가는 일을 막는다.
  */
 export async function detectLoginRefs(page: Page): Promise<LoginRefs> {
   try {
@@ -789,17 +825,17 @@ export async function detectLoginRefs(page: Page): Promise<LoginRefs> {
           const rect = (el as HTMLElement).getBoundingClientRect();
           if (rect.width < 4 || rect.height < 4) return false;
           const style = window.getComputedStyle(el as HTMLElement);
-          return style.visibility !== 'hidden' && style.display !== 'none';
+          if (style.visibility === 'hidden' || style.display === 'none' || style.opacity === '0') return false;
+          return el.getAttribute('aria-hidden') !== 'true';
         };
         const refOf = (el: Element | null): string | null => {
           const ref = el?.getAttribute('data-pomong-ref');
           return ref || null;
         };
         const inputs = Array.from(document.querySelectorAll<HTMLInputElement>('input')).filter(
-          (el) => visible(el) && !el.disabled && el.type !== 'hidden'
+          (el) => visible(el) && !el.disabled && el.type !== 'hidden' && !['checkbox', 'radio', 'submit', 'button'].includes(el.type)
         );
-        const passwordInput =
-          inputs.find((el) => el.type === 'password') || null;
+        const passwordInput = inputs.find((el) => el.type === 'password') || null;
         let usernameInput: HTMLInputElement | null = null;
         if (passwordInput) {
           const all = Array.from(document.querySelectorAll<HTMLInputElement>('input'));
@@ -816,19 +852,40 @@ export async function detectLoginRefs(page: Page): Promise<LoginRefs> {
         }
         if (!usernameInput) {
           usernameInput =
-            inputs.find((el) => ['email', 'text', 'tel'].includes((el.getAttribute('type') || 'text').toLowerCase()) && /아이디|이메일|id|email|login|username/i.test(`${el.name} ${el.id} ${el.placeholder}`)) ||
+            inputs.find((el) => ['email', 'text', 'tel'].includes((el.getAttribute('type') || 'text').toLowerCase()) && /아이디|이메일|id|email|login|username|account/i.test(`${el.name} ${el.id} ${el.placeholder}`)) ||
             null;
         }
-        const form = passwordInput?.closest('form') || null;
+        // 로그인 버튼은 비밀번호 칸과 같은 폼·모달 안에서 먼저 찾고, 없으면 화면 전체에서 찾는다.
+        const scope =
+          passwordInput?.closest('form, [role="dialog"], [class*=modal], [class*=Modal], [class*=layer], [class*=Layer]') || document;
         const buttons = Array.from(
-          (form || document).querySelectorAll<HTMLElement>('button, input[type=submit], [role=button], a')
+          scope.querySelectorAll<HTMLElement>('button, input[type=submit], [role=button], a')
         ).filter(visible);
         const label = (el: HTMLElement) =>
-          `${(el.textContent || '').trim()} ${el.getAttribute('aria-label') || ''} ${(el as HTMLInputElement).value || ''}`.trim();
-        const submitButton =
-          buttons.find((el) => /로그인|로그\s*인|sign\s*in|log\s*in|continue|계속/i.test(label(el))) ||
-          buttons.find((el) => (el as HTMLButtonElement).type === 'submit') ||
-          (form ? form.querySelector<HTMLElement>('button[type=submit]') : null);
+          `${(el.textContent || '').trim()} ${el.getAttribute('aria-label') || ''} ${(el as HTMLInputElement).value || ''}`.replace(/\s+/g, ' ').trim();
+        const submitScore = (el: HTMLElement): number => {
+          const text = label(el);
+          if (!text || text.length > 24) return -99;
+          let score = 0;
+          if ((el as HTMLButtonElement).type === 'submit' || el.tagName === 'INPUT') score += 5;
+          if (/^(로그인|로그 인|login|log in|sign in|signin|continue|계속|다음)$/i.test(text)) score += 6;
+          else if (/(로그인|login|log in|sign in)/i.test(text)) score += 3;
+          // 엉뚱한 버튼을 누르면 안 되는 것들
+          if (/회원가입|가입|sign ?up|아이디 찾기|비밀번호 찾기|find (id|password)|카카오|kakao|네이버|naver|애플|apple|구글|google|페이스북|facebook|비회원/i.test(text)) score -= 8;
+          if (el.tagName === 'A') {
+            const href = el.getAttribute('href') || '';
+            if (/signup|register|help|support|find/i.test(href)) score -= 6;
+            // 다른 페이지로 이동하는 링크보다 지금 화면에서 모달을 여는 버튼을 선호한다.
+            if (/^\/\/|^https?:|^\//.test(href)) score -= 2;
+          }
+          if (passwordInput && el.closest('form') === passwordInput.closest('form')) score += 4;
+          return score;
+        };
+        const ranked = buttons
+          .map((el) => ({ el, score: submitScore(el) }))
+          .filter((x) => x.score > 0)
+          .sort((a, b) => b.score - a.score);
+        const submitButton = ranked.length ? ranked[0].el : (passwordInput?.closest('form')?.querySelector<HTMLElement>('button[type=submit]') || null);
         return {
           usernameRef: refOf(usernameInput),
           passwordRef: refOf(passwordInput),
@@ -843,17 +900,113 @@ export async function detectLoginRefs(page: Page): Promise<LoginRefs> {
   }
 }
 
-/** 입력창을 실제로 채우고 input/change 이벤트를 일으킨다(SPA 프레임워크 대응). */
+/**
+ * 입력창을 실제로 채운다 (v0.5.3).
+ *
+ * 무신사(member.one.musinsa.com)처럼 React/Next.js로 만든 로그인 화면은
+ * `fill()` 한 번으로는 화면에 값이 안 들어가고 제출 때 빈 값으로 처리되는 일이 있었다.
+ * 그래서 ① 클릭해 포커스 ② 비우기 ③ 실제 키 입력(pressSequentially)
+ * ④ 그래도 비어 있으면 native setter + input/change 이벤트 순으로 시도하고,
+ * 마지막에 inputValue()로 **정말 들어갔는지** 확인한다.
+ */
 async function fillRef(page: Page, ref: string, value: string): Promise<boolean> {
   const selector = `[data-pomong-ref="${String(ref || '').replace(/[^a-zA-Z0-9_-]/g, '')}"]`;
   const handle = page.locator(selector).first();
   if (!(await handle.count())) return false;
-  await handle.fill(value);
-  await handle.evaluate((el) => {
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-    el.dispatchEvent(new Event('change', { bubbles: true }));
-  });
-  return true;
+  const read = async (): Promise<string> => handle.inputValue().catch(() => '');
+  const commit = async (): Promise<void> => {
+    await handle.evaluate((el) => el.dispatchEvent(new Event('change', { bubbles: true }))).catch(() => undefined);
+  };
+
+  try {
+    await handle.scrollIntoViewIfNeeded({ timeout: 3000 });
+  } catch {
+    /* 화면 밖이어도 진행한다 */
+  }
+  // ① 실제 사람같이 클릭해 포커스를 준다.
+  try {
+    await handle.click({ timeout: 5000 });
+  } catch {
+    /* 가려져 있어도 타이핑은 시도한다 */
+  }
+  // ② 비우고 ③ 키 입력 (React/Next.js controlled input의 _valueTracker가 확실히 반응)
+  try {
+    await handle.fill('');
+  } catch {
+    /* 비우기 실패는 무시 */
+  }
+  try {
+    await handle.pressSequentially(value, { delay: 12 });
+  } catch {
+    /* 아래 폴백으로 */
+  }
+  if ((await read()) === value) {
+    await commit();
+    return true;
+  }
+  // ③-b 한 번 더 fill
+  try {
+    await handle.fill(value);
+  } catch {
+    /* 아래 폴백으로 */
+  }
+  if ((await read()) === value) {
+    await commit();
+    return true;
+  }
+  // ④ 마지막 폴백: 프레임워크의 value tracker를 건너뛰는 native setter + input/change
+  await handle
+    .evaluate((el, v) => {
+      const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+      try {
+        setter?.call(el, v);
+      } catch {
+        (el as HTMLInputElement).value = v;
+      }
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, data: v, inputType: 'insertText' }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    }, value)
+    .catch(() => undefined);
+  const final = await read();
+  if (final === value) {
+    await commit();
+    return true;
+  }
+  return final.length > 0;
+}
+
+/**
+ * 로그인 화면에 아이디·비밀번호 칸이 없을 때, 화면의 '로그인' 버튼을 한 번 눌러
+ * 로그인 모달/오버레이를 연다. 열렸으면 true.
+ *
+ * v0.5.3: 크몽처럼 로그인이 전용 페이지가 아니라 헤더/모달로 뜨는 사이트 대응.
+ *         다만 '회원가입'이나 404가 나는 /login 링크는 누르지 않는다.
+ */
+async function openLoginModal(page: Page): Promise<boolean> {
+  const hasPassword = async (): Promise<boolean> => (await page.locator('input[type=password]').count().catch(() => 0)) > 0;
+  if (await hasPassword()) return true;
+  const attempt = async (locator: ReturnType<Page['locator']>): Promise<boolean> => {
+    const count = await locator.count().catch(() => 0);
+    for (let i = 0; i < Math.min(count, 6); i += 1) {
+      const el = locator.nth(i);
+      if (!(await el.isVisible().catch(() => false))) continue;
+      const label = `${(await el.innerText().catch(() => '')) || ''} ${(await el.getAttribute('aria-label').catch(() => '')) || ''}`.trim();
+      if (/회원가입|가입|sign ?up|찾기/i.test(label)) continue;
+      const href = await el.getAttribute('href').catch(() => null);
+      // 크몽의 /login 은 404라서 누르면 다시 404로 간다.
+      if (href && /kmong\.com/i.test(page.url()) && /\/login\/?$/i.test(href)) continue;
+      await el.click({ timeout: 5000 }).catch(() => undefined);
+      await page.waitForTimeout(1200);
+      if (await hasPassword()) return true;
+    }
+    return false;
+  };
+  const exact = /^(로그인|로그 인|로그인하기|login|log in|sign in|signin)$/i;
+  if (await attempt(page.getByRole('button', { name: exact }))) return true;
+  if (await attempt(page.getByRole('link', { name: exact }))) return true;
+  if (await attempt(page.getByRole('tab', { name: exact }))) return true;
+  return false;
 }
 
 export interface LoginWithVaultResult {
@@ -887,13 +1040,24 @@ export async function loginWithVault(input: {
   guardAgent(session, evaluateUrl(session.url || 'about:blank').level);
   const s = await ensureLive(session.id);
   // ref를 잡기 위해 화면을 한 번 읽는다(스냅샷이 요소에 ref를 붙인다).
-  const before = await takeSnapshot(s.page);
-  const detected = await detectLoginRefs(s.page);
+  let before = await takeSnapshot(s.page);
+  let detected = await detectLoginRefs(s.page);
+  // v0.5.3: 로그인 폼이 모달·오버레이 뒤에 숨어 있으면 화면의 로그인 버튼을 한 번 눌러 연다.
+  if (!input.passwordRef && !detected.passwordRef) {
+    if (await openLoginModal(s.page)) {
+      before = await takeSnapshot(s.page);
+      detected = await detectLoginRefs(s.page);
+    }
+  }
   const usernameRef = input.usernameRef || detected.usernameRef || '';
   const passwordRef = input.passwordRef || detected.passwordRef || '';
   const submitRef = input.submitRef || detected.submitRef || '';
   if (!passwordRef) {
-    throw new Error('비밀번호 입력창을 찾지 못했습니다. browser_snapshot으로 화면을 확인하고 password_ref를 지정해 다시 부르세요.');
+    throw new Error(
+      `로그인 입력창을 찾지 못했습니다(${before.url}). 이 화면에는 아이디·비밀번호 칸이 없습니다. ` +
+        '이미 로그인된 세션이거나 로그인 버튼이 없는 화면일 수 있으니 browser_snapshot으로 현재 화면을 확인하고, ' +
+        '그래도 로그인할 곳이 없으면 browser_handover로 사용자에게 넘기세요.'
+    );
   }
 
   let filledUsername = false;

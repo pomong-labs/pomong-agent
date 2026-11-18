@@ -8,6 +8,7 @@ import * as jobs from './jobs';
 import * as watchers from './watchers';
 import * as memory from './memory';
 import * as loginRequests from './login-requests';
+import { findServiceInText } from './services';
 import * as attachments from './attachments';
 import { webSearch, formatSearch } from './web-search';
 import type { ToolSpec } from './providers';
@@ -576,6 +577,16 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
 export interface ToolResult {
   content: string;
   meta?: 'tasks' | 'server_stats' | 'browser';
+  /**
+   * v0.5.3: 서버가 턴을 마무리할 때 쓰는 신호.
+   * (가벼운 모델이 로그인 카드 도구를 빠뜨렸는지 서버가 판단한다)
+   */
+  flags?: {
+    /** 금고에 그 서비스 계정이 없었다 */
+    vaultEmpty?: boolean;
+    /** 이번 실행에서 채팅 로그인 카드를 만들었다 */
+    loginCardCreated?: boolean;
+  };
 }
 
 export interface ToolContext {
@@ -819,8 +830,16 @@ export async function runTool(name: string, args: Record<string, unknown>, ctx: 
       if (!term) return { content: '어떤 사이트의 계정을 찾을지 알려 주세요.' };
       const matches = vault.findForSite(term);
       if (!matches.length) {
+        // v0.5.3: 카드 도구를 빼먹고 "직접 하세요"로 끝내는 일을 막는다(첫 줄에 필수 행동).
+        const service = findServiceInText(term);
+        const catalog = service
+          ? `\n\n[서비스 카탈로그] ${service.name} · login_url=${service.loginUrl}${service.note ? ` · ${service.note}` : ''}`
+          : '\n\n[서비스 카탈로그] 일치하는 서비스를 찾지 못했습니다. login_url은 사용자가 말한 사이트의 실제 로그인 주소를 쓰세요.';
         return {
-          content: `금고에 '${term}' 계정이 없습니다. 사용자에게 직접 하라고 하지 말고, vault_request_login(service, login_url)을 불러 채팅에 로그인 카드를 띄우세요. 사용자가 카드에 계정을 넣으면 금고에 저장되고, 그 즉시 로그인을 이어서 하게 됩니다.`,
+          content:
+            `[필수] vault_request_login 도구를 지금 호출하세요. 이것 없이 답변을 끝내면 사용자 화면에는 로그인 카드가 뜨지 않습니다.\n` +
+            `금고에 '${term}' 계정이 없습니다. 사용자에게 직접 하라고 안내하지 말고, vault_request_login(service, login_url)으로 채팅에 로그인 카드를 띄운 뒤 "아래 카드에 계정 정보를 입력해 주시면 제가 바로 로그인해 드릴게요!"라고 답하세요.${catalog}`,
+          flags: { vaultEmpty: true },
         };
       }
       const lines = matches.map(
@@ -853,6 +872,7 @@ export async function runTool(name: string, args: Record<string, unknown>, ctx: 
         loginRequests.create({ sessionId: ctx.session || 'default', service, loginUrl, siteHost, note: noteText });
       return {
         content: `채팅 화면에 '${service}' 로그인 카드를 띄웠습니다(id: ${card.id}). 이제 브라우저를 열지 말고 사용자에게 "아래 카드에 계정 정보를 입력해 주시면 제가 바로 로그인해 드릴게요!"라고 안내하며 답변을 마치세요. 사용자가 카드를 저장하면 자동으로 이어서 로그인합니다.`,
+        flags: { loginCardCreated: true },
       };
     }
     case 'browser_fill_vault': {

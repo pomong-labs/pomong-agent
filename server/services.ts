@@ -160,11 +160,13 @@ export const SERVICES: ServiceEntry[] = [
     name: '크몽',
     category: 'dev',
     match: ['kmong', '크몽'],
+    // v0.5.3: 크몽은 /login 전용 주소가 없어 404가 뜬다. 메인에서 로그인 버튼/모달로 들어간다.
     loginUrl: 'https://kmong.com/',
     tint: '#FFF4E5',
     color: '#E49B18',
     emoji: '💼',
     examples: ['크몽 새 메시지 확인해줘', '내 판매 통계 알려줘', '이번 주 주문 확인해줘'],
+    note: '로그인 전용 주소(/login) 없음 — 메인 오른쪽 위 로그인 버튼으로 들어갑니다.',
   },
   {
     id: 'routenote',
@@ -225,4 +227,22 @@ export function findService(query: string): ServiceEntry | null {
     SERVICES.find((entry) => entry.match.some((m) => q.includes(lower(m)) || lower(m).includes(q))) ||
     null
   );
+}
+
+/**
+ * 문장(사용자 요청·AI 답변) 안에서 서비스를 찾는다 (v0.5.3).
+ * 로그인 카드를 서버가 대신 띄울 때 서비스명·로그인 주소를 고르는 데 쓴다.
+ */
+export function findServiceInText(text: string): ServiceEntry | null {
+  const haystack = lower(text);
+  if (!haystack.trim()) return null;
+  let best: { entry: ServiceEntry; length: number } | null = null;
+  for (const entry of SERVICES) {
+    for (const term of [entry.id, ...entry.match]) {
+      const needle = lower(term);
+      if (needle.length < 2 || !haystack.includes(needle)) continue;
+      if (!best || needle.length > best.length) best = { entry, length: needle.length };
+    }
+  }
+  return best ? best.entry : null;
 }

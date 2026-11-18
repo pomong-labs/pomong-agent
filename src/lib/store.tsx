@@ -294,6 +294,16 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
               : [...prev, request];
             return next.filter((r) => r.status !== 'cancelled').sort((a, b) => a.createdAt.localeCompare(b.createdAt));
           });
+          // v0.5.3: 서버가 만든 로그인 카드를 목록까지 다시 받아 새로고침 없이 확실히 맞춘다.
+          void loadLoginCards();
+          return;
+        }
+        if (event.type === 'chat' || event.type === 'chat_message') {
+          const message = event.data?.message as ChatMessage | undefined;
+          // 답변에 로그인 카드 언급이 있는데 카드가 아직 화면에 없으면 목록을 다시 받는다.
+          if (message && typeof message.content === 'string' && /로그인\s*카드|카드에[\s\S]{0,20}입력/.test(message.content)) {
+            void loadLoginCards();
+          }
         }
       } catch {
         /* ignore */

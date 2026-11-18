@@ -39,7 +39,7 @@ import * as watchers from './watchers';
 import * as browser from './browser';
 import * as policy from './policy';
 import { publish, recentEvents, subscribe } from './events';
-import { runAgentLoop } from './agent-loop';
+import { runAgentLoop, buildEmptyReply } from './agent-loop';
 import * as memory from './memory';
 import * as services from './services';
 import * as push from './push';
@@ -770,6 +770,10 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
   const MAX_STEPS = 6;
   const usedTools: string[] = [];
   let browserUsed = false;
+  /** v0.5.3: 로그인 카드 서버 폴백 판단에 쓰는 흔적 */
+  let vaultEmptyTerm: string | null = null;
+  let vaultTermArgs: string | null = null;
+  let loginCardCreated = false;
 
   let runId: string | null = null;
   const openSteps = new Map<string, string[]>();
@@ -819,9 +823,10 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
         if (info.tools.length) setAgentState('working', info.tools.join(', '));
         else setAgentState('thinking', `${PROVIDERS[config.provider].label} ${info.index === 0 ? config.model : ''}`.trim());
       },
-      onToolStart: (name) => {
+      onToolStart: (name, args) => {
         // 안내 말풍선은 작업 단계로 세지 않는다(카드가 0단계로 남지 않게).
         if (name === 'chat_notify') return;
+        if (name === 'vault_find_for_site') vaultTermArgs = String(args.site_or_service || '').trim() || null;
         const id = ensureRun();
         const stepId = taskRuns.addStep(id, name);
         const queue = openSteps.get(name) || [];
@@ -839,8 +844,10 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
         });
       },
       onNotify: sendNotice,
-      onToolResult: (name) => {
+      onToolResult: (name, _content, flags) => {
         if (name.startsWith('browser_')) browserUsed = true;
+        if (flags?.vaultEmpty) vaultEmptyTerm = vaultTermArgs || input.prompt;
+        if (flags?.loginCardCreated) loginCardCreated = true;
         addLog('info', `도구 실행 · ${name}`);
       },
     });
@@ -848,7 +855,30 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
     const model = loop.model;
     let reply = loop.text;
     usedTools.push(...loop.tools);
-    if (!reply.trim()) reply = '확인했어요. 더 도와드릴 일이 있을까요?';
+
+    /**
+     * v0.5.3: 로그인 카드 서버 안전장치.
+     * 금고에 계정이 없었거나 답변에 카드 언급이 있는데 이번 턴에 카드가 없으면
+     * 서버가 서비스 카탈로그로 카드를 직접 만들어 답변 말풍선에 붙인다.
+     */
+    let autoCardService: string | null = null;
+    if (!loginCardCreated) {
+      const ensured = loginRequests.ensureLoginCard({
+        sessionId: session,
+        prompt: input.prompt,
+        reply,
+        vaultEmptyTerm,
+        cardCreatedThisTurn: loginCardCreated,
+      });
+      if (ensured.card) {
+        autoCardService = ensured.service;
+        reply = ensured.reply;
+        addLog('warn', `로그인 카드 자동 생성 · ${ensured.service} (모델이 카드 도구를 빠뜨림)`);
+      }
+    }
+    if (!reply.trim()) {
+      reply = buildEmptyReply(loop, { browserUsed, loginCardService: autoCardService });
+    }
 
     setAgentState('responding', `${PROVIDERS[config.provider].label} ${model}`);
     const base = detectMeta(input.prompt);
