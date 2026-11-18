@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { api, ApiError, type ChatMessage, type ModelsResponse, type Profile, type TaskRun } from './api';
+import { api, ApiError, type ChatMessage, type LoginRequest, type ModelsResponse, type Profile, type TaskRun } from './api';
 
 export type AgentState = 'idle' | 'thinking' | 'working' | 'responding' | 'error';
 
@@ -33,6 +33,15 @@ interface AppStoreValue {
   sending: boolean;
   error: string;
   aiReady: boolean;
+  /** 채팅에 떠 있는 로그인 카드 (금고에 계정이 없을 때) */
+  loginRequests: LoginRequest[];
+  /** 금고가 잠겨 있으면 카드에서 PIN을 받아야 한다 */
+  vault: { configured: boolean; unlocked: boolean };
+  submitLoginCard: (
+    id: string,
+    input: { username: string; password: string; masterPin?: string }
+  ) => Promise<{ ok: boolean; message?: string }>;
+  dismissLoginCard: (id: string) => Promise<void>;
   send: (text: string) => Promise<void>;
   clearChat: () => Promise<void>;
   draft: string;
@@ -148,6 +157,8 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [taskRuns, setTaskRuns] = useState<TaskRun[]>([]);
   const [liveTask, setLiveTask] = useState<TaskRun | null>(null);
+  const [loginRequests, setLoginRequests] = useState<LoginRequest[]>([]);
+  const [vaultState, setVaultState] = useState<{ configured: boolean; unlocked: boolean }>({ configured: false, unlocked: false });
   const [messagesLoaded, setMessagesLoaded] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
@@ -233,6 +244,21 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  /** 채팅에 떠 있던 로그인 카드(대기·최근 저장)와 금고 잠금 상태 */
+  const loadLoginCards = useCallback(async () => {
+    try {
+      const r = await api.get<{ requests: LoginRequest[]; configured: boolean; unlocked: boolean }>('/api/vault/login-cards');
+      setLoginRequests(r.requests || []);
+      setVaultState({ configured: r.configured, unlocked: r.unlocked });
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadLoginCards();
+  }, [loadLoginCards]);
+
   /**
    * 서버 이벤트(SSE): 중간 안내 말풍선·최종 답변·작업 카드를 실시간으로 받는다.
    * POST 응답을 기다리지 않고도 "잠시만요" 말풍선과 진행 단계가 먼저 뜨게 하는 통로다.
@@ -257,6 +283,17 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
           const message = event.data?.message as ChatMessage | undefined;
           if (!message || typeof message.id !== 'number') return;
           setMessages((prev) => (prev.some((m) => m.id === message.id) ? prev : [...prev, message].sort((a, b) => a.id - b.id)));
+          return;
+        }
+        if (event.type === 'login_request') {
+          const request = event.data?.request as LoginRequest | undefined;
+          if (!request || !request.id) return;
+          setLoginRequests((prev) => {
+            const next = prev.some((r) => r.id === request.id)
+              ? prev.map((r) => (r.id === request.id ? request : r))
+              : [...prev, request];
+            return next.filter((r) => r.status !== 'cancelled').sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+          });
         }
       } catch {
         /* ignore */
@@ -299,7 +336,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
 
   /** 로그인/설정 완료 직후 프로필·모델·대화를 다시 불러온다. */
   const refreshAll = useCallback(async () => {
-    await Promise.all([refreshProfile(), refreshModels(), loadMessages()]);
+    await Promise.all([refreshProfile(), refreshModels(), loadMessages(), loadLoginCards()]);
     try {
       const me = await api.get<{ aiConfigured: boolean }>('/api/auth/me');
       setAiReady(me.aiConfigured);
@@ -377,6 +414,28 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     setError('');
   }, []);
 
+  /** 로그인 카드: 아이디·비밀번호(필요하면 금고 PIN)를 서버로 보낸다. 값은 이 화면 밖으로 남지 않는다. */
+  const submitLoginCard = useCallback(
+    async (id: string, input: { username: string; password: string; masterPin?: string }) => {
+      try {
+        await api.post(`/api/vault/login-card/${id}/submit`, input);
+        setLoginRequests((prev) =>
+          prev.map((r) => (r.id === id ? { ...r, status: 'submitted' as const, updatedAt: new Date().toISOString() } : r))
+        );
+        setVaultState((prev) => ({ ...prev, unlocked: true }));
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, message: err instanceof Error ? err.message : '로그인 정보를 저장하지 못했습니다.' };
+      }
+    },
+    []
+  );
+
+  const dismissLoginCard = useCallback(async (id: string) => {
+    await api.post(`/api/vault/login-card/${id}/cancel`).catch(() => undefined);
+    setLoginRequests((prev) => prev.filter((r) => r.id !== id));
+  }, []);
+
   const visibleState: AgentState = sending
     ? agent.state === 'working'
       ? 'working'
@@ -398,6 +457,10 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       sending,
       error,
       aiReady,
+      loginRequests,
+      vault: vaultState,
+      submitLoginCard,
+      dismissLoginCard,
       send,
       clearChat,
       draft,
@@ -406,7 +469,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       visibleState,
       keyboardOpen,
     }),
-    [profile, models, refreshModels, refreshProfile, refreshAll, selectModel, messages, messagesLoaded, liveTask, taskRuns, sending, error, aiReady, send, clearChat, draft, agent, visibleState, keyboardOpen]
+    [profile, models, refreshModels, refreshProfile, refreshAll, selectModel, messages, messagesLoaded, liveTask, taskRuns, sending, error, aiReady, loginRequests, vaultState, submitLoginCard, dismissLoginCard, send, clearChat, draft, agent, visibleState, keyboardOpen]
   );
 
   return <AppStore.Provider value={value}>{children}</AppStore.Provider>;

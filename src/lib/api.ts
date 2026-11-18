@@ -207,6 +207,21 @@ export interface VaultStatus {
   autoLockMinutes: number;
 }
 
+/** 채팅 인라인 로그인 카드 (v0.5.1) — 비밀번호는 서버가 내려보내지 않는다. */
+export interface LoginRequest {
+  id: string;
+  sessionId: string;
+  service: string;
+  loginUrl: string;
+  siteHost: string | null;
+  note: string | null;
+  status: 'pending' | 'submitted' | 'cancelled';
+  vaultId: string | null;
+  messageId: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface MeResponse {
   ok: true;
   user: { username: string };

@@ -267,6 +267,31 @@ CREATE TABLE IF NOT EXISTS task_run_steps (
 CREATE INDEX IF NOT EXISTS idx_task_run_steps ON task_run_steps(run_id, seq);
 `);
 
+/* ------------------------------------------------------------------ */
+/* v0.5.1 schema: 채팅 인라인 로그인 카드                                 */
+/* 비밀번호는 여기에 저장하지 않는다(금고에만 암호화 저장).               */
+/* ------------------------------------------------------------------ */
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS login_requests (
+  id         TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  service    TEXT NOT NULL,
+  login_url  TEXT NOT NULL,
+  site_host  TEXT,
+  note       TEXT,
+  status     TEXT NOT NULL DEFAULT 'pending',
+  vault_id   TEXT,
+  message_id INTEGER,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_login_requests ON login_requests(session_id, created_at DESC);
+`);
+
+// v0.5.1: 작업 카드는 실제 도구가 돌 때만 만든다. 예전 버전이 남긴 빈 카드는 지운다.
+db.prepare("DELETE FROM task_runs WHERE steps = 0").run();
+
 
 /* ------------------------------------------------------------------ */
 /* Settings                                                            */

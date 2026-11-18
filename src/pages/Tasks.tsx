@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { CalendarDays, Check, Flag, Pencil, Plus, Trash2, X } from 'lucide-react';
+import BackButton from '../components/BackButton';
 import MascotFace from '../components/MascotFace';
 import { api, type Task, type TaskCounts, type TaskPriority } from '../lib/api';
 import { useAppStore } from '../lib/store';
@@ -118,7 +119,8 @@ export default function Tasks() {
   return (
     <div className="pa-scroll h-full min-h-0 overflow-y-auto px-4 pb-8 pt-5 lg:px-10 lg:pt-9">
       <div className="mx-auto w-full max-w-[760px]">
-        <header className="flex items-center gap-3">
+        <header className="flex items-center gap-2">
+          <BackButton />
           <div className="min-w-0 flex-1">
             <h1 className="text-[26px] font-bold tracking-[-0.02em] lg:text-[34px]">할 일</h1>
             <p className="mt-1 text-[13.5px] text-pomong-sub lg:text-[16px]">

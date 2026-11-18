@@ -7,6 +7,7 @@ import * as browser from './browser';
 import * as jobs from './jobs';
 import * as watchers from './watchers';
 import * as memory from './memory';
+import * as loginRequests from './login-requests';
 import { webSearch, formatSearch } from './web-search';
 import type { ToolSpec } from './providers';
 
@@ -285,6 +286,21 @@ export const TOOL_SPECS: ToolSpec[] = [
     },
   },
   {
+    name: 'vault_request_login',
+    description:
+      '금고에 그 서비스 계정이 없을 때, 채팅 화면에 아이디·비밀번호를 받는 로그인 카드를 띄운다. 사용자가 카드에 입력해 저장하면 서버가 금고에 암호화 저장하고 AI에게 후속 턴을 줘 브라우저 로그인을 이어서 한다. 계정이 없을 때 "직접 하세요"로 끝내지 말고 반드시 이 도구를 부른다.',
+    parameters: {
+      type: 'object',
+      properties: {
+        service: { type: 'string', description: '서비스 이름 (예: "GitHub", "쿠팡")' },
+        login_url: { type: 'string', description: '로그인 페이지 주소 (예: https://github.com/login)' },
+        site_host: { type: 'string', description: '사이트 도메인 (예: github.com) — 없으면 주소에서 자동' },
+        note: { type: 'string', description: '카드에 함께 보여 줄 한 줄 안내(선택)' },
+      },
+      required: ['service', 'login_url'],
+    },
+  },
+  {
     name: 'browser_fill_vault',
     description:
       '금고에 저장된 아이디/비밀번호를 브라우저 입력창에 서버가 직접 채운다(값은 AI에게 전달되지 않는다). 로그인 화면에서만 쓴다. 금고가 잠겨 있으면 먼저 금고 잠금 해제를 안내한다.',
@@ -510,11 +526,22 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
     summary: '금고 계정으로 로그인 화면을 채워요. 비밀번호는 AI에게 전달되지 않아요.',
     example: '깃허브 로그인해줘',
   },
+  {
+    name: 'vault_request_login',
+    label: '로그인 정보 받기',
+    summary: '금고에 계정이 없으면 채팅에 로그인 카드를 띄워 아이디·비밀번호를 받고, 저장한 뒤 바로 로그인까지 해요.',
+    example: '깃허브 연동하고 싶어',
+  },
 ];
 
 export interface ToolResult {
   content: string;
   meta?: 'tasks' | 'server_stats' | 'browser';
+}
+
+export interface ToolContext {
+  /** 채팅 세션 id (로그인 카드를 그 세션 화면에 붙인다) */
+  session?: string;
 }
 
 function taskLine(row: TaskRow): string {
@@ -526,7 +553,7 @@ function taskLine(row: TaskRow): string {
   return `${mark} ${row.title}${prio}${due}${overdue}`;
 }
 
-export async function runTool(name: string, args: Record<string, unknown>): Promise<ToolResult> {
+export async function runTool(name: string, args: Record<string, unknown>, ctx: ToolContext = {}): Promise<ToolResult> {
   switch (name) {
     case 'tasks_list': {
       const status = String(args.status || 'open');
@@ -754,7 +781,7 @@ export async function runTool(name: string, args: Record<string, unknown>): Prom
       const matches = vault.findForSite(term);
       if (!matches.length) {
         return {
-          content: `금고에 '${term}' 계정이 없습니다. 금고 탭에서 계정을 추가하거나, 사용자에게 직접 로그인을 부탁하세요.`,
+          content: `금고에 '${term}' 계정이 없습니다. 사용자에게 직접 하라고 하지 말고, vault_request_login(service, login_url)을 불러 채팅에 로그인 카드를 띄우세요. 사용자가 카드에 계정을 넣으면 금고에 저장되고, 그 즉시 로그인을 이어서 하게 됩니다.`,
         };
       }
       const lines = matches.map(
@@ -769,6 +796,24 @@ export async function runTool(name: string, args: Record<string, unknown>): Prom
           : '';
       return {
         content: `금고에서 '${term}' 계정 ${matches.length}개를 찾았습니다(비밀번호는 표시하지 않음):\n${lines.join('\n')}\n입력은 browser_fill_vault(vault_id, field, ref)로 서버가 직접 합니다.${hint}`,
+      };
+    }
+    case 'vault_request_login': {
+      const service = String(args.service || '').trim();
+      const loginUrl = String(args.login_url || '').trim();
+      const siteHost = String(args.site_host || '').trim();
+      const note = String(args.note || '').trim();
+      const noteText = note || undefined;
+      if (!service || !loginUrl) return { content: '서비스 이름과 로그인 주소가 필요합니다.' };
+      if (!/^https?:\/\//i.test(loginUrl)) return { content: 'login_url은 http:// 또는 https://로 시작하는 주소여야 합니다.' };
+      // 이미 대기 중인 같은 서비스 카드가 있으면 새로 만들지 않고 그것을 안내한다.
+      const open = loginRequests
+        .listForSession(ctx.session || 'default')
+        .find((r) => r.status === 'pending' && r.service.toLowerCase() === service.toLowerCase());
+      const card = open ||
+        loginRequests.create({ sessionId: ctx.session || 'default', service, loginUrl, siteHost, note: noteText });
+      return {
+        content: `채팅 화면에 '${service}' 로그인 카드를 띄웠습니다(id: ${card.id}). 이제 브라우저를 열지 말고 사용자에게 "아래 카드에 계정 정보를 입력해 주시면 제가 바로 로그인해 드릴게요!"라고 안내하며 답변을 마치세요. 사용자가 카드를 저장하면 자동으로 이어서 로그인합니다.`,
       };
     }
     case 'browser_fill_vault': {

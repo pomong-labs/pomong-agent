@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bell, BellOff, Check, ExternalLink, Globe, LogOut, Send, ShieldCheck, Sparkles, Trash2 } from 'lucide-react';
+import BackButton from '../components/BackButton';
 import MascotFace from '../components/MascotFace';
 import { api, type ProviderId, type PushStatus, type SettingsResponse } from '../lib/api';
 import { useAppStore } from '../lib/store';
@@ -218,7 +219,8 @@ export default function SettingsPage() {
   return (
     <div className="pa-scroll h-full min-h-0 overflow-y-auto px-4 pb-8 pt-5 lg:px-10 lg:pt-9">
       <div className="mx-auto w-full max-w-[720px]">
-        <header className="flex items-center">
+        <header className="flex items-center gap-2">
+          <BackButton />
           <div>
             <h1 className="text-[26px] font-bold tracking-[-0.02em] lg:text-[34px]">설정</h1>
             <p className="mt-1 text-[13.5px] text-pomong-sub lg:text-[16px]">AI 이름·캐릭터·말투와 모델 연결을 관리해요</p>
@@ -484,7 +486,7 @@ export default function SettingsPage() {
           <ul className="mt-3 divide-y divide-[#F6F4FB] text-[13.5px]">
             <li className="flex items-center justify-between py-3">
               <span className="text-pomong-sub">버전</span>
-              <span className="font-semibold text-[#3B3947]">v{data?.version || '0.5.0'}</span>
+              <span className="font-semibold text-[#3B3947]">v{data?.version || '0.5.1'}</span>
             </li>
             <li className="flex items-center justify-between py-3">
               <span className="text-pomong-sub">데이터 보관</span>

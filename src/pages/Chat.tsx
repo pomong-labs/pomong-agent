@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { CheckCheck, CheckCircle2, ChevronDown, CircleDashed, Clock3, Globe, Mic, Paperclip, Send, Sparkles, XCircle } from 'lucide-react';
+import { Check, CheckCheck, CheckCircle2, ChevronDown, CircleDashed, Clock3, Globe, KeyRound, Loader2, Mic, Paperclip, Send, ShieldCheck, Sparkles, X, XCircle } from 'lucide-react';
 import AppHeader from '../components/AppHeader';
 import Mascot, { type MascotName } from '../components/Mascot';
 import ModelBar from '../components/ModelBar';
 import { StatsCard, TasksCard } from '../components/Cards';
-import { type ChatMessage, type TaskRun } from '../lib/api';
+import { type ChatMessage, type LoginRequest, type TaskRun } from '../lib/api';
 import { formatClock } from '../lib/format';
 import { useAppStore } from '../lib/store';
 
@@ -65,9 +65,21 @@ export default function Chat() {
     visibleState,
     liveTask,
     taskRuns,
+    loginRequests,
+    vault,
+    submitLoginCard,
+    dismissLoginCard,
   } = useAppStore();
   const navigate = useNavigate();
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  /** 작업 카드는 실제 도구가 한 번이라도 돈 경우에만 보여 준다(빈 0단계 카드 숨김). */
+  const hasWork = (run: TaskRun | null | undefined): run is TaskRun =>
+    Boolean(run && ((run.items?.length || 0) > 0 || run.steps > 0));
+  const shownRuns = taskRuns.filter((r) => hasWork(r));
+  const shownLive = hasWork(liveTask) ? liveTask : null;
+  const requestsOf = (messageId: number) => loginRequests.filter((r) => r.messageId === messageId);
+  const floatingRequests = loginRequests.filter((r) => !r.messageId);
 
   /** 대화 목록을 맨 아래(최신 메시지)에 붙인다. */
   const pinToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
@@ -168,14 +180,29 @@ export default function Chat() {
                 message={m}
                 character={profile.character}
                 agentName={profile.agentName}
-                taskRun={taskRuns.find((r) => r.messageId === m.id) || null}
+                taskRun={shownRuns.find((r) => r.messageId === m.id) || null}
+                loginRequests={requestsOf(m.id)}
+                vault={vault}
+                onLoginSubmit={submitLoginCard}
+                onLoginDismiss={dismissLoginCard}
               />
             )
           )}
 
+          {/* 아직 답변 말풍선이 붙지 않은 로그인 카드(이번 턴 진행 중) */}
+          {floatingRequests.map((request) => (
+            <LoginCard
+              key={request.id}
+              request={request}
+              vault={vault}
+              onSubmit={submitLoginCard}
+              onDismiss={dismissLoginCard}
+            />
+          ))}
+
           {sending ? (
             <div className="space-y-2.5">
-              {liveTask ? <TaskCard run={liveTask} live /> : null}
+              {shownLive ? <TaskCard run={shownLive} live /> : null}
               <div className="flex items-start gap-2.5 lg:gap-3.5">
               <div className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#FFF0F5] ring-1 ring-[#FFE4EE] sm:flex lg:h-11 lg:w-11">
                 <Mascot name="pimong-think" size={26} />
@@ -292,11 +319,19 @@ function AssistantBubble({
   character,
   agentName,
   taskRun,
+  loginRequests = [],
+  vault,
+  onLoginSubmit,
+  onLoginDismiss,
 }: {
   message: ChatMessage;
   character: string;
   agentName: string;
   taskRun?: TaskRun | null;
+  loginRequests?: LoginRequest[];
+  vault: { configured: boolean; unlocked: boolean };
+  onLoginSubmit: (id: string, input: { username: string; password: string; masterPin?: string }) => Promise<{ ok: boolean; message?: string }>;
+  onLoginDismiss: (id: string) => Promise<void>;
 }) {
   const { models } = useAppStore();
   const answeredModel = message.model ? message.model.split(':').slice(-1)[0] : '';
@@ -313,6 +348,15 @@ function AssistantBubble({
         {message.meta?.type === 'server_stats' && message.meta.stats ? <StatsCard stats={message.meta.stats} /> : null}
         {message.meta?.type === 'tasks' && message.meta.tasks ? <TasksCard tasks={message.meta.tasks} /> : null}
         {message.meta?.type === 'browser' ? <BrowserCard sessionId={message.meta.browserSession || null} /> : null}
+        {loginRequests.map((request) => (
+          <LoginCard
+            key={request.id}
+            request={request}
+            vault={vault}
+            onSubmit={onLoginSubmit}
+            onDismiss={onLoginDismiss}
+          />
+        ))}
         <div className="mt-2.5 flex items-center gap-1 text-[11.5px] text-[#C0BCCD]">
           {formatClock(message.createdAt)}
           {answeredLabel ? (
@@ -343,6 +387,150 @@ function NoticeBubble({ message, character }: { message: ChatMessage; character:
       <div className="min-w-0 max-w-[88%] rounded-[20px] rounded-tl-md bg-[#F8F5FF] px-4 py-3 ring-1 ring-[#EFE7FF] sm:max-w-[76%]">
         <p className="text-[14.5px] leading-[1.65] text-[#4B3FA6]">{message.content}</p>
         <span className="mt-1 block text-[11px] text-[#B4A9DA]">{formatClock(message.createdAt)}</span>
+      </div>
+    </div>
+  );
+}
+
+/** 채팅 안에서 계정을 받는 보안 로그인 카드 (v0.5.1) */
+function LoginCard({
+  request,
+  vault,
+  onSubmit,
+  onDismiss,
+}: {
+  request: LoginRequest;
+  vault: { configured: boolean; unlocked: boolean };
+  onSubmit: (id: string, input: { username: string; password: string; masterPin?: string }) => Promise<{ ok: boolean; message?: string }>;
+  onDismiss: (id: string) => Promise<void>;
+}) {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [pin, setPin] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const submitted = request.status === 'submitted';
+  const needsPin = !vault.unlocked;
+
+  const submit = async () => {
+    if (busy) return;
+    if (!username.trim() || !password) {
+      setError('아이디와 비밀번호를 모두 입력해 주세요.');
+      return;
+    }
+    if (needsPin && !/^\d{4,12}$/.test(pin.trim())) {
+      setError(vault.configured ? '금고 PIN을 입력해 주세요.' : '금고를 만들 PIN(4~12자리 숫자)을 입력해 주세요.');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    const res = await onSubmit(request.id, {
+      username: username.trim(),
+      password,
+      masterPin: pin.trim() || undefined,
+    });
+    setBusy(false);
+    if (!res.ok) {
+      setError(res.message || '저장하지 못했어요.');
+      return;
+    }
+    // 저장되면 화면에서도 바로 지운다.
+    setPassword('');
+    setPin('');
+  };
+
+  if (submitted) {
+    return (
+      <div className="mt-2.5 flex items-center gap-2.5 rounded-[16px] bg-[#EAFBF1] px-3.5 py-2.5 ring-1 ring-[#D6F3E3] animate-fade-up">
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white text-[#0F9668]">
+          <Check size={15} strokeWidth={3} />
+        </span>
+        <p className="min-w-0 flex-1 text-[12.5px] leading-relaxed text-[#0B7B57]">
+          <b>{request.service}</b> 계정을 금고에 암호화 저장했어요. 이어서 로그인하는 중…
+        </p>
+        <Loader2 size={14} className="shrink-0 animate-spin text-[#0F9668]" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2.5 overflow-hidden rounded-[18px] bg-[#FBFAFF] ring-1 ring-[#E7DFFF] animate-fade-up">
+      <div className="flex items-center gap-2.5 border-b border-[#EFE9FF] px-3.5 py-2.5">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white text-[#7C63F6] shadow-sm">
+          <KeyRound size={16} />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[13.5px] font-bold text-[#3A2F7A]">{request.service} 로그인 정보</span>
+          <span className="block truncate text-[11px] text-[#8A82B8]">{request.siteHost || request.loginUrl}</span>
+        </span>
+        <button
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[#A8A5B8] transition hover:bg-white"
+          onClick={() => void onDismiss(request.id)}
+          aria-label="카드 닫기"
+        >
+          <X size={15} />
+        </button>
+      </div>
+
+      <div className="space-y-2 px-3.5 py-3">
+        {request.note ? <p className="text-[11.5px] leading-relaxed text-[#7E78A8]">{request.note}</p> : null}
+        <label className="block">
+          <span className="mb-1 block text-[11.5px] font-semibold text-[#5B5866]">아이디 / 이메일</span>
+          <input
+            className="w-full rounded-xl border border-[#E7E5F0] bg-white px-3 py-2.5 text-[15px] text-[#2A2A35] outline-none focus:border-[#C9B8FF]"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            placeholder="example@email.com"
+            autoComplete="username"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            inputMode="email"
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[11.5px] font-semibold text-[#5B5866]">비밀번호</span>
+          <input
+            className="w-full rounded-xl border border-[#E7E5F0] bg-white px-3 py-2.5 text-[15px] text-[#2A2A35] outline-none focus:border-[#C9B8FF]"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="비밀번호"
+            autoComplete="current-password"
+          />
+        </label>
+        {needsPin ? (
+          <label className="block">
+            <span className="mb-1 block text-[11.5px] font-semibold text-[#5B5866]">
+              {vault.configured ? '금고 PIN' : '금고 PIN 만들기 (4~12자리 숫자)'}
+            </span>
+            <input
+              className="w-full rounded-xl border border-[#E7E5F0] bg-white px-3 py-2.5 text-[15px] text-[#2A2A35] outline-none focus:border-[#C9B8FF]"
+              type="password"
+              value={pin}
+              onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 12))}
+              placeholder={vault.configured ? '금고 잠금을 풀 PIN' : '새 금고 PIN'}
+              inputMode="numeric"
+              autoComplete="off"
+            />
+          </label>
+        ) : null}
+
+        {error ? <p className="text-[11.5px] font-medium text-[#E5484D]">{error}</p> : null}
+
+        <button
+          className="flex w-full items-center justify-center gap-2 rounded-xl py-2.5 text-[13.5px] font-bold text-white transition active:scale-[0.99] disabled:opacity-50"
+          style={{ background: 'linear-gradient(135deg,#A88BFF,#8B72F8)' }}
+          onClick={() => void submit()}
+          disabled={busy}
+        >
+          {busy ? <Loader2 size={15} className="animate-spin" /> : <ShieldCheck size={15} />}
+          {busy ? '저장하는 중…' : '저장하고 로그인하기'}
+        </button>
+        <p className="flex items-start gap-1 text-[10.5px] leading-relaxed text-[#A8A5B8]">
+          <ShieldCheck size={11} className="mt-0.5 shrink-0" />
+          비밀번호는 암호화되어 서버 금고에만 저장되고 대화 기록에는 남지 않아요. 저장하면 제가 바로 로그인해 드려요.
+        </p>
       </div>
     </div>
   );

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Brain, Check, Pencil, Plus, Search, Sparkles, Trash2, X } from 'lucide-react';
+import BackButton from '../components/BackButton';
 import Mascot from '../components/Mascot';
 import { api, type MemoryCategory, type MemoryItem } from '../lib/api';
 import { formatRelative } from '../lib/format';
@@ -58,7 +59,8 @@ export default function MemoryPage() {
   return (
     <div className="pa-scroll relative h-full min-h-0 overflow-y-auto px-4 pb-10 pt-5 lg:px-10 lg:pt-9">
       <div className="mx-auto w-full max-w-[860px]">
-        <header className="flex items-center gap-3">
+        <header className="flex items-center gap-2">
+          <BackButton />
           <div className="min-w-0 flex-1">
             <h1 className="text-[26px] font-bold tracking-[-0.02em] lg:text-[34px]">기억함</h1>
             <p className="mt-1 text-[13.5px] text-pomong-sub lg:text-[16px]">

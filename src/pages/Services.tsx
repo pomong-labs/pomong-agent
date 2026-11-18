@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Check, ExternalLink, Globe, Loader2, Plus, Search, Sparkles } from 'lucide-react';
+import BackButton from '../components/BackButton';
 import Mascot from '../components/Mascot';
 import { api, type ServiceEntry } from '../lib/api';
 import { useAppStore } from '../lib/store';
@@ -74,7 +75,8 @@ export default function Services() {
   return (
     <div className="pa-scroll h-full min-h-0 overflow-y-auto px-4 pb-10 pt-5 lg:px-10 lg:pt-9">
       <div className="mx-auto w-full max-w-[900px]">
-        <header className="flex items-center gap-3">
+        <header className="flex items-center gap-2">
+          <BackButton />
           <div className="min-w-0 flex-1">
             <h1 className="text-[26px] font-bold tracking-[-0.02em] lg:text-[34px]">연결된 앱 및 서비스</h1>
             <p className="mt-1 text-[13.5px] text-pomong-sub lg:text-[16px]">금고 계정·브라우저 로그인으로 AI가 이어서 도와드릴 수 있어요</p>

@@ -66,6 +66,7 @@ export const TOOL_LABELS: Record<string, string> = {
   tasks_complete: '할 일 완료',
   vault_list: '금고 목록 확인',
   vault_find_for_site: '금고에서 계정 찾기',
+  vault_request_login: '로그인 정보 요청',
   server_stats: '서버 상태 확인',
   weather_get: '날씨 확인',
   time_now: '시간 확인',
@@ -98,6 +99,7 @@ function titleForTools(names: string[]): string {
   if (has('browser_')) return '브라우저로 작업하는 중';
   if (has('memory_')) return '기억을 정리하는 중';
   if (has('job_') || has('watch_')) return '자동화를 설정하는 중';
+  if (names.some((n) => n === 'vault_request_login')) return '로그인 정보를 받는 중';
   if (has('tasks_')) return '할 일을 정리하는 중';
   if (names.some((n) => n === 'weather_get')) return '날씨를 확인하는 중';
   if (names.some((n) => n === 'server_stats')) return '서버 상태를 확인하는 중';

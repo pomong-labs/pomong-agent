@@ -13,6 +13,8 @@ export interface AgentLoopOptions {
   system: string;
   /** 이전 대화 (system 제외) */
   history: { role: 'user' | 'assistant'; content: string }[];
+  /** 채팅 세션 id — 로그인 카드처럼 화면에 붙는 도구가 쓴다 */
+  sessionId?: string;
   tools: ToolSpec[];
   maxSteps: number;
   /** 이 목록에 있는 도구만 실행한다. null/undefined 면 모두 허용 */
@@ -119,7 +121,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
       options.onToolStart?.(call.name, call.args);
       let output: { content: string };
       try {
-        output = await runTool(call.name, call.args);
+        output = await runTool(call.name, call.args, { session: options.sessionId });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         options.onToolEnd?.(call.name, message, Date.now() - startedAt, false);
@@ -150,6 +152,8 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
 export async function needsHumanApproval(name: string, args: Record<string, unknown>): Promise<boolean> {
   // 무인 실행에서 금고 비밀번호를 꺼내 로그인하는 것은 사람 확인 없이 하지 않는다.
   if (name === 'browser_fill_vault') return true;
+  // 로그인 카드를 띄우는 것도 채팅 화면의 사용자에게 묻는 일이라 무인 실행에서는 멈춘다.
+  if (name === 'vault_request_login') return true;
   if (name.startsWith('browser_')) {
     const { evaluateBrowserAction } = await import('./policy');
     const verdict = evaluateBrowserAction(name, args);

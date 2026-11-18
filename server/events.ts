@@ -6,7 +6,16 @@ import type { Response } from 'express';
  * 알림 채널(텔레그램·디스코드·웹푸시)은 이 이벤트를 구독해서 붙이면 된다.
  */
 
-export type AppEventType = 'job' | 'watch' | 'handover' | 'browser' | 'info' | 'chat' | 'chat_message' | 'task';
+export type AppEventType =
+  | 'job'
+  | 'watch'
+  | 'handover'
+  | 'browser'
+  | 'info'
+  | 'chat'
+  | 'chat_message'
+  | 'task'
+  | 'login_request';
 
 export interface AppEvent {
   id: number;
