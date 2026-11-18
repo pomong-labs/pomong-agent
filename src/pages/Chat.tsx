@@ -1,4 +1,4 @@
-import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useCallback, useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { CheckCheck, Mic, Paperclip, Send, Sparkles } from 'lucide-react';
 import AppHeader from '../components/AppHeader';
@@ -67,10 +67,37 @@ export default function Chat() {
   const navigate = useNavigate();
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
+  /** 대화 목록을 맨 아래(최신 메시지)에 붙인다. */
+  const pinToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
     const el = scrollRef.current;
-    if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
-  }, [messages, sending, keyboardOpen]);
+    if (!el) return;
+    const top = el.scrollHeight - el.clientHeight;
+    if (behavior === 'smooth') el.scrollTo({ top, behavior });
+    else el.scrollTop = top;
+  }, []);
+
+  // 새 메시지/응답 대기 → 맨 아래로. (이미지·폰트가 늦게 로드돼 높이가 늘어나는 경우 한 번 더)
+  useEffect(() => {
+    pinToBottom('smooth');
+    const raf = requestAnimationFrame(() => pinToBottom('auto'));
+    const t = window.setTimeout(() => pinToBottom('auto'), 140);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.clearTimeout(t);
+    };
+  }, [messages, sending, pinToBottom]);
+
+  // 키보드가 열리거나 닫힐 때: 셸 높이가 줄어드는 동안 스크롤이 위로 튀지 않게 즉시 고정하고,
+  // 키보드 애니메이션이 끝날 때까지 몇 번 더 붙인다.
+  useEffect(() => {
+    pinToBottom('auto');
+    const raf = requestAnimationFrame(() => pinToBottom('auto'));
+    const timers = [80, 180, 320, 480].map((ms) => window.setTimeout(() => pinToBottom('auto'), ms));
+    return () => {
+      cancelAnimationFrame(raf);
+      timers.forEach((id) => window.clearTimeout(id));
+    };
+  }, [keyboardOpen, pinToBottom]);
 
   const submit = () => {
     if (!draft.trim() || sending) return;
@@ -189,6 +216,11 @@ export default function Chat() {
                   el.style.height = `${Math.min(140, el.scrollHeight)}px`;
                 }}
                 onKeyDown={onKeyDown}
+                onFocus={() => {
+                  // 키보드가 올라오기 시작한 직후에도 최신 메시지가 가려지지 않게
+                  pinToBottom('auto');
+                  window.setTimeout(() => pinToBottom('auto'), 260);
+                }}
                 enterKeyHint="send"
                 placeholder={aiReady ? `${profile.agentName || '포몽'}에게 물어보세요…` : 'AI 키를 먼저 연결해 주세요'}
                 className="pa-scroll max-h-[140px] min-h-[44px] flex-1 resize-none bg-transparent px-2 py-2.5 text-[16px] leading-relaxed placeholder:text-[#B7B4C6] focus:outline-none"

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { AgentState } from '../lib/store';
+import { assetUrl } from '../lib/version';
 
 export const AGENT_FACE_STATE: Record<AgentState, string> = {
   idle: 'idle',
@@ -27,7 +28,10 @@ export default function MascotFace({
   useEffect(() => {
     setFailed(false);
   }, [character, state]);
-  const src = failed ? `/mascots/${character}.png` : `/mascots/face/${character}-${AGENT_FACE_STATE[state]}.png`;
+  // ?v= 버전 쿼리: 브라우저·PWA가 예전 표정 이미지를 캐시에서 꺼내 쓰지 못하게 한다.
+  const src = assetUrl(
+    failed ? `/mascots/${character}.png` : `/mascots/face/${character}-${AGENT_FACE_STATE[state]}.png`
+  );
   return (
     <img
       src={src}

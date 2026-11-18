@@ -61,17 +61,38 @@ function useVisualViewport(): boolean {
   useEffect(() => {
     const vv = window.visualViewport;
     let frame = 0;
+    // 키보드가 없는 상태의 "가장 큰" 가시 높이. iOS는 설정에 따라 키보드가 열릴 때
+    // innerHeight(레이아웃 뷰포트)까지 같이 줄어들기 때문에(interactive-widget=resizes-content),
+    // "innerHeight - visualViewport.height" 만 비교하면 항상 0이 되어 kb-open이 켜지지 않는다.
+    // 그래서 지금 높이가 아니라 "한 번이라도 본 가장 큰 높이"를 기준으로 줄어든 폭을 잰다.
+    let baseline = 0;
+
+    const isEditable = (el: Element | null): boolean =>
+      !!el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || (el as HTMLElement).isContentEditable === true);
+    const isMobileWidth = () => window.matchMedia('(max-width: 1023px)').matches;
+
+    const measureBaseline = () => {
+      const tallest = Math.max(window.innerHeight, vv?.height ?? 0, document.documentElement.clientHeight);
+      if (tallest > baseline) baseline = tallest;
+    };
+
     const apply = () => {
       const height = vv?.height ?? window.innerHeight;
-      const layout = window.innerHeight;
       const offsetTop = vv?.offsetTop ?? 0;
       const offsetLeft = vv?.offsetLeft ?? 0;
-      const open = layout - height > 140 || offsetTop > 2;
+      const shrink = baseline - height;
+      const typing = isEditable(document.activeElement) && isMobileWidth();
+      // ① 입력창에 포커스가 있으면(모바일 폭) 확실히 키보드 상태로 본다.
+      // ② 포커스 이벤트가 늦거나 programmatic focus일 때를 위해 뷰포트가 120px 이상 줄어도 키보드 상태.
+      // ③ 키보드가 화면을 밀어 올린 경우(offsetTop)도 포함.
+      const open = typing || shrink > 120 || (offsetTop > 2 && shrink > 8);
       const root = document.documentElement;
       root.style.setProperty('--app-height', `${Math.round(height)}px`);
       root.style.setProperty('--app-offset', `${Math.round(offsetTop)}px`);
       root.style.setProperty('--app-offset-x', `${Math.round(offsetLeft)}px`);
       root.classList.toggle('kb-open', open);
+      // 키보드가 닫혀 있을 때만 기준 높이를 갱신한다(키보드 높이를 기준으로 굳지 않게).
+      if (!open) measureBaseline();
       setKbOpen(open);
     };
     const onResize = () => {
@@ -88,12 +109,18 @@ function useVisualViewport(): boolean {
       resetScroll();
       onResize();
     };
+    measureBaseline();
     apply();
     vv?.addEventListener('resize', onResize);
     vv?.addEventListener('scroll', onFocusOrScroll);
     window.addEventListener('resize', onResize);
     window.addEventListener('scroll', resetScroll, { passive: true });
-    window.addEventListener('orientationchange', onResize);
+    const onOrientation = () => {
+      // 화면 방향이 바뀌면 기준 높이를 새로 잡는다(가로↔세로 높이가 다르다).
+      baseline = 0;
+      onResize();
+    };
+    window.addEventListener('orientationchange', onOrientation);
     document.addEventListener('focusin', onFocusOrScroll);
     document.addEventListener('focusout', onFocusOrScroll);
     return () => {
@@ -102,7 +129,7 @@ function useVisualViewport(): boolean {
       vv?.removeEventListener('scroll', onFocusOrScroll);
       window.removeEventListener('resize', onResize);
       window.removeEventListener('scroll', resetScroll);
-      window.removeEventListener('orientationchange', onResize);
+      window.removeEventListener('orientationchange', onOrientation);
       document.removeEventListener('focusin', onFocusOrScroll);
       document.removeEventListener('focusout', onFocusOrScroll);
     };
