@@ -461,7 +461,7 @@ function LoginCard({
         </span>
         <span className="min-w-0 flex-1">
           <span className="block truncate text-[13.5px] font-bold text-[#3A2F7A]">{request.service} 로그인 정보</span>
-          <span className="block truncate text-[11px] text-[#8A82B8]">{request.siteHost || request.loginUrl}</span>
+          <span className="block truncate text-[11px] text-[#8A82B8]">{request.loginUrl}</span>
         </span>
         <button
           className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[#A8A5B8] transition hover:bg-white"
