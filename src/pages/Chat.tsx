@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { CheckCheck, Mic, Paperclip, Send, Sparkles } from 'lucide-react';
+import { CheckCheck, Globe, Mic, Paperclip, Send, Sparkles } from 'lucide-react';
 import AppHeader from '../components/AppHeader';
 import Mascot, { type MascotName } from '../components/Mascot';
 import ModelBar from '../components/ModelBar';
@@ -254,6 +254,26 @@ export default function Chat() {
   );
 }
 
+function BrowserCard({ sessionId }: { sessionId: string | null }) {
+  const navigate = useNavigate();
+  if (!sessionId) return null;
+  return (
+    <button
+      onClick={() => navigate('/browser')}
+      className="mt-2.5 flex w-full items-center gap-3 rounded-[16px] bg-[#F7F5FF] px-3.5 py-3 text-left ring-1 ring-[#EAE3FF] transition active:scale-[0.99]"
+    >
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-[#7C63F6] shadow-sm">
+        <Globe size={17} />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-[13.5px] font-bold text-[#3A2F7A]">브라우저 화면 보기</span>
+        <span className="block text-[11.5px] text-[#8A8A9A]">AI가 연 화면을 그대로 보고, 로그인·결제는 직접 할 수 있어요.</span>
+      </span>
+      <span className="shrink-0 text-[12px] font-bold text-[#7C63F6]">열기 →</span>
+    </button>
+  );
+}
+
 function AssistantBubble({ message, character, agentName }: { message: ChatMessage; character: string; agentName: string }) {
   const { models } = useAppStore();
   const answeredModel = message.model ? message.model.split(':').slice(-1)[0] : '';
@@ -267,6 +287,7 @@ function AssistantBubble({ message, character, agentName }: { message: ChatMessa
         <RichText text={message.content} />
         {message.meta?.type === 'server_stats' && message.meta.stats ? <StatsCard stats={message.meta.stats} /> : null}
         {message.meta?.type === 'tasks' && message.meta.tasks ? <TasksCard tasks={message.meta.tasks} /> : null}
+        {message.meta?.type === 'browser' ? <BrowserCard sessionId={message.meta.browserSession || null} /> : null}
         <div className="mt-2.5 flex items-center gap-1 text-[11.5px] text-[#C0BCCD]">
           {formatClock(message.createdAt)}
           {answeredLabel ? (

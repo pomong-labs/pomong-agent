@@ -1,5 +1,5 @@
 import { useLocation, NavLink, Outlet } from 'react-router-dom';
-import { Activity, ListChecks, Lock, MessageCircle, Settings as SettingsIcon } from 'lucide-react';
+import { Activity, AlarmClock, Globe, ListChecks, Lock, MessageCircle, Settings as SettingsIcon } from 'lucide-react';
 import Logo from './Logo';
 import MiniStatus from './MiniStatus';
 import MobileTabBar from './MobileTabBar';
@@ -15,6 +15,8 @@ const nav = [
   { to: '/monitor', label: t.nav.monitor, icon: Activity },
   { to: '/vault', label: t.nav.vault, icon: Lock },
   { to: '/tasks', label: t.nav.tasks, icon: ListChecks },
+  { to: '/automation', label: t.nav.automation, icon: AlarmClock },
+  { to: '/browser', label: t.nav.browser, icon: Globe },
   { to: '/settings', label: t.nav.settings, icon: SettingsIcon },
 ];
 

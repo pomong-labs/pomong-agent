@@ -3,6 +3,9 @@ import { db } from './db';
 import { currentStats } from './system';
 import * as vault from './vault';
 import { weatherReport } from './weather';
+import * as browser from './browser';
+import * as jobs from './jobs';
+import * as watchers from './watchers';
 import type { ToolSpec } from './providers';
 
 export type TaskPriority = 'high' | 'normal' | 'low';
@@ -198,6 +201,123 @@ export const TOOL_SPECS: ToolSpec[] = [
     description: '현재 날짜와 시각(Asia/Seoul)을 조회한다. 날짜 계산이 필요할 때 사용한다.',
     parameters: { type: 'object', properties: {} },
   },
+
+  /* ---------------------- Phase 2: 자율 웹 브라우저 ---------------------- */
+  {
+    name: 'browser_open',
+    description:
+      '실제 웹 브라우저로 페이지를 연다. API가 없는 사이트를 직접 보거나 조작할 때 쓴다. URL을 열면 화면 요소(ref)와 텍스트를 돌려준다.',
+    parameters: {
+      type: 'object',
+      properties: { url: { type: 'string', description: '열 주소 (예: https://example.com)' } },
+      required: ['url'],
+    },
+  },
+  {
+    name: 'browser_snapshot',
+    description: '현재 브라우저 화면의 텍스트와 조작 가능한 요소(ref) 목록을 다시 읽는다. 클릭·입력 후 화면이 바뀌었는지 확인할 때 쓴다.',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'browser_click',
+    description:
+      '화면의 버튼·링크를 누른다. ref는 browser_snapshot이 준 값(e1, e2 …). 결제·게시·삭제 버튼은 눌 수 없고 사용자에게 넘겨야 한다.',
+    parameters: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string', description: '요소 ref (예: e12)' },
+        text: { type: 'string', description: 'ref를 모를 때 누를 요소의 글자' },
+      },
+    },
+  },
+  {
+    name: 'browser_type',
+    description:
+      '입력창에 글자를 넣는다. 비밀번호·카드번호·인증번호 입력은 하드블록이라 할 수 없다(사용자에게 넘긴다).',
+    parameters: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string', description: '입력창 ref' },
+        text: { type: 'string', description: '넣을 내용' },
+        submit: { type: 'boolean', description: '입력 후 Enter까지 누를지' },
+      },
+      required: ['ref', 'text'],
+    },
+  },
+  {
+    name: 'browser_extract',
+    description: '현재 페이지의 본문 텍스트를 정리해 가져온다(목록·표·가격 읽기).',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'browser_screenshot',
+    description: '현재 브라우저 화면을 캡처해 파일로 저장한다(사용자에게 보여줄 때).',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'browser_handover',
+    description:
+      '화면을 사용자에게 넘긴다. 로그인·인증번호(OTP)·캡차·결제·본인인증은 에이전트가 할 수 없으므로 반드시 이 도구로 넘기고, 사용자가 마치면 이어서 한다.',
+    parameters: {
+      type: 'object',
+      properties: {
+        reason: {
+          type: 'string',
+          enum: ['login', 'otp', 'captcha', 'payment', 'identity', 'manual'],
+          description: '넘기는 이유',
+        },
+        detail: { type: 'string', description: '사용자에게 보여줄 한 줄 안내' },
+      },
+      required: ['reason'],
+    },
+  },
+  {
+    name: 'browser_close',
+    description: '브라우저 세션을 닫는다. 일이 끝났으면 닫아 서버 메모리를 아낀다.',
+    parameters: { type: 'object', properties: {} },
+  },
+
+  /* ------------------- Phase 2: 예약 실행 · 워치 ------------------- */
+  {
+    name: 'automation_list',
+    description: '예약 작업(스케줄)과 워치(웹 변화 감시) 목록을 조회한다.',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'job_create',
+    description:
+      '예약 실행을 만든다. "매일 아침 8시에 서버 상태 알려줘" 같은 반복 요청에 쓴다. cron은 5필드(분 시 일 월 요일)이며 Asia/Seoul 기준이다.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: '작업 이름' },
+        cron: { type: 'string', description: 'cron 5필드 (예: 0 8 * * * = 매일 08:00)' },
+        prompt: { type: 'string', description: '깨어났을 때 할 일(지시문)' },
+        max_steps: { type: 'number', description: '최대 단계(기본 6)' },
+      },
+      required: ['name', 'cron', 'prompt'],
+    },
+  },
+  {
+    name: 'watch_create',
+    description:
+      '웹 페이지 변화 감시(워치)를 만든다. "이 상품 재입고되면 알려줘", "이 페이지 바뀌면 알려줘"에 쓴다.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: '감시 이름' },
+        url: { type: 'string', description: '감시할 주소' },
+        mode: {
+          type: 'string',
+          enum: ['selector', 'text', 'json', 'regex', 'price', 'rss', 'github', 'ping'],
+          description: '추출 방식 (기본 text, 가격은 price)',
+        },
+        target: { type: 'string', description: 'selector면 CSS 선택자, json이면 경로, regex면 정규식, github이면 owner/repo' },
+        interval_min: { type: 'number', description: '확인 주기(분, 최소 5 · 기본 30)' },
+      },
+      required: ['name', 'url'],
+    },
+  },
 ];
 
 /** 앱 '더보기 → 도구 목록' 화면에 보여줄 도구 설명 */
@@ -251,11 +371,35 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
     summary: '오늘 날짜와 시각을 확인해 날짜 계산을 정확히 해요.',
     example: '이번 주 금요일이 며칠이야?',
   },
+  {
+    name: 'browser_open',
+    label: '웹 브라우저 열기',
+    summary: '실제 브라우저로 페이지를 열어 보고 조작해요. 로그인·결제는 사용자에게 넘겨요.',
+    example: '쿠팡에서 이 상품 재고 확인해줘',
+  },
+  {
+    name: 'browser_handover',
+    label: '화면 넘겨받기',
+    summary: '로그인·인증번호·캡차·결제 화면을 내게 넘겨줘요. 내가 하면 AI가 이어서 진행해요.',
+    example: '깃허브 로그인은 내가 할게',
+  },
+  {
+    name: 'job_create',
+    label: '예약 실행 만들기',
+    summary: '정해진 시각에 AI가 스스로 깨어나 일하게 해요.',
+    example: '매일 아침 8시에 서버 상태 알려줘',
+  },
+  {
+    name: 'watch_create',
+    label: '웹 변화 감시',
+    summary: '페이지가 바뀌면 알려줘요. 가격·재고 감시에 써요(구매는 하지 않아요).',
+    example: '이 상품 재입고되면 알려줘',
+  },
 ];
 
 export interface ToolResult {
   content: string;
-  meta?: 'tasks' | 'server_stats';
+  meta?: 'tasks' | 'server_stats' | 'browser';
 }
 
 function taskLine(row: TaskRow): string {
@@ -335,6 +479,122 @@ export async function runTool(name: string, args: Record<string, unknown>): Prom
       const days = Number(args.days) || 3;
       const report = await weatherReport(location, days);
       return { content: report.content };
+    }
+    case 'browser_open': {
+      const url = String(args.url || '').trim();
+      if (!url) return { content: '어떤 주소를 열지 알려 주세요.' };
+      try {
+        const result = await browser.openUrl(url);
+        return { content: `${result.policy}\n\n${result.snapshot}`, meta: 'browser' };
+      } catch (err) {
+        return { content: `브라우저를 열지 못했습니다: ${err instanceof Error ? err.message : String(err)}` };
+      }
+    }
+    case 'browser_snapshot': {
+      try {
+        const result = await browser.snapshot();
+        return { content: result.snapshot, meta: 'browser' };
+      } catch (err) {
+        return { content: `화면을 읽지 못했습니다: ${err instanceof Error ? err.message : String(err)}` };
+      }
+    }
+    case 'browser_click': {
+      try {
+        const result = await browser.click({ ref: args.ref ? String(args.ref) : undefined, text: args.text ? String(args.text) : undefined });
+        return { content: result.snapshot, meta: 'browser' };
+      } catch (err) {
+        return { content: `누르지 못했습니다: ${err instanceof Error ? err.message : String(err)}` };
+      }
+    }
+    case 'browser_type': {
+      try {
+        const result = await browser.typeInto({
+          ref: args.ref ? String(args.ref) : undefined,
+          text: String(args.text || ''),
+          submit: Boolean(args.submit),
+        });
+        return { content: result.snapshot, meta: 'browser' };
+      } catch (err) {
+        return { content: `입력하지 못했습니다: ${err instanceof Error ? err.message : String(err)}` };
+      }
+    }
+    case 'browser_extract': {
+      try {
+        const result = await browser.extract();
+        return { content: `<untrusted>\n${result.text}\n</untrusted>`, meta: 'browser' };
+      } catch (err) {
+        return { content: `페이지를 읽지 못했습니다: ${err instanceof Error ? err.message : String(err)}` };
+      }
+    }
+    case 'browser_screenshot': {
+      try {
+        const shot = await browser.screenshot();
+        return { content: `화면을 캡처했습니다: ${shot.title} (${shot.url})\n파일: ${shot.path}`, meta: 'browser' };
+      } catch (err) {
+        return { content: `캡처하지 못했습니다: ${err instanceof Error ? err.message : String(err)}` };
+      }
+    }
+    case 'browser_handover': {
+      const reason = String(args.reason || 'manual') as browser.HandoverReason;
+      const detail = String(args.detail || '').trim();
+      try {
+        const result = await browser.requestHandover(
+          ['login', 'otp', 'captcha', 'payment', 'identity', 'manual'].includes(reason) ? reason : 'manual',
+          detail
+        );
+        return {
+          content: `사용자에게 화면을 넘겼습니다(${result.label}). ${detail ? `안내: ${detail} ` : ''}사용자가 '넘겨줄게'를 누를 때까지 자동 조작은 멈춥니다. 그동안 자격증명을 읽거나 입력하지 마세요.`,
+          meta: 'browser',
+        };
+      } catch (err) {
+        return { content: `화면을 넘기지 못했습니다: ${err instanceof Error ? err.message : String(err)}` };
+      }
+    }
+    case 'browser_close': {
+      await browser.closeSession().catch(() => undefined);
+      return { content: '브라우저 세션을 닫았습니다.', meta: 'browser' };
+    }
+    case 'automation_list': {
+      const jobList = jobs.listJobs();
+      const watchList = watchers.listWatchers();
+      const lines: string[] = [];
+      lines.push(jobList.length ? `예약 작업 ${jobList.length}개:` : '예약된 작업이 없습니다.');
+      for (const j of jobList) {
+        lines.push(`- ${j.name} · ${j.scheduleLabel} · ${j.enabled ? '켜짐' : '꺼짐'}${j.nextRunAt ? ` · 다음 ${j.nextRunAt}` : ''}`);
+      }
+      lines.push(watchList.length ? `워치 ${watchList.length}개:` : '감시 중인 워치가 없습니다.');
+      for (const w of watchList) {
+        lines.push(`- ${w.name} · ${w.intervalMin}분마다 · ${w.lastStatus || '대기'}`);
+      }
+      return { content: lines.join('\n') };
+    }
+    case 'job_create': {
+      try {
+        const job = jobs.createJob({
+          name: String(args.name || ''),
+          cron: String(args.cron || ''),
+          prompt: String(args.prompt || ''),
+          maxSteps: Number(args.max_steps) || undefined,
+          timezone: 'Asia/Seoul',
+        });
+        return { content: `예약 작업을 만들었습니다: ${job.name} · ${job.scheduleLabel}${job.nextRunAt ? ` · 다음 실행 ${job.nextRunAt}` : ''}` };
+      } catch (err) {
+        return { content: `예약 작업을 만들지 못했습니다: ${err instanceof Error ? err.message : String(err)}` };
+      }
+    }
+    case 'watch_create': {
+      try {
+        const watch = watchers.createWatcher({
+          name: String(args.name || ''),
+          url: String(args.url || ''),
+          mode: watchers.normalizeMode(args.mode),
+          target: args.target ? String(args.target) : null,
+          intervalMin: Number(args.interval_min) || 30,
+        });
+        return { content: `워치를 만들었습니다: ${watch.name} · ${watch.intervalMin}분마다 확인` };
+      } catch (err) {
+        return { content: `워치를 만들지 못했습니다: ${err instanceof Error ? err.message : String(err)}` };
+      }
     }
     case 'time_now': {
       const now = new Date();

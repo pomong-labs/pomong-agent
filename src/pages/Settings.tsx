@@ -4,6 +4,7 @@ import { Check, ExternalLink, LogOut, ShieldCheck, Sparkles } from 'lucide-react
 import MascotFace from '../components/MascotFace';
 import { api, type ProviderId, type SettingsResponse } from '../lib/api';
 import { useAppStore } from '../lib/store';
+import PolicySection from '../components/PolicySection';
 
 /** 말투 선택지와 그 말투로 대화했을 때의 예시 (설정 화면에 그대로 보여 준다) */
 function toneOptions(callName: string, agentName: string) {
@@ -332,13 +333,15 @@ export default function SettingsPage() {
           ) : null}
         </section>
 
+        <PolicySection />
+
         {/* security / about */}
         <section className="mt-4 rounded-[24px] bg-white p-5 shadow-card ring-1 ring-[#F6F4FB] lg:p-6">
           <h2 className="text-[16px] font-bold text-[#1F1D2B]">정보</h2>
           <ul className="mt-3 divide-y divide-[#F6F4FB] text-[13.5px]">
             <li className="flex items-center justify-between py-3">
               <span className="text-pomong-sub">버전</span>
-              <span className="font-semibold text-[#3B3947]">v{data?.version || '0.3.1'}</span>
+              <span className="font-semibold text-[#3B3947]">v{data?.version || '0.4.0'}</span>
             </li>
             <li className="flex items-center justify-between py-3">
               <span className="text-pomong-sub">데이터 보관</span>
@@ -357,7 +360,7 @@ export default function SettingsPage() {
         </section>
 
         <p className="mt-6 flex items-center justify-center gap-1.5 text-[12px] text-[#B4B1C2]">
-          <Sparkles size={12} /> Pomong Agent v{data?.version || '0.3.1'} · Pomong Labs
+          <Sparkles size={12} /> Pomong Agent v{data?.version || '0.4.0'} · Pomong Labs
         </p>
       </div>
     </div>

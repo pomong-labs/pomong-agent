@@ -4,6 +4,8 @@ import AppShell from './components/AppShell';
 import Mascot from './components/Mascot';
 import { api, ApiError } from './lib/api';
 import { AppStoreProvider, useAppStore } from './lib/store';
+import Automation from './pages/Automation';
+import Browser from './pages/Browser';
 import Chat from './pages/Chat';
 import Login from './pages/Login';
 import Monitor from './pages/Monitor';
@@ -67,6 +69,8 @@ export default function App() {
             <Route path="monitor" element={<Monitor />} />
             <Route path="vault" element={<Vault />} />
             <Route path="tasks" element={<Tasks />} />
+            <Route path="automation" element={<Automation />} />
+            <Route path="browser" element={<Browser />} />
             <Route path="tools" element={<Tools />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="more" element={<More />} />

@@ -108,10 +108,11 @@ export interface TaskCounts {
 }
 
 export interface ChatMeta {
-  type: 'server_stats' | 'tasks';
+  type: 'server_stats' | 'tasks' | 'browser';
   stats?: SystemStats;
   tasks?: Task[];
   tools?: string[];
+  browserSession?: string | null;
 }
 
 export interface ChatMessage {
@@ -189,4 +190,116 @@ export interface ToolCatalogEntry {
   label: string;
   summary: string;
   example: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Phase 2 — 자동화(예약·워치) · 자율 브라우저                       */
+/* ------------------------------------------------------------------ */
+
+export type JobRunStatus = 'running' | 'ok' | 'failed' | 'skipped_overlap' | 'missed' | 'approval_needed';
+
+export interface JobRun {
+  id: string;
+  jobId: string;
+  status: JobRunStatus;
+  trigger: string;
+  startedAt: string;
+  endedAt: string | null;
+  steps: number;
+  result: string | null;
+  error: string | null;
+}
+
+export interface AutomationJob {
+  id: string;
+  name: string;
+  cron: string;
+  timezone: string;
+  prompt: string;
+  toolsAllow: string[] | null;
+  maxSteps: number;
+  notify: string[];
+  enabled: boolean;
+  nextRunAt: string | null;
+  nextRuns: string[];
+  scheduleLabel: string;
+  lastRunAt: string | null;
+  lastStatus: JobRunStatus | null;
+  createdAt: string;
+  running: boolean;
+  lastRun?: JobRun | null;
+}
+
+export type WatchMode = 'selector' | 'text' | 'json' | 'regex' | 'price' | 'rss' | 'github' | 'ping';
+
+export interface WatchEvent {
+  id: string;
+  watcherId: string;
+  kind: 'changed' | 'failed' | 'recovered' | 'first';
+  diffSummary: string | null;
+  beforeText: string | null;
+  afterText: string | null;
+  url: string | null;
+  createdAt: string;
+  notifiedAt: string | null;
+}
+
+export interface Watcher {
+  id: string;
+  name: string;
+  url: string;
+  mode: WatchMode;
+  target: string | null;
+  intervalMin: number;
+  quietHours: string | null;
+  enabled: boolean;
+  lastHash: string | null;
+  lastValue: string | null;
+  lastChecked: string | null;
+  lastStatus: string | null;
+  failCount: number;
+  nextCheckAt: string | null;
+  createdAt: string;
+  lastEvent?: WatchEvent | null;
+}
+
+export interface BrowserSession {
+  id: string;
+  status: string;
+  controlOwner: 'agent' | 'user';
+  handoverReason: string | null;
+  handoverLabel: string | null;
+  controlDetail: string | null;
+  leaseExpiresAt: string | null;
+  url: string | null;
+  title: string | null;
+  actions: number;
+  createdAt: string;
+  lastUsedAt: string;
+  alive: boolean;
+}
+
+export interface BrowserAction {
+  id: string;
+  actor: string;
+  tool: string;
+  args: string;
+  result: string;
+  url: string | null;
+  at: string;
+}
+
+export interface AppEvent {
+  id: number;
+  type: 'job' | 'watch' | 'handover' | 'browser' | 'info';
+  title: string;
+  body: string;
+  at: string;
+  data?: Record<string, unknown>;
+}
+
+export interface PolicyEntry {
+  pattern: string;
+  level: 'allow' | 'confirm' | 'block' | 'handover';
+  note: string | null;
 }

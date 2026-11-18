@@ -1,7 +1,7 @@
 services:
   pomong-agent:
     build: .
-    image: pomong-agent:0.3.1
+    image: pomong-agent:0.4.0
     container_name: pomong-agent
     restart: unless-stopped
     ports:
@@ -12,13 +12,17 @@ services:
       PORT: "3100"
       DATA_DIR: /app/data
       TZ: Asia/Seoul
+      # 브라우저 워커는 기본 프로필에서 꺼져 있다. 켜려면 `--profile browser` 로 함께 실행한다.
+      BROWSER_ENABLED: "${BROWSER_ENABLED:-1}"
+      BROWSER_WS_URL: "${BROWSER_WS_URL:-ws://browser:9222/}"
+      BROWSER_CONTROL_URL: "${BROWSER_CONTROL_URL:-http://browser:9223/}"
     volumes:
       # app data (SQLite database, setup token, keys) — back this folder up
       - ./data:/app/data
       # host metrics: process list + host identity (read-only)
       - /proc:/host/proc:ro
       - /etc/os-release:/host/etc/os-release:ro
-      - /etc/hostname:/host/etc/hostname:ro
+      - /etc/hostname:/host/hostname:ro
     healthcheck:
       test:
         - CMD
@@ -29,3 +33,32 @@ services:
       timeout: 6s
       retries: 3
       start_period: 25s
+
+  # ---------------------------------------------------------------
+  # 선택 프로필: 자율 웹 브라우저 (Playwright + Chromium)
+  #   docker compose --profile browser up -d
+  # 포트를 호스트에 열지 않는다 — 에이전트가 내부 네트워크에서만 붙는다.
+  # ---------------------------------------------------------------
+  browser:
+    profiles: ["browser"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.browser
+    image: pomong-agent-browser:0.4.0
+    container_name: pomong-browser
+    restart: unless-stopped
+    shm_size: "256m"
+    # 1GB 서버 보호: 브라우저가 이 한도를 넘으면 컨테이너만 재시작된다.
+    mem_limit: 640m
+    environment:
+      TZ: Asia/Seoul
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:9223/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

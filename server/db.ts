@@ -83,6 +83,130 @@ function columnsOf(table: string): Set<string> {
   if (!msgCols.has('model')) db.exec('ALTER TABLE messages ADD COLUMN model TEXT');
 }
 
+/* ------------------------------------------------------------------ */
+/* Phase 2 schema: 예약 실행(잡)·워치·자율 브라우저·도메인 정책            */
+/* 기존 테이블은 건드리지 않고 새 테이블만 더한다(data/ 보존).            */
+/* ------------------------------------------------------------------ */
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS jobs (
+  id             TEXT PRIMARY KEY,
+  name           TEXT NOT NULL,
+  cron           TEXT NOT NULL,
+  timezone       TEXT NOT NULL DEFAULT 'Asia/Seoul',
+  prompt         TEXT NOT NULL,
+  tools_allow    TEXT,
+  max_steps      INTEGER NOT NULL DEFAULT 6,
+  notify         TEXT,
+  enabled        INTEGER NOT NULL DEFAULT 1,
+  next_run_at    TEXT,
+  last_run_at    TEXT,
+  last_status    TEXT,
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS job_runs (
+  id         TEXT PRIMARY KEY,
+  job_id     TEXT NOT NULL,
+  status     TEXT NOT NULL,
+  trigger    TEXT NOT NULL DEFAULT 'schedule',
+  started_at TEXT NOT NULL,
+  ended_at   TEXT,
+  steps      INTEGER NOT NULL DEFAULT 0,
+  result     TEXT,
+  error      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_job_runs_job ON job_runs(job_id, started_at DESC);
+
+CREATE TABLE IF NOT EXISTS watchers (
+  id            TEXT PRIMARY KEY,
+  name          TEXT NOT NULL,
+  url           TEXT NOT NULL,
+  mode          TEXT NOT NULL DEFAULT 'text',
+  target        TEXT,
+  interval_min  INTEGER NOT NULL DEFAULT 30,
+  quiet_hours   TEXT,
+  enabled       INTEGER NOT NULL DEFAULT 1,
+  last_hash     TEXT,
+  last_value    TEXT,
+  last_checked  TEXT,
+  last_status   TEXT,
+  fail_count    INTEGER NOT NULL DEFAULT 0,
+  next_check_at TEXT,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS watcher_snapshots (
+  id          TEXT PRIMARY KEY,
+  watcher_id  TEXT NOT NULL,
+  hash        TEXT NOT NULL,
+  content     TEXT,
+  captured_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_watcher_snapshots ON watcher_snapshots(watcher_id, captured_at DESC);
+
+CREATE TABLE IF NOT EXISTS watch_events (
+  id           TEXT PRIMARY KEY,
+  watcher_id   TEXT NOT NULL,
+  kind         TEXT NOT NULL,
+  diff_summary TEXT,
+  before_text  TEXT,
+  after_text   TEXT,
+  url          TEXT,
+  created_at   TEXT NOT NULL,
+  notified_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_watch_events ON watch_events(watcher_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS browser_sessions (
+  id              TEXT PRIMARY KEY,
+  conv_id         TEXT,
+  status          TEXT NOT NULL DEFAULT 'active',
+  control_owner   TEXT NOT NULL DEFAULT 'agent',
+  handover_reason TEXT,
+  control_detail  TEXT,
+  lease_expires_at TEXT,
+  url             TEXT,
+  title           TEXT,
+  actions         INTEGER NOT NULL DEFAULT 0,
+  created_at      TEXT NOT NULL,
+  last_used_at    TEXT NOT NULL,
+  ended_at        TEXT
+);
+
+CREATE TABLE IF NOT EXISTS browser_actions (
+  id         TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  actor      TEXT NOT NULL,
+  tool       TEXT NOT NULL,
+  args       TEXT,
+  result     TEXT,
+  url        TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_browser_actions ON browser_actions(session_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS handovers (
+  id           TEXT PRIMARY KEY,
+  session_id   TEXT NOT NULL,
+  reason       TEXT NOT NULL,
+  detail       TEXT,
+  requested_at TEXT NOT NULL,
+  accepted_at  TEXT,
+  ended_at     TEXT,
+  note         TEXT
+);
+
+CREATE TABLE IF NOT EXISTS policies (
+  pattern    TEXT PRIMARY KEY,
+  level      TEXT NOT NULL,
+  note       TEXT,
+  created_at TEXT NOT NULL
+);
+`);
+
 
 /* ------------------------------------------------------------------ */
 /* Settings                                                            */

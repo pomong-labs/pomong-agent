@@ -8,6 +8,8 @@ export const ko = {
     monitor: '관제실',
     vault: '금고',
     tasks: '할 일',
+    automation: '자동화',
+    browser: '브라우저',
     settings: '설정',
     more: '더보기',
   },

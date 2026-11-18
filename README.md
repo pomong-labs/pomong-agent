@@ -24,6 +24,29 @@ Pomong Agent는 반대로 갑니다.
 - **금고** — API 키와 로그인 정보를 PIN으로 잠그고 AES-256-GCM으로 암호화해 보관합니다.
 - **포몽이 캐릭터** — 서버가 힘들면 함께 걱정해 주는 6종 마스코트.
 
+## v0.4.0에 들어있는 것 — Phase 2 (자율 브라우저 · 자동화)
+
+| 기능 | 내용 |
+| --- | --- |
+| 자율 웹 브라우저 | Playwright(Chromium)로 실제 사이트를 열고 읽고 누릅니다. 접근성 트리에서 뽑은 `ref`(e1, e2 …)로 클릭·입력하고, 화면 텍스트는 `<untrusted>`로 격리합니다. 옵션 컨테이너(프로필 `browser`)에서만 동작하며, 연결하지 않으면 크로미움이 아예 뜨지 않습니다. |
+| 화면 넘겨받기(핸드오버) | 로그인·인증번호(OTP)·캡차·결제·본인인증 화면은 에이전트가 조작하지 않고 사용자에게 넘깁니다. 사용자는 앱 안의 라이브 화면(스크린샷 스트림 + 입력 브리지)에서 직접 입력하고 「인증 완료 · AI에게 넘기기」를 누르면 AI가 이어서 진행합니다. |
+| 제어권 리스 | `agent` / `user` 한쪽만 조작할 수 있습니다. 사용자가 조작하는 동안 에이전트 도구 호출은 서버에서 거부되고(15분 리스, 무입력 시 자동 회수), 핸드오버 중에는 에이전트가 화면 텍스트를 읽지 않습니다. |
+| 결제 하드블록 | 카드·계좌·비밀번호 필드 입력은 API 레벨에서 거부. 결제·구매·게시·댓글·삭제 버튼은 클릭 자체가 막히고 사용자에게 넘깁니다. |
+| 예약 실행(스케줄러) | cron 5필드 + 프리셋(`매일 08:00`, `평일 09:00`, `30분마다`), 잡별 타임존, 다음 3회 미리보기, 겹침 건너뜀, 놓친 실행은 2시간 이내 1회 따라잡기, 실행당 단계 예산. 예약 잡은 사람이 필요한 단계에서 스스로 멈추고 «승인 대기»로 알립니다. |
+| 워치(웹 변화 감시) | CSS 선택자 · 전체 텍스트 · JSON 경로 · 정규식 · 가격/재고 · RSS · GitHub 릴리스 · 서버 ping. 정규화 후 SHA-256 비교, 이전/이후 diff 요약, 최소 5분 주기(±10% 지터), 실패 3회면 알림 + 주기 자동 2배. 구매는 하지 않습니다. |
+| 도메인 정책 | allow / confirm / handover / block 4단계. 기본 시드(공개 정보 allow, 쇼핑 confirm, 금융·정부 handover, 도박·성인·거래소 block)로 시작하고 설정 화면에서만 바꿀 수 있습니다(모델은 변경 불가). |
+| 알림 | SSE 실시간 이벤트(잡 완료·워치 변경·핸드오버 요청). 텔레그램·디스코드·웹푸시 어댑터는 이 이벤트를 구독해 붙입니다. |
+
+브라우저 기능까지 켜려면:
+
+```bash
+docker compose --profile browser up -d --build
+```
+
+> 브라우저 이미지는 약 1.2GB이며, 워커는 유휴 시 크로미움을 띄우지 않습니다(≈60MB).
+> 브라우저가 붙어 있는 동안 ≈300MB를 쓰므로 **1GB 서버에서는 동시 1세션**을 권장합니다
+> (`mem_limit: 640m`, `shm_size: 256m` 기본값).
+
 ## v0.3.1에 들어있는 것
 
 | 기능 | 내용 |
@@ -110,9 +133,14 @@ PORT=3100 npm start    # http://localhost:3100/setup?token=...
 ## 구조
 
 ```
-src/            React + TypeScript + Tailwind UI (Setup · Chat · Monitor · Vault · Tasks · Settings)
+src/            React + TypeScript + Tailwind UI (Setup · Chat · Monitor · Vault · Tasks · Automation · Browser · Settings)
 server/         Express + TypeScript API, SQLite(better-sqlite3), AES-256-GCM 금고, 시스템 샘플러
 server/system.ts  /proc 기반 CPU·RAM·Disk·프로세스 수집기
+server/jobs.ts    예약 실행 스케줄러 (croner, job_runs 기록, 따라잡기·겹침 정책)
+server/watchers.ts 웹 변화 감시 (cheerio 추출, 해시 비교, diff·백오프)
+server/browser.ts 자율 브라우저 세션·핸드오버·입력 브리지 (playwright-core)
+server/policy.ts  도메인 정책·결제 하드블록·프롬프트 인젝션 감지
+docker/Dockerfile.browser  브라우저 워커 이미지 (Playwright run-server)
 public/mascots/   포몽 6종 마스코트 (앱 렌더링용)
 brand/            마스코트 원본 시트 · 에셋 라이선스
 scripts/          install.sh 등 운영 스크립트

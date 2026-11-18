@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronRight, ListChecks, Lock, LogOut, Settings as SettingsIcon, Wrench } from 'lucide-react';
+import { AlarmClock, ChevronRight, Globe, ListChecks, Lock, LogOut, Settings as SettingsIcon, Wrench } from 'lucide-react';
 import Mascot from '../components/Mascot';
 import { api } from '../lib/api';
 
 export default function More() {
   const navigate = useNavigate();
-  const [version, setVersion] = useState('0.3.1');
+  const [version, setVersion] = useState('0.4.0');
 
   useEffect(() => {
     api
@@ -23,6 +23,8 @@ export default function More() {
   const items = [
     { label: '도구', desc: 'AI가 쓸 수 있는 기능과 예시', icon: Wrench, to: '/tools', tint: '#EAFBF1', color: '#12B886' },
     { label: '할 일', desc: '오늘의 태스크 관리', icon: ListChecks, to: '/tasks', tint: '#EFF7FF', color: '#4A90FF' },
+    { label: '자동화', desc: '예약 실행 · 웹 변화 감시', icon: AlarmClock, to: '/automation', tint: '#F1ECFF', color: '#7C63F6' },
+    { label: '브라우저', desc: 'AI가 직접 열고, 로그인은 내가', icon: Globe, to: '/browser', tint: '#EAF6FF', color: '#2F86D8' },
     { label: '금고', desc: 'API 키 · 로그인 · 메모', icon: Lock, to: '/vault', tint: '#FFF6E7', color: '#E49B18' },
     { label: '설정', desc: '프로필 · AI 연결', icon: SettingsIcon, to: '/settings', tint: '#F3EEFF', color: '#8B72F6' },
   ];

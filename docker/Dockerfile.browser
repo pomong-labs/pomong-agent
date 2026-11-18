@@ -1,0 +1,35 @@
+# syntax=docker/dockerfile:1
+
+# Pomong Agent — 브라우저 워커 (선택 프로필)
+#
+# `docker compose --profile browser up -d` 로만 띄운다.
+# Playwright 서버(run-server)가 9222에서 대기하고, 에이전트가 연결할 때만
+# 크로미움이 뜬다. 연결이 끊기면 브라우저도 함께 사라져 1GB 서버에서도 안전하다.
+# (idle 상태 메모리 ~60MB · 브라우저 실행 중 ~300MB)
+
+FROM node:20-bookworm-slim
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright \
+    TZ=Asia/Seoul
+
+WORKDIR /app
+
+# playwright(CLI) + 크로미움(고정 버전) + 실행에 필요한 OS 라이브러리
+RUN npm init -y >/dev/null 2>&1 \
+ && npm install playwright@1.65.1 --no-audit --no-fund \
+ && npx playwright install --with-deps chromium \
+ && npm cache clean --force \
+ && rm -rf /var/lib/apt/lists/*
+
+# 한국어 사이트가 두부(□□□)로 보이지 않도록 CJK 폰트 추가
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends fonts-noto-cjk \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY docker/browser-supervisor.mjs /app/supervisor.mjs
+
+# 9222 = Playwright, 9223 = 감독(시작/정지/회수). 호스트에 포트를 열지 않는다.
+EXPOSE 9222 9223
+
+CMD ["node", "/app/supervisor.mjs"]

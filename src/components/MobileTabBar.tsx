@@ -1,17 +1,18 @@
 import { NavLink, useLocation } from 'react-router-dom';
-import { Activity, LayoutGrid, Lock, MessageCircle } from 'lucide-react';
+import { Activity, AlarmClock, LayoutGrid, Lock, MessageCircle } from 'lucide-react';
 import { t } from '../lib/i18n';
 
 const tabs = [
   { to: '/', label: t.nav.chat, icon: MessageCircle, end: true },
   { to: '/monitor', label: t.nav.monitor, icon: Activity },
+  { to: '/automation', label: t.nav.automation, icon: AlarmClock },
   { to: '/vault', label: t.nav.vault, icon: Lock },
   { to: '/more', label: t.nav.more, icon: LayoutGrid },
 ];
 
 export default function MobileTabBar() {
   const location = useLocation();
-  const moreActive = ['/more', '/tasks', '/settings', '/tools'].includes(location.pathname);
+  const moreActive = ['/more', '/tasks', '/settings', '/tools', '/browser'].includes(location.pathname);
 
   return (
     <nav className="pa-tabbar z-20 w-full shrink-0 border-t border-[#F1EFF8] bg-white pb-safe lg:hidden">
