@@ -8,12 +8,14 @@ import Automation from './pages/Automation';
 import Browser from './pages/Browser';
 import Chat from './pages/Chat';
 import Login from './pages/Login';
+import MemoryPage from './pages/Memory';
 import Monitor from './pages/Monitor';
 import More from './pages/More';
 import SettingsPage from './pages/Settings';
 import Setup from './pages/Setup';
 import Tasks from './pages/Tasks';
 import Tools from './pages/Tools';
+import Services from './pages/Services';
 import Vault from './pages/Vault';
 
 function Splash() {
@@ -71,6 +73,8 @@ export default function App() {
             <Route path="tasks" element={<Tasks />} />
             <Route path="automation" element={<Automation />} />
             <Route path="browser" element={<Browser />} />
+            <Route path="memory" element={<MemoryPage />} />
+            <Route path="services" element={<Services />} />
             <Route path="tools" element={<Tools />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="more" element={<More />} />

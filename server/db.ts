@@ -83,6 +83,12 @@ function columnsOf(table: string): Set<string> {
   if (!msgCols.has('model')) db.exec('ALTER TABLE messages ADD COLUMN model TEXT');
 }
 
+{
+  // v0.5.0: 금고 다중 계정 — 기본 계정 표시
+  const vaultCols = columnsOf('vault_items');
+  if (!vaultCols.has('is_default')) db.exec('ALTER TABLE vault_items ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0');
+}
+
 /* ------------------------------------------------------------------ */
 /* Phase 2 schema: 예약 실행(잡)·워치·자율 브라우저·도메인 정책            */
 /* 기존 테이블은 건드리지 않고 새 테이블만 더한다(data/ 보존).            */
@@ -205,6 +211,60 @@ CREATE TABLE IF NOT EXISTS policies (
   note       TEXT,
   created_at TEXT NOT NULL
 );
+`);
+
+/* ------------------------------------------------------------------ */
+/* v0.5.0 schema: 영구 기억 · 채팅 작업 카드 · 웹 푸시 구독               */
+/* 새 테이블만 더한다(기존 대화·금고·설정은 그대로 보존).                 */
+/* ------------------------------------------------------------------ */
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS memories (
+  id         TEXT PRIMARY KEY,
+  category   TEXT NOT NULL DEFAULT 'other',
+  content    TEXT NOT NULL,
+  importance INTEGER NOT NULL DEFAULT 2,
+  source     TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category, importance DESC, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id         TEXT PRIMARY KEY,
+  endpoint   TEXT NOT NULL UNIQUE,
+  p256dh     TEXT NOT NULL,
+  auth       TEXT NOT NULL,
+  ua         TEXT,
+  created_at TEXT NOT NULL,
+  last_ok_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS task_runs (
+  id         TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  message_id INTEGER,
+  title      TEXT NOT NULL,
+  status     TEXT NOT NULL DEFAULT 'running',
+  steps      INTEGER NOT NULL DEFAULT 0,
+  started_at TEXT NOT NULL,
+  ended_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_task_runs_session ON task_runs(session_id, started_at DESC);
+
+CREATE TABLE IF NOT EXISTS task_run_steps (
+  id          TEXT PRIMARY KEY,
+  run_id      TEXT NOT NULL,
+  seq         INTEGER NOT NULL,
+  tool        TEXT NOT NULL,
+  label       TEXT NOT NULL,
+  summary     TEXT,
+  status      TEXT NOT NULL DEFAULT 'running',
+  started_at  TEXT NOT NULL,
+  ended_at    TEXT,
+  duration_ms INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_task_run_steps ON task_run_steps(run_id, seq);
 `);
 
 

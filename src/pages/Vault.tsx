@@ -69,6 +69,7 @@ export default function Vault() {
     username: string;
     secret: string;
     notes: string;
+    isDefault: boolean;
   } | null>(null);
   const [revealed, setRevealed] = useState<Record<string, string>>({});
 
@@ -174,6 +175,7 @@ export default function Vault() {
         username: r.username || '',
         secret: r.secret,
         notes: item.notes || '',
+        isDefault: item.isDefault,
       });
     } catch (err) {
       flash(err instanceof Error ? err.message : '항목을 열지 못했습니다.');
@@ -351,6 +353,9 @@ export default function Vault() {
                         <span className="shrink-0 rounded-lg px-2 py-0.5 text-[11.5px] font-semibold" style={{ background: meta.bg, color: meta.fg }}>
                           {meta.label}
                         </span>
+                        {item.isDefault ? (
+                          <span className="shrink-0 rounded-lg bg-[#F1ECFF] px-2 py-0.5 text-[11.5px] font-semibold text-[#7C63F6]">기본</span>
+                        ) : null}
                       </div>
 
                       {item.type === 'memo' ? (
@@ -514,7 +519,7 @@ function ItemModal({
   onClose,
   onSaved,
 }: {
-  initial?: { id: string; title: string; type: 'apikey' | 'login' | 'memo'; username: string; secret: string; notes: string };
+  initial?: { id: string; title: string; type: 'apikey' | 'login' | 'memo'; username: string; secret: string; notes: string; isDefault: boolean };
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -523,6 +528,7 @@ function ItemModal({
   const [secret, setSecret] = useState(initial?.secret || '');
   const [username, setUsername] = useState(initial?.username || '');
   const [notes, setNotes] = useState(initial?.notes || '');
+  const [isDefault, setIsDefault] = useState(initial?.isDefault || false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const editing = Boolean(initial);
@@ -531,7 +537,7 @@ function ItemModal({
     setBusy(true);
     setError('');
     try {
-      const payload = { title, type, secret, notes, username: type === 'login' ? username : undefined };
+      const payload = { title, type, secret, notes, isDefault, username: type === 'login' ? username : undefined };
       if (editing && initial) {
         await api.patch(`/api/vault/items/${initial.id}`, payload);
       } else {
@@ -589,6 +595,23 @@ function ItemModal({
             onChange={(e) => setSecret(e.target.value)}
           />
           <input className="pa-input" placeholder="메모 (선택)" value={notes} onChange={(e) => setNotes(e.target.value)} />
+          {type === 'login' ? (
+            <button
+              onClick={() => setIsDefault((v) => !v)}
+              className={`flex w-full items-center gap-2.5 rounded-2xl px-3.5 py-3 text-left ring-1 transition ${
+                isDefault ? 'bg-[#F5F0FF] ring-[#D6C9FF]' : 'bg-[#FAF9FD] ring-[#EFEDF6]'
+              }`}
+              aria-pressed={isDefault}
+            >
+              <span className={`flex h-5 w-5 items-center justify-center rounded-md border ${isDefault ? 'border-[#7C63F6] bg-[#7C63F6] text-white' : 'border-[#D9D5E4] bg-white'}`}>
+                {isDefault ? <Check size={12} strokeWidth={4} /> : null}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[13.5px] font-semibold text-[#3B3947]">기본 계정으로 사용</span>
+                <span className="block text-[11.5px] text-[#8A8A9A]">AI가 로그인할 때 이 계정을 먼저 씁니다. 여러 개면 채팅에서 물어봐요.</span>
+              </span>
+            </button>
+          ) : null}
           {error ? <p className="text-[13px] font-medium text-[#E5484D]">{error}</p> : null}
         </div>
 

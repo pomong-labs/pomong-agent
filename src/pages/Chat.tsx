@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { CheckCheck, Globe, Mic, Paperclip, Send, Sparkles } from 'lucide-react';
+import { CheckCheck, CheckCircle2, ChevronDown, CircleDashed, Clock3, Globe, Mic, Paperclip, Send, Sparkles, XCircle } from 'lucide-react';
 import AppHeader from '../components/AppHeader';
 import Mascot, { type MascotName } from '../components/Mascot';
 import ModelBar from '../components/ModelBar';
 import { StatsCard, TasksCard } from '../components/Cards';
-import { type ChatMessage } from '../lib/api';
+import { type ChatMessage, type TaskRun } from '../lib/api';
 import { formatClock } from '../lib/format';
 import { useAppStore } from '../lib/store';
 
@@ -63,6 +63,8 @@ export default function Chat() {
     profile,
     keyboardOpen,
     visibleState,
+    liveTask,
+    taskRuns,
   } = useAppStore();
   const navigate = useNavigate();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -158,13 +160,23 @@ export default function Chat() {
                   <CheckCheck size={13} className="text-[#B9A8FF]" />
                 </div>
               </div>
+            ) : m.meta?.type === 'notice' ? (
+              <NoticeBubble key={m.id} message={m} character={profile.character} />
             ) : (
-              <AssistantBubble key={m.id} message={m} character={profile.character} agentName={profile.agentName} />
+              <AssistantBubble
+                key={m.id}
+                message={m}
+                character={profile.character}
+                agentName={profile.agentName}
+                taskRun={taskRuns.find((r) => r.messageId === m.id) || null}
+              />
             )
           )}
 
           {sending ? (
-            <div className="flex items-start gap-2.5 lg:gap-3.5">
+            <div className="space-y-2.5">
+              {liveTask ? <TaskCard run={liveTask} live /> : null}
+              <div className="flex items-start gap-2.5 lg:gap-3.5">
               <div className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#FFF0F5] ring-1 ring-[#FFE4EE] sm:flex lg:h-11 lg:w-11">
                 <Mascot name="pimong-think" size={26} />
               </div>
@@ -176,6 +188,7 @@ export default function Chat() {
                 </span>
                 <span className="text-[12.5px] font-medium text-[#9B98AB]">{pendingLabel}</span>
               </div>
+            </div>
             </div>
           ) : null}
 
@@ -274,7 +287,17 @@ function BrowserCard({ sessionId }: { sessionId: string | null }) {
   );
 }
 
-function AssistantBubble({ message, character, agentName }: { message: ChatMessage; character: string; agentName: string }) {
+function AssistantBubble({
+  message,
+  character,
+  agentName,
+  taskRun,
+}: {
+  message: ChatMessage;
+  character: string;
+  agentName: string;
+  taskRun?: TaskRun | null;
+}) {
   const { models } = useAppStore();
   const answeredModel = message.model ? message.model.split(':').slice(-1)[0] : '';
   const answeredLabel = answeredModel ? models?.labels?.[answeredModel] || answeredModel : '';
@@ -283,7 +306,9 @@ function AssistantBubble({ message, character, agentName }: { message: ChatMessa
       <div className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#FFF0F5] ring-1 ring-[#FFE4EE] sm:flex lg:h-11 lg:w-11">
         <Mascot name={character as MascotName} hero size={26} />
       </div>
-      <div className="min-w-0 max-w-[92%] rounded-[24px] bg-white p-4 shadow-card ring-1 ring-[#F6F4FB] sm:max-w-[86%] sm:p-5 lg:max-w-[640px]">
+      <div className="min-w-0 max-w-[92%] sm:max-w-[86%] lg:max-w-[640px]">
+        {taskRun ? <TaskCard run={taskRun} /> : null}
+        <div className="rounded-[24px] bg-white p-4 shadow-card ring-1 ring-[#F6F4FB] sm:p-5">
         <RichText text={message.content} />
         {message.meta?.type === 'server_stats' && message.meta.stats ? <StatsCard stats={message.meta.stats} /> : null}
         {message.meta?.type === 'tasks' && message.meta.tasks ? <TasksCard tasks={message.meta.tasks} /> : null}
@@ -302,7 +327,88 @@ function AssistantBubble({ message, character, agentName }: { message: ChatMessa
           ) : null}
           <span className="sr-only">{agentName}</span>
         </div>
+        </div>
       </div>
+    </div>
+  );
+}
+
+/** 작업 중 먼저 도착하는 짧은 안내 말풍선(chat_notify) */
+function NoticeBubble({ message, character }: { message: ChatMessage; character: string }) {
+  return (
+    <div className="flex items-start gap-2.5 animate-fade-up lg:gap-3.5">
+      <div className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#F1ECFF] ring-1 ring-[#EAE3FF] sm:flex lg:h-11 lg:w-11">
+        <Mascot name={character as MascotName} size={24} />
+      </div>
+      <div className="min-w-0 max-w-[88%] rounded-[20px] rounded-tl-md bg-[#F8F5FF] px-4 py-3 ring-1 ring-[#EFE7FF] sm:max-w-[76%]">
+        <p className="text-[14.5px] leading-[1.65] text-[#4B3FA6]">{message.content}</p>
+        <span className="mt-1 block text-[11px] text-[#B4A9DA]">{formatClock(message.createdAt)}</span>
+      </div>
+    </div>
+  );
+}
+
+/** 채팅 말풍선에 붙는 실시간 작업 카드 */
+function TaskCard({ run, live = false }: { run: TaskRun; live?: boolean }) {
+  const [open, setOpen] = useState(live);
+  useEffect(() => {
+    if (live) setOpen(true);
+  }, [live]);
+  const meta =
+    run.status === 'running'
+      ? { label: '진행 중', color: '#7C63F6', bg: '#F1ECFF' }
+      : run.status === 'failed'
+        ? { label: '실패', color: '#E5484D', bg: '#FFF1F1' }
+        : run.status === 'partial'
+          ? { label: '일부 완료', color: '#C08A16', bg: '#FFF8E7' }
+          : { label: '완료', color: '#0F9668', bg: '#EAFBF1' };
+  const seconds = run.items.reduce((sum, item) => sum + (item.durationMs || 0), 0) / 1000;
+  return (
+    <div className="mb-2 overflow-hidden rounded-[18px] bg-white/95 shadow-[0_4px_14px_rgba(90,80,160,0.06)] ring-1 ring-[#EFEBFA]">
+      <button className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left" onClick={() => setOpen((v) => !v)}>
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#F5F1FF] text-[#7C63F6]">
+          {run.status === 'running' ? (
+            <CircleDashed size={15} className="animate-spin" />
+          ) : run.status === 'failed' ? (
+            <XCircle size={15} />
+          ) : (
+            <CheckCircle2 size={15} />
+          )}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[13px] font-bold text-[#3B3947]">{run.title}</span>
+          <span className="flex items-center gap-1.5 text-[11px] text-[#A8A5B8]">
+            <Clock3 size={10} /> {run.steps}단계{seconds > 0 ? ` · ${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)}초` : ''}
+          </span>
+        </span>
+        <span className="shrink-0 rounded-full px-2 py-0.5 text-[10.5px] font-bold" style={{ background: meta.bg, color: meta.color }}>
+          {meta.label}
+        </span>
+        <ChevronDown size={14} className={`shrink-0 text-[#B4B1C2] transition ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open ? (
+        <div className="space-y-1 border-t border-[#F4F2FA] px-3 py-2">
+          {run.items.map((item) => (
+            <div key={item.id} className="flex items-start gap-2">
+              <span
+                className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${
+                  item.status === 'running' ? 'bg-[#B9A8FF]' : item.status === 'failed' ? 'bg-[#F76A6A]' : 'bg-[#9FDCC4]'
+                }`}
+              />
+              <div className="min-w-0 flex-1">
+                <p className="text-[11.5px] font-semibold text-[#5B5866]">
+                  {item.label}
+                  <span className="ml-1.5 font-normal text-[#B4B1C2]">
+                    {item.durationMs !== null ? `${(item.durationMs / 1000).toFixed(1)}초` : '…'}
+                  </span>
+                </p>
+                {item.summary ? <p className="truncate text-[11px] text-[#9B98AB]">{item.summary}</p> : null}
+              </div>
+            </div>
+          ))}
+          {!run.items.length ? <p className="text-[11.5px] text-[#B4B1C2]">도구를 준비하는 중…</p> : null}
+        </div>
+      ) : null}
     </div>
   );
 }

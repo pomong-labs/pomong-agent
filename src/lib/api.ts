@@ -108,11 +108,74 @@ export interface TaskCounts {
 }
 
 export interface ChatMeta {
-  type: 'server_stats' | 'tasks' | 'browser';
+  type: 'server_stats' | 'tasks' | 'browser' | 'notice';
   stats?: SystemStats;
   tasks?: Task[];
   tools?: string[];
   browserSession?: string | null;
+  taskRunId?: string;
+}
+
+export interface TaskStep {
+  id: string;
+  seq: number;
+  tool: string;
+  label: string;
+  summary: string | null;
+  status: 'running' | 'done' | 'failed';
+  startedAt: string;
+  endedAt: string | null;
+  durationMs: number | null;
+}
+
+export interface TaskRun {
+  id: string;
+  sessionId: string;
+  messageId: number | null;
+  title: string;
+  status: 'running' | 'done' | 'failed' | 'partial';
+  steps: number;
+  startedAt: string;
+  endedAt: string | null;
+  items: TaskStep[];
+}
+
+export interface MemoryItem {
+  id: string;
+  category: string;
+  content: string;
+  importance: number;
+  source: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MemoryCategory {
+  id: string;
+  label: string;
+}
+
+export interface ServiceEntry {
+  id: string;
+  name: string;
+  category: 'dev' | 'shopping' | 'life' | 'social';
+  match: string[];
+  loginUrl: string;
+  tint: string;
+  color: string;
+  emoji: string;
+  examples: string[];
+  note?: string;
+  connected: boolean;
+  via: ('vault' | 'session')[];
+}
+
+export interface PushStatus {
+  ok: true;
+  enabled: boolean;
+  subscriptions: number;
+  error: string | null;
+  foreground?: boolean;
 }
 
 export interface ChatMessage {
@@ -132,6 +195,7 @@ export interface VaultItem {
   usernameMasked: string | null;
   hint: string;
   notes: string;
+  isDefault: boolean;
   updatedAt: string;
   lastUsedAt: string | null;
 }
@@ -291,7 +355,7 @@ export interface BrowserAction {
 
 export interface AppEvent {
   id: number;
-  type: 'job' | 'watch' | 'handover' | 'browser' | 'info';
+  type: 'job' | 'watch' | 'handover' | 'browser' | 'info' | 'chat' | 'chat_message' | 'task';
   title: string;
   body: string;
   at: string;

@@ -6,7 +6,7 @@ import type { Response } from 'express';
  * 알림 채널(텔레그램·디스코드·웹푸시)은 이 이벤트를 구독해서 붙이면 된다.
  */
 
-export type AppEventType = 'job' | 'watch' | 'handover' | 'browser' | 'info';
+export type AppEventType = 'job' | 'watch' | 'handover' | 'browser' | 'info' | 'chat' | 'chat_message' | 'task';
 
 export interface AppEvent {
   id: number;
@@ -33,6 +33,12 @@ export function publish(event: Omit<AppEvent, 'id' | 'at'>): AppEvent {
     } catch {
       clients.delete(client);
     }
+  }
+  // 앱을 보고 있지 않을 때만 휴대폰 알림으로도 보낸다(웹 푸시).
+  if (event.type === 'job' || event.type === 'watch' || event.type === 'handover' || event.type === 'chat') {
+    void import('./push')
+      .then((push) => push.notifyForEvent(event.type, full.title, full.body || '', full.data))
+      .catch(() => undefined);
   }
   return full;
 }

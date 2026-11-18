@@ -24,6 +24,11 @@ export interface AgentLoopOptions {
   cancelled?: () => boolean;
   onStep?: (info: { index: number; text: string; tools: string[] }) => void;
   onToolResult?: (name: string, content: string) => void;
+  /** 도구 실행 직전/직후 (작업 카드 단계 기록용) */
+  onToolStart?: (name: string, args: Record<string, unknown>) => void;
+  onToolEnd?: (name: string, content: string, durationMs: number, ok: boolean) => void;
+  /** chat_notify: 작업 중간에 사용자에게 먼저 보여 줄 말풍선 */
+  onNotify?: (text: string) => void | Promise<void>;
 }
 
 export interface AgentLoopResult {
@@ -84,6 +89,21 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
         });
         continue;
       }
+      if (call.name === 'chat_notify') {
+        const text = String(call.args?.text || '').trim();
+        if (text) {
+          options.onToolStart?.('chat_notify', call.args);
+          try {
+            await options.onNotify?.(text);
+            options.onToolEnd?.('chat_notify', text, 0, true);
+          } catch {
+            options.onToolEnd?.('chat_notify', text, 0, false);
+          }
+        }
+        used.push('chat_notify');
+        conversation.push({ role: 'tool', toolCallId: call.id, name: 'chat_notify', content: `사용자에게 "${text}" 안내를 보냈습니다.` });
+        continue;
+      }
       if (options.unattended && (await needsHumanApproval(call.name, call.args))) {
         needsApproval = call.name;
         conversation.push({
@@ -95,8 +115,24 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
         break;
       }
       const { runTool } = await import('./tools');
-      const output = await runTool(call.name, call.args);
+      const startedAt = Date.now();
+      options.onToolStart?.(call.name, call.args);
+      let output: { content: string };
+      try {
+        output = await runTool(call.name, call.args);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        options.onToolEnd?.(call.name, message, Date.now() - startedAt, false);
+        conversation.push({
+          role: 'tool',
+          toolCallId: call.id,
+          name: call.name,
+          content: `도구 실행 중 오류가 났습니다: ${message}`,
+        });
+        continue;
+      }
       used.push(call.name);
+      options.onToolEnd?.(call.name, output.content, Date.now() - startedAt, true);
       options.onToolResult?.(call.name, output.content);
       conversation.push({ role: 'tool', toolCallId: call.id, name: call.name, content: output.content });
     }
@@ -112,6 +148,8 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
  * 결제·게시·삭제·전송처럼 되돌릴 수 없는 행동은 잡에서 자동 실행하지 않는다(승인 대기로 끝냄).
  */
 export async function needsHumanApproval(name: string, args: Record<string, unknown>): Promise<boolean> {
+  // 무인 실행에서 금고 비밀번호를 꺼내 로그인하는 것은 사람 확인 없이 하지 않는다.
+  if (name === 'browser_fill_vault') return true;
   if (name.startsWith('browser_')) {
     const { evaluateBrowserAction } = await import('./policy');
     const verdict = evaluateBrowserAction(name, args);

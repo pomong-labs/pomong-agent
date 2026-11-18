@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   AlarmClock,
   Bell,
@@ -36,12 +36,68 @@ const RUN_STATUS: Record<JobRunStatus, { label: string; color: string; bg: strin
   approval_needed: { label: '승인 대기', color: '#C08A16', bg: '#FFF8E7' },
 };
 
-const CRON_PRESETS = [
-  { label: '매일 08:00', cron: '0 8 * * *' },
-  { label: '평일 09:00', cron: '0 9 * * 1-5' },
-  { label: '30분마다', cron: '*/30 * * * *' },
-  { label: '매주 월 09:00', cron: '0 9 * * 1' },
+
+/* ------------------------------------------------------------------ */
+/* 쉬운 주기 설정 — 크론 문법을 몰라도 고를 수 있게                    */
+/* ------------------------------------------------------------------ */
+
+type RepeatMode = 'daily' | 'weekdays' | 'weekly' | 'minutes' | 'hours';
+
+const WEEKDAYS = [
+  { value: 0, label: '일' },
+  { value: 1, label: '월' },
+  { value: 2, label: '화' },
+  { value: 3, label: '수' },
+  { value: 4, label: '목' },
+  { value: 5, label: '금' },
+  { value: 6, label: '토' },
 ];
+
+interface EasySchedule {
+  mode: RepeatMode;
+  hour: number;
+  minute: number;
+  weekday: number;
+  every: number;
+}
+
+function parseCron(cron: string): EasySchedule | null {
+  const parts = cron.trim().split(/\s+/);
+  if (parts.length !== 5) return null;
+  const [min, hour, dom, mon, dow] = parts;
+  const num = (v: string, fallback = 0) => (/^\d+$/.test(v) ? Number(v) : fallback);
+  if (/^\*\/(\d+)$/.test(min) && hour === '*' && dom === '*' && mon === '*' && dow === '*') {
+    return { mode: 'minutes', hour: 8, minute: 0, weekday: 1, every: num(RegExp.$1, 30) };
+  }
+  if (min === '0' && /^\*\/(\d+)$/.test(hour) && dom === '*' && mon === '*' && dow === '*') {
+    return { mode: 'hours', hour: 8, minute: 0, weekday: 1, every: num(RegExp.$1, 6) };
+  }
+  if (/^\d+$/.test(min) && /^\d+$/.test(hour) && dom === '*' && mon === '*') {
+    if (dow === '*') return { mode: 'daily', hour: num(hour), minute: num(min), weekday: 1, every: 30 };
+    if (dow === '1-5') return { mode: 'weekdays', hour: num(hour), minute: num(min), weekday: 1, every: 30 };
+    if (/^[0-6]$/.test(dow)) return { mode: 'weekly', hour: num(hour), minute: num(min), weekday: num(dow), every: 30 };
+  }
+  return null;
+}
+
+function buildCron(easy: EasySchedule): string {
+  const time = `${easy.minute} ${easy.hour}`;
+  if (easy.mode === 'daily') return `${time} * * *`;
+  if (easy.mode === 'weekdays') return `${time} * * 1-5`;
+  if (easy.mode === 'weekly') return `${time} * * ${easy.weekday}`;
+  const every = Math.max(1, Math.min(59, easy.every));
+  if (easy.mode === 'minutes') return `*/${every} * * * *`;
+  return `0 */${Math.max(1, Math.min(23, easy.every))} * * *`;
+}
+
+function scheduleSummary(easy: EasySchedule): string {
+  const time = `${String(easy.hour).padStart(2, '0')}:${String(easy.minute).padStart(2, '0')}`;
+  if (easy.mode === 'daily') return `매일 ${time}`;
+  if (easy.mode === 'weekdays') return `평일 ${time}`;
+  if (easy.mode === 'weekly') return `매주 ${WEEKDAYS.find((d) => d.value === easy.weekday)?.label || '월'}요일 ${time}`;
+  if (easy.mode === 'minutes') return `${easy.every}분마다`;
+  return `${easy.every}시간마다`;
+}
 
 const MODE_LABELS: Record<WatchMode, string> = {
   text: '전체 텍스트',
@@ -598,20 +654,7 @@ function JobEditor({ job, onClose, onSaved }: { job?: AutomationJob; onClose: ()
         </label>
         <div>
           <span className="text-[12.5px] font-semibold text-[#6B677A]">주기</span>
-          <div className="mt-1 flex flex-wrap gap-1.5">
-            {CRON_PRESETS.map((preset) => (
-              <button
-                key={preset.cron}
-                onClick={() => setCron(preset.cron)}
-                className={`rounded-full border px-3 py-1.5 text-[12px] font-semibold transition ${
-                  cron === preset.cron ? 'border-[#D6C9FF] bg-[#F5F0FF] text-[#7C63F6]' : 'border-[#EFEDF6] bg-white text-[#8A8A9A]'
-                }`}
-              >
-                {preset.label}
-              </button>
-            ))}
-          </div>
-          <input className="pa-input mt-2 font-mono text-[13px]" value={cron} onChange={(e) => setCron(e.target.value)} />
+          <ScheduleField value={cron} onChange={setCron} />
           <p className="mt-1 text-[11.5px] text-[#A8A5B8]">
             {preview.error ? (
               <span className="text-[#E5484D]">{preview.error}</span>
@@ -631,6 +674,7 @@ function JobEditor({ job, onClose, onSaved }: { job?: AutomationJob; onClose: ()
               </option>
             ))}
           </select>
+          <span className="text-[11.5px] text-[#B4B1C2]">한 번 실행 시 AI가 도구를 연속 호출할 수 있는 최대 횟수</span>
         </label>
         <p className="rounded-[12px] bg-[#FFF8E7] px-3 py-2 text-[11.5px] leading-[1.5] text-[#9A7412]">
           예약 실행은 사람이 필요한 단계(결제·로그인·게시)를 스스로 하지 않고, 그 지점에서 멈춰 알려드려요.
@@ -646,6 +690,137 @@ function JobEditor({ job, onClose, onSaved }: { job?: AutomationJob; onClose: ()
         </div>
       </div>
     </Sheet>
+  );
+}
+
+function ScheduleField({ value, onChange }: { value: string; onChange: (cron: string) => void }) {
+  const parsed = parseCron(value);
+  const [easy, setEasy] = useState<EasySchedule>(parsed || { mode: 'daily', hour: 8, minute: 0, weekday: 1, every: 30 });
+  const [advanced, setAdvanced] = useState(!parsed);
+  const lastSent = useRef('');
+
+  useEffect(() => {
+    if (value === lastSent.current) return;
+    const next = parseCron(value);
+    if (next) {
+      setEasy(next);
+      setAdvanced(false);
+    } else {
+      setAdvanced(true);
+    }
+  }, [value]);
+
+  const apply = (next: EasySchedule) => {
+    setEasy(next);
+    const cron = buildCron(next);
+    lastSent.current = cron;
+    onChange(cron);
+  };
+
+  const modes: { id: RepeatMode; label: string }[] = [
+    { id: 'daily', label: '매일' },
+    { id: 'weekdays', label: '평일' },
+    { id: 'weekly', label: '매주' },
+    { id: 'minutes', label: 'N분마다' },
+    { id: 'hours', label: 'N시간마다' },
+  ];
+
+  return (
+    <div className="mt-1 rounded-2xl bg-[#FAF9FD] p-3">
+      <div className="flex flex-wrap gap-1.5">
+        {modes.map((mode) => (
+          <button
+            key={mode.id}
+            onClick={() => apply({ ...easy, mode: mode.id })}
+            className={`rounded-full border px-3 py-1.5 text-[12px] font-semibold transition ${
+              easy.mode === mode.id ? 'border-[#D6C9FF] bg-white text-[#7C63F6]' : 'border-transparent bg-white/60 text-[#8A8A9A]'
+            }`}
+          >
+            {mode.label}
+          </button>
+        ))}
+      </div>
+
+      {easy.mode === 'weekly' ? (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {WEEKDAYS.map((day) => (
+            <button
+              key={day.value}
+              onClick={() => apply({ ...easy, weekday: day.value })}
+              className={`h-8 w-8 rounded-full text-[12px] font-bold transition ${
+                easy.weekday === day.value ? 'bg-[#7C63F6] text-white' : 'bg-white text-[#8A8A9A]'
+              }`}
+            >
+              {day.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      {easy.mode === 'minutes' || easy.mode === 'hours' ? (
+        <div className="mt-2 flex items-center gap-2 text-[13px] text-[#5B5866]">
+          <select
+            className="rounded-xl border border-[#E9E7F2] bg-white px-2 py-1.5 text-[13px]"
+            value={easy.every}
+            onChange={(e) => apply({ ...easy, every: Number(e.target.value) })}
+          >
+            {(easy.mode === 'minutes' ? [5, 10, 15, 20, 30, 45] : [1, 2, 3, 4, 6, 8, 12]).map((n) => (
+              <option key={n} value={n}>
+                {n}
+                {easy.mode === 'minutes' ? '분' : '시간'}
+              </option>
+            ))}
+          </select>
+          <span>마다 실행</span>
+        </div>
+      ) : (
+        <div className="mt-2 flex items-center gap-1.5 text-[13px] text-[#5B5866]">
+          <select
+            className="rounded-xl border border-[#E9E7F2] bg-white px-2 py-1.5 text-[13px]"
+            value={easy.hour}
+            onChange={(e) => apply({ ...easy, hour: Number(e.target.value) })}
+          >
+            {Array.from({ length: 24 }, (_, h) => (
+              <option key={h} value={h}>
+                {String(h).padStart(2, '0')}시
+              </option>
+            ))}
+          </select>
+          <select
+            className="rounded-xl border border-[#E9E7F2] bg-white px-2 py-1.5 text-[13px]"
+            value={easy.minute}
+            onChange={(e) => apply({ ...easy, minute: Number(e.target.value) })}
+          >
+            {[0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55].map((m) => (
+              <option key={m} value={m}>
+                {String(m).padStart(2, '0')}분
+              </option>
+            ))}
+          </select>
+          <span className="ml-1 rounded-full bg-[#F1ECFF] px-2 py-0.5 text-[11.5px] font-bold text-[#7C63F6]">{scheduleSummary(easy)}</span>
+        </div>
+      )}
+
+      <button
+        className="mt-2 text-[11.5px] font-semibold text-[#A8A5B8] underline-offset-2 hover:underline"
+        onClick={() => setAdvanced((v) => !v)}
+      >
+        고급(크론 직접 입력) {advanced ? '접기' : '열기'}
+      </button>
+      {advanced ? (
+        <input
+          className="pa-input mt-1.5 font-mono text-[13px]"
+          value={value}
+          onChange={(e) => {
+            lastSent.current = e.target.value;
+            onChange(e.target.value);
+            const next = parseCron(e.target.value);
+            if (next) setEasy(next);
+          }}
+          placeholder="0 8 * * *"
+        />
+      ) : null}
+    </div>
   );
 }
 

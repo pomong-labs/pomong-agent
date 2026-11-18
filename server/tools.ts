@@ -6,6 +6,8 @@ import { weatherReport } from './weather';
 import * as browser from './browser';
 import * as jobs from './jobs';
 import * as watchers from './watchers';
+import * as memory from './memory';
+import { webSearch, formatSearch } from './web-search';
 import type { ToolSpec } from './providers';
 
 export type TaskPriority = 'high' | 'normal' | 'low';
@@ -202,6 +204,101 @@ export const TOOL_SPECS: ToolSpec[] = [
     parameters: { type: 'object', properties: {} },
   },
 
+  /* --------------- v0.5.0: 무료 웹 검색 · 중간 말풍선 --------------- */
+  {
+    name: 'web_search',
+    description:
+      'API 키 없이 동작하는 무료 웹 검색. 사이트를 직접 열지 않아도 되는 사실·가격·뉴스·설명을 찾을 때 쓴다. 봇 차단이 강한 사이트(쿠팡 등)에서 browser_open이 막히면 이 도구로 찾아 답한다. 제목·주소·발췌문 상위 5~8건을 돌려준다.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: '검색어 (예: "아이폰 17 쿠팡 가격")' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'chat_notify',
+    description:
+      '오래 걸리는 작업(브라우저 열기·검색·여러 단계)을 시작하기 전에 사용자에게 짧은 안내 말풍선을 먼저 보낸다. 예: "깃허브 연동해 드릴게요, 잠시만요!". 같은 작업에서 한 번만 쓴다.',
+    parameters: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: '사용자에게 보여 줄 한두 문장' },
+      },
+      required: ['text'],
+    },
+  },
+
+  /* --------------------- v0.5.0: 영구 기억 --------------------- */
+  {
+    name: 'memory_save',
+    description:
+      '사용자에 대해 오래 기억할 사실을 저장한다. 사용자가 달라고 하지 않아도 취향·습관·직업·중요한 인물·약속·프로젝트 규칙이 나오면 스스로 저장한다. 인사말·일회성 요청은 저장하지 않는다.',
+    parameters: {
+      type: 'object',
+      properties: {
+        content: { type: 'string', description: '기억할 내용 한 문장 (예: "아침 브리핑은 강원도 인제 날씨로 받고 싶어 한다")' },
+        category: {
+          type: 'string',
+          enum: ['profile', 'taste', 'habit', 'person', 'promise', 'project', 'rule', 'other'],
+          description: '분류 (기본 other)',
+        },
+        importance: { type: 'number', description: '중요도 1~5 (기본 2, 규칙·중요한 약속은 4~5)' },
+      },
+      required: ['content'],
+    },
+  },
+  {
+    name: 'memory_search',
+    description: '저장된 기억을 키워드로 찾는다. 사용자의 취향·약속·과거 대화 내용을 확인할 때 쓴다.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: '검색어 (비우면 전체)' },
+      },
+    },
+  },
+  {
+    name: 'memory_delete',
+    description: '저장된 기억을 지운다. 사용자가 "그거 잊어줘"라고 하거나 잘못 저장한 것을 정리할 때 쓴다.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: '지울 기억의 내용 일부 또는 id' },
+      },
+      required: ['query'],
+    },
+  },
+
+  /* ------------------- v0.5.0: 금고 자동 로그인 ------------------- */
+  {
+    name: 'vault_find_for_site',
+    description:
+      '사이트·서비스 이름으로 금고에 저장된 계정을 찾는다. 비밀번호·아이디 원문은 돌려주지 않고 id·제목·마스킹된 아이디·기본 계정 여부만 준다. 로그인이 필요할 때 먼저 이 도구로 계정을 확인한다.',
+    parameters: {
+      type: 'object',
+      properties: {
+        site_or_service: { type: 'string', description: '사이트·서비스 이름 (예: "깃허브", "쿠팡")' },
+      },
+      required: ['site_or_service'],
+    },
+  },
+  {
+    name: 'browser_fill_vault',
+    description:
+      '금고에 저장된 아이디/비밀번호를 브라우저 입력창에 서버가 직접 채운다(값은 AI에게 전달되지 않는다). 로그인 화면에서만 쓴다. 금고가 잠겨 있으면 먼저 금고 잠금 해제를 안내한다.',
+    parameters: {
+      type: 'object',
+      properties: {
+        vault_id: { type: 'string', description: 'vault_find_for_site가 준 항목 id' },
+        field: { type: 'string', enum: ['username', 'password'], description: '채울 값' },
+        ref: { type: 'string', description: '입력창 요소 ref (browser_snapshot에서 확인)' },
+      },
+      required: ['vault_id', 'field', 'ref'],
+    },
+  },
+
   /* ---------------------- Phase 2: 자율 웹 브라우저 ---------------------- */
   {
     name: 'browser_open',
@@ -394,6 +491,24 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
     label: '웹 변화 감시',
     summary: '페이지가 바뀌면 알려줘요. 가격·재고 감시에 써요(구매는 하지 않아요).',
     example: '이 상품 재입고되면 알려줘',
+  },
+  {
+    name: 'web_search',
+    label: '웹 검색',
+    summary: 'API 키 없이 웹을 검색해 제목·주소·발췌문을 가져와요. 사이트가 막혔을 때도 최소한 정보를 찾아요.',
+    example: '요즘 아이폰 17 최저가 알려줘',
+  },
+  {
+    name: 'memory_save',
+    label: '영구 기억',
+    summary: '취향·습관·약속을 스스로 기억해 다음 대화에도 반영해요. 기억함에서 직접 고칠 수 있어요.',
+    example: '내일 오후 3시 취사장 근무 기억해줘',
+  },
+  {
+    name: 'vault_find_for_site',
+    label: '금고 자동 로그인',
+    summary: '금고 계정으로 로그인 화면을 채워요. 비밀번호는 AI에게 전달되지 않아요.',
+    example: '깃허브 로그인해줘',
   },
 ];
 
@@ -594,6 +709,88 @@ export async function runTool(name: string, args: Record<string, unknown>): Prom
         return { content: `워치를 만들었습니다: ${watch.name} · ${watch.intervalMin}분마다 확인` };
       } catch (err) {
         return { content: `워치를 만들지 못했습니다: ${err instanceof Error ? err.message : String(err)}` };
+      }
+    }
+    case 'web_search': {
+      try {
+        const result = await webSearch(String(args.query || ''));
+        return { content: formatSearch(result) };
+      } catch (err) {
+        return { content: `검색하지 못했습니다: ${err instanceof Error ? err.message : String(err)}` };
+      }
+    }
+    case 'chat_notify': {
+      // 실제 발송은 agent-loop가 담당한다(메시지 저장 + SSE).
+      return { content: '사용자에게 안내 말풍선을 보냈습니다. 이어서 작업을 진행하세요.' };
+    }
+    case 'memory_save': {
+      try {
+        const saved = memory.createMemory({
+          content: String(args.content || ''),
+          category: args.category,
+          importance: args.importance,
+          source: 'chat',
+        });
+        return { content: `기억에 저장했습니다: ${saved.content}` };
+      } catch (err) {
+        return { content: `기억하지 못했습니다: ${err instanceof Error ? err.message : String(err)}` };
+      }
+    }
+    case 'memory_search': {
+      const query = String(args.query || '').trim();
+      const items = query ? memory.searchMemories(query, 10) : memory.listMemories(undefined, 20);
+      return { content: memory.formatMemoryList(items) };
+    }
+    case 'memory_delete': {
+      const query = String(args.query || '').trim();
+      if (!query) return { content: '어떤 기억을 지울지 알려 주세요.' };
+      const byId = memory.deleteMemory(query);
+      const count = byId ? 1 : memory.deleteMemoriesByText(query);
+      return { content: count ? `기억 ${count}개를 지웠습니다.` : `'${query}'와 맞는 기억을 찾지 못했습니다.` };
+    }
+    case 'vault_find_for_site': {
+      const term = String(args.site_or_service || '').trim();
+      if (!term) return { content: '어떤 사이트의 계정을 찾을지 알려 주세요.' };
+      const matches = vault.findForSite(term);
+      if (!matches.length) {
+        return {
+          content: `금고에 '${term}' 계정이 없습니다. 금고 탭에서 계정을 추가하거나, 사용자에게 직접 로그인을 부탁하세요.`,
+        };
+      }
+      const lines = matches.map(
+        (m) =>
+          `- id=${m.id} · ${m.title} (${m.type === 'login' ? '로그인' : m.type === 'apikey' ? 'API 키' : '메모'}) · 아이디 ${m.usernameMasked || '없음'}${m.isDefault ? ' · 기본 계정' : ''}`
+      );
+      const multi = matches.filter((m) => m.type === 'login').length;
+      const hasDefault = matches.some((m) => m.isDefault);
+      const hint =
+        multi > 1 && !hasDefault
+          ? '\n⚠️ 같은 서비스에 계정이 여러 개이고 기본 계정이 없습니다. 임의로 고르지 말고, 채팅에서 어느 계정을 쓸지 사용자에게 물어보세요.'
+          : '';
+      return {
+        content: `금고에서 '${term}' 계정 ${matches.length}개를 찾았습니다(비밀번호는 표시하지 않음):\n${lines.join('\n')}\n입력은 browser_fill_vault(vault_id, field, ref)로 서버가 직접 합니다.${hint}`,
+      };
+    }
+    case 'browser_fill_vault': {
+      const vaultId = String(args.vault_id || '');
+      const field = String(args.field || '') === 'password' ? 'password' : 'username';
+      const ref = String(args.ref || '');
+      if (!vaultId || !ref) return { content: '금고 항목 id와 입력창 ref가 필요합니다.' };
+      try {
+        const values = vault.secretForFill(vaultId);
+        const value = field === 'password' ? values.secret : values.username;
+        if (!value) return { content: `이 항목에는 ${field === 'password' ? '비밀번호' : '아이디'}가 저장되어 있지 않습니다.` };
+        const result = await browser.fillFromVault(ref, value, field);
+        return { content: `${field === 'password' ? '비밀번호' : '아이디'}를 금고에서 채웠습니다(값은 기록하지 않음).\n\n${result.snapshot}`, meta: 'browser' };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (message.includes('잠겨')) {
+          return {
+            content:
+              '금고가 잠겨 있어 자동 입력을 할 수 없습니다. 사용자에게 금고 탭에서 PIN으로 잠금을 해제해 달라고 안내한 뒤 다시 시도하세요.',
+          };
+        }
+        return { content: `자동 입력에 실패했습니다: ${message}` };
       }
     }
     case 'time_now': {

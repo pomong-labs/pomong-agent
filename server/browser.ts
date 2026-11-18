@@ -22,6 +22,10 @@ export const BROWSER_WS_URL = process.env.BROWSER_WS_URL || 'ws://browser:9222/'
 export const BROWSER_CONTROL_URL = (process.env.BROWSER_CONTROL_URL || 'http://browser:9223/').replace(/\/$/, '');
 export const BROWSER_ENABLED = process.env.BROWSER_ENABLED !== '0';
 
+/** 일반 데스크톱 Chrome UA (헤드리스 기본 UA 문구로 인한 차단을 줄인다) */
+export const DESKTOP_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
 export type ControlOwner = 'agent' | 'user';
 export type HandoverReason = 'login' | 'otp' | 'captcha' | 'payment' | 'identity' | 'manual';
 
@@ -72,6 +76,74 @@ interface LiveSession {
   page: Page;
   frameAt: number;
   frame: Buffer | null;
+  stateSavedAt: number;
+}
+
+/** 브라우저 로그인 세션(쿠키·로컬스토리지)을 보관하는 파일. data/ 안이라 배포해도 유지된다. */
+export const BROWSER_STATE_FILE = path.join(DATA_DIR, 'browser-state.json');
+
+/** 저장된 로그인 세션 파일을 읽는다(없거나 깨졌으면 null). */
+function readStorageState(): { cookies: unknown[]; origins: unknown[] } | null {
+  try {
+    const raw = JSON.parse(fs.readFileSync(BROWSER_STATE_FILE, 'utf8')) as { cookies?: unknown[]; origins?: unknown[] };
+    if (!Array.isArray(raw.cookies)) return null;
+    if (!raw.cookies.length && !(raw.origins || []).length) return null;
+    return { cookies: raw.cookies, origins: raw.origins || [] };
+  } catch {
+    return null;
+  }
+}
+
+/** 저장된 세션에 쿠키가 남아 있는 도메인 목록(연결 카탈로그의 '연결됨' 판정에 쓴다) */
+export function browserStateHosts(): string[] {
+  const state = readStorageState();
+  if (!state) return [];
+  const hosts = new Set<string>();
+  for (const cookie of state.cookies as { domain?: string }[]) {
+    const domain = String(cookie?.domain || '').replace(/^\./, '');
+    if (domain) hosts.add(domain.toLowerCase());
+  }
+  for (const origin of state.origins as { origin?: string }[]) {
+    try {
+      const host = origin?.origin ? new URL(origin.origin).hostname : '';
+      if (host) hosts.add(host.toLowerCase());
+    } catch {
+      /* ignore */
+    }
+  }
+  return Array.from(hosts);
+}
+
+/** 설정의 '브라우저 로그인 세션 초기화' */
+export function clearSavedState(): boolean {
+  try {
+    fs.rmSync(BROWSER_STATE_FILE, { force: true });
+    addLog('info', '저장된 브라우저 로그인 세션을 초기화했습니다');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 지금 열려 있는 컨텍스트의 쿠키·스토리지를 파일로 저장한다(최소 4초 간격). */
+async function saveState(session: LiveSession, force = false): Promise<void> {
+  const now = Date.now();
+  if (!force && now - session.stateSavedAt < 4_000) return;
+  if (!live.size) return;
+  try {
+    await session.context.storageState({ path: BROWSER_STATE_FILE });
+    session.stateSavedAt = now;
+  } catch {
+    /* 페이지가 닫히는 중이면 실패할 수 있다 — 다음 기회에 다시 저장한다 */
+  }
+}
+
+/** 세션 id로 저장(다른 모듈에서도 호출) */
+export async function persistSessionState(sessionId?: string): Promise<void> {
+  const id = sessionId || activeSession()?.id;
+  if (!id) return;
+  const session = live.get(id);
+  if (session) await saveState(session, true);
 }
 
 const live = new Map<string, LiveSession>();
@@ -288,20 +360,48 @@ export function listActions(sessionId: string, limit = 40): { id: string; actor:
 
 async function openContext(id: string): Promise<LiveSession> {
   const browser = await connectBrowser();
+  const state = readStorageState();
   const context = await withTimeout(
     browser.newContext({
       viewport: { width: 1280, height: 800 },
       locale: 'ko-KR',
       timezoneId: 'Asia/Seoul',
       acceptDownloads: true, // 내려받은 파일은 워커 안에 저장된다
+      // 일반 데스크톱 Chrome으로 보이게 한다(불필요한 봇 차단 감소).
+      userAgent: DESKTOP_UA,
+      extraHTTPHeaders: { 'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7' },
+      // 지난번에 로그인해 둔 쿠키·스토리지를 그대로 이어받는다(깃허브·쇼핑몰 로그인 유지).
+      ...(state ? { storageState: state as never } : {}),
     }),
     20_000,
     '브라우저 컨텍스트 생성'
   );
+  // 기본 스텔스: navigator.webdriver·헤드리스 흔적을 지운다(읽기 전용 조작만 하고, 차단 회피용 우회는 하지 않는다).
+  await context.addInitScript(() => {
+    try {
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+      Object.defineProperty(navigator, 'languages', { get: () => ['ko-KR', 'ko', 'en-US', 'en'] });
+      Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+      Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+      if (!(window as unknown as { chrome?: unknown }).chrome) {
+        (window as unknown as { chrome?: unknown }).chrome = { runtime: {} };
+      }
+      const originalQuery = window.navigator.permissions?.query?.bind(window.navigator.permissions);
+      if (originalQuery) {
+        window.navigator.permissions.query = (params: PermissionDescriptor) =>
+          params.name === 'notifications'
+            ? Promise.resolve({ state: Notification.permission } as PermissionStatus)
+            : originalQuery(params);
+      }
+    } catch {
+      /* 무시 */
+    }
+  });
   const page = await withTimeout(context.newPage(), 20_000, '브라우저 탭 열기');
   page.setDefaultTimeout(20_000);
-  const session: LiveSession = { browser, context, page, frameAt: 0, frame: null };
+  const session: LiveSession = { browser, context, page, frameAt: 0, frame: null, stateSavedAt: 0 };
   live.set(id, session);
+  if (state) addLog('info', '저장된 브라우저 로그인 세션을 불러왔습니다');
   return session;
 }
 
@@ -354,6 +454,8 @@ export async function closeSession(id?: string): Promise<void> {
   if (!target) return;
   const s = live.get(target);
   if (s) {
+    // 닫기 전에 로그인 세션을 저장한다(다음에 다시 열 때 로그인 유지).
+    await saveState(s, true);
     try {
       await s.context.close();
     } catch {
@@ -544,6 +646,7 @@ export async function openUrl(url: string, convId?: string): Promise<OpenResult>
   const data = await takeSnapshot(s.page);
   touch(session.id, { url: data.url, title: data.title });
   logAction(session.id, 'agent', 'browser.open', { url }, data.title, data.url);
+  void saveState(s);
   if (data.handover) {
     // 로그인·캡차 화면이면 자동으로 사람에게 넘길 준비를 한다(요청은 모델이 한다).
     const hint = `\n\n※ 이 화면은 '${HANDOVER_LABELS[data.handover]}' 상태입니다. 필요한 부분을 사용자에게 넘기려면 browser_handover를 부르세요.`;
@@ -585,6 +688,7 @@ export async function click(args: { ref?: string; text?: string; sessionId?: str
   const data = await takeSnapshot(s.page);
   touch(session.id, { url: data.url, title: data.title });
   logAction(session.id, 'agent', 'browser.click', args, data.title, data.url);
+  void saveState(s);
   return { sessionId: session.id, snapshot: formatSnapshot(data, session.id) };
 }
 
@@ -612,6 +716,44 @@ export async function typeInto(args: { ref?: string; text: string; submit?: bool
   const data = await takeSnapshot(s.page);
   touch(session.id, { url: data.url, title: data.title });
   logAction(session.id, 'agent', 'browser.type', { ref: args.ref, text: args.text }, data.title, data.url);
+  void saveState(s);
+  return { sessionId: session.id, snapshot: formatSnapshot(data, session.id) };
+}
+
+/**
+ * 금고에서 꺼낸 값을 브라우저 입력창에 직접 넣는다 (v0.5.0).
+ * 값은 이 함수 안에서만 쓰고, 감사 로그·도구 응답·AI 대화에는 절대 남기지 않는다.
+ */
+export async function fillFromVault(
+  ref: string,
+  value: string,
+  field: 'username' | 'password'
+): Promise<{ sessionId: string; snapshot: string }> {
+  if (!value) throw new Error('금고에 저장된 값이 비어 있습니다.');
+  const session = activeSession();
+  if (!session) throw new Error('열린 브라우저 세션이 없습니다.');
+  guardAgent(session, evaluateUrl(session.url || 'about:blank').level);
+  const s = await ensureLive(session.id);
+  const selector = `[data-pomong-ref="${String(ref || '').replace(/[^a-zA-Z0-9_-]/g, '')}"]`;
+  const handle = s.page.locator(selector).first();
+  if (!(await handle.count())) throw new Error(`입력창을 찾지 못했습니다: ${ref}`);
+  await handle.fill(value);
+  await handle.evaluate((el) => {
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  const data = await takeSnapshot(s.page);
+  touch(session.id, { url: data.url, title: data.title });
+  void saveState(s);
+  // 감사 로그에는 '금고 값으로 채웠다'만 남긴다.
+  logAction(
+    session.id,
+    'agent',
+    'browser.fill_vault',
+    { ref, field, value: '***' },
+    `${field === 'password' ? '비밀번호' : '아이디'}를 금고에서 채움`,
+    data.url
+  );
   return { sessionId: session.id, snapshot: formatSnapshot(data, session.id) };
 }
 
@@ -722,7 +864,7 @@ export async function captureFrame(sessionId: string): Promise<{ frame: Buffer; 
 }
 
 export interface UserInputPayload {
-  type: 'click' | 'move' | 'text' | 'key' | 'scroll' | 'back' | 'forward' | 'reload' | 'goto';
+  type: 'click' | 'rightclick' | 'move' | 'text' | 'key' | 'scroll' | 'back' | 'forward' | 'reload' | 'goto';
   x?: number;
   y?: number;
   text?: string;
@@ -731,20 +873,29 @@ export interface UserInputPayload {
   url?: string;
 }
 
-/** 사용자가 직접 조작할 때의 입력 전달(핸드오버 중에만 허용) */
+/** 보고만 하는 중에도 허용하는 입력(스크롤·포인터 이동·이동/새로고침) */
+const VIEW_ONLY_INPUTS: UserInputPayload['type'][] = ['scroll', 'move', 'reload', 'back', 'forward', 'goto'];
+
+/** 사용자가 직접 조작할 때의 입력 전달 */
 export async function userInput(sessionId: string, payload: UserInputPayload): Promise<{ ok: true }> {
   const session = row(sessionId);
   if (!session) throw new Error('세션을 찾을 수 없습니다.');
-  if (session.control_owner !== 'user') throw new Error('지금은 AI가 조작 중입니다. 먼저 화면을 넘겨받으세요.');
-  if (!leaseActive(session)) {
-    touch(sessionId, { control_owner: 'agent', handover_reason: null, lease_expires_at: null });
-    throw new Error('넘겨받은 시간이 끝났습니다(15분). 다시 넘겨받아 주세요.');
+  const viewOnly = VIEW_ONLY_INPUTS.includes(payload.type);
+  if (!viewOnly) {
+    if (session.control_owner !== 'user') throw new Error('지금은 AI가 조작 중입니다. 먼저 화면을 넘겨받으세요.');
+    if (!leaseActive(session)) {
+      touch(sessionId, { control_owner: 'agent', handover_reason: null, lease_expires_at: null });
+      throw new Error('넘겨받은 시간이 끝났습니다(15분). 다시 넘겨받아 주세요.');
+    }
   }
   const s = await ensureLive(sessionId);
   const page = s.page;
   switch (payload.type) {
     case 'click':
       await page.mouse.click(Number(payload.x) || 0, Number(payload.y) || 0);
+      break;
+    case 'rightclick':
+      await page.mouse.click(Number(payload.x) || 0, Number(payload.y) || 0, { button: 'right' });
       break;
     case 'move':
       await page.mouse.move(Number(payload.x) || 0, Number(payload.y) || 0);
@@ -777,8 +928,13 @@ export async function userInput(sessionId: string, payload: UserInputPayload): P
     default:
       throw new Error('알 수 없는 입력입니다.');
   }
-  // 핸드오버 중 사용자가 조작하는 동안 리스를 연장한다(무입력 5분 정지 대신 15분 고정).
-  touch(sessionId, { lease_expires_at: new Date(Date.now() + 15 * 60_000).toISOString(), url: page.url() });
+  if (!viewOnly) {
+    // 핸드오버 중 사용자가 조작하는 동안 리스를 연장한다(무입력 5분 정지 대신 15분 고정).
+    touch(sessionId, { lease_expires_at: new Date(Date.now() + 15 * 60_000).toISOString(), url: page.url() });
+  } else {
+    touch(sessionId, { url: page.url() });
+  }
+  void saveState(s);
   // 사람이 한 조작도 감사 로그에 남긴다(입력한 글자는 남기지 않는다).
   const label =
     payload.type === 'text'

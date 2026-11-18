@@ -49,9 +49,16 @@ export default function Browser() {
   const [editingAddress, setEditingAddress] = useState(false);
   const [typed, setTyped] = useState('');
   const [hint, setHint] = useState('');
+  const [zoom, setZoom] = useState(1);
+  const [rightMode, setRightMode] = useState(false);
+  const [cursor, setCursor] = useState<{ x: number; y: number; key: number } | null>(null);
   const frameRef = useRef<string | null>(null);
   const etagRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const frameBoxRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{ startX: number; startY: number; lastY: number; moved: boolean; at: number } | null>(null);
+  const wakeRef = useRef<(() => void) | null>(null);
+  const wheelRef = useRef<{ timer: number; dy: number }>({ timer: 0, dy: 0 });
 
   const loadStatus = useCallback(async () => {
     try {
@@ -134,13 +141,26 @@ export default function Browser() {
         } catch {
           failures += 1;
         }
-        await new Promise((resolve) => window.setTimeout(resolve, failures > 2 ? 3000 : 700));
+        // 입력 직후에는 0.7초를 기다리지 않고 곧바로(120ms) 새 화면을 한 번 더 당긴다.
+        await new Promise<void>((resolve) => {
+          let done = false;
+          const finish = () => {
+            if (done) return;
+            done = true;
+            wakeRef.current = null;
+            window.clearTimeout(timer);
+            resolve();
+          };
+          const timer = window.setTimeout(finish, failures > 2 ? 3000 : 700);
+          wakeRef.current = finish;
+        });
       }
     };
     void tick();
 
     return () => {
       stopped = true;
+      wakeRef.current = null;
       if (frameRef.current) {
         URL.revokeObjectURL(frameRef.current);
         frameRef.current = null;
@@ -148,6 +168,11 @@ export default function Browser() {
       setFrameUrl(null);
     };
   }, [streamId, streamAlive]);
+
+  /** 입력 직후 즉시 한 프레임 더 */
+  const bumpFrame = () => {
+    window.setTimeout(() => wakeRef.current?.(), 120);
+  };
 
   const startSession = async () => {
     setStarting(true);
@@ -170,6 +195,8 @@ export default function Browser() {
       setHint('');
     } catch (err) {
       setHint(err instanceof Error ? err.message : '입력을 전달하지 못했어요.');
+    } finally {
+      bumpFrame();
     }
   };
 
@@ -207,20 +234,96 @@ export default function Browser() {
     await loadStatus();
   };
 
+  /** 화면 위 좌표 → 실제 페이지 좌표(1280×800). 확대·스크롤과 무관하게 그린 영역의 rect로 역산한다. */
+  const toPagePoint = (event: { clientX: number; clientY: number }) => {
+    const box = frameBoxRef.current;
+    if (!box) return { x: 0, y: 0 };
+    const rect = box.getBoundingClientRect();
+    return {
+      x: Math.round(Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)) * VIEW_W),
+      y: Math.round(Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height)) * VIEW_H),
+    };
+  };
+
+  const showCursor = (point: { x: number; y: number }) => {
+    const key = Date.now();
+    setCursor({ ...point, key });
+    window.setTimeout(() => setCursor((prev) => (prev && prev.key === key ? null : prev)), 700);
+  };
+
   const onFrameClick = (event: React.MouseEvent<HTMLDivElement>) => {
     if (!session) return;
-    const rect = event.currentTarget.getBoundingClientRect();
-    const x = Math.round(((event.clientX - rect.left) / rect.width) * VIEW_W);
-    const y = Math.round(((event.clientY - rect.top) / rect.height) * VIEW_H);
+    const point = toPagePoint(event);
+    showCursor(point);
     if (session.controlOwner !== 'user') {
       setHint('AI가 조작 중이에요. 「제어권: 나」를 누르면 직접 누를 수 있어요.');
       return;
     }
-    void sendInput({ type: 'click', x, y });
+    void sendInput({ type: 'click', ...point });
+  };
+
+  const onFrameContextMenu = (event: React.MouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    if (!session || session.controlOwner !== 'user') return;
+    const point = toPagePoint(event);
+    showCursor(point);
+    void sendInput({ type: 'rightclick', ...point });
+  };
+
+  /** 터치·마우스 드래그: 조금이라도 움직이면 스크롤, 그대로면 탭(클릭) */
+  const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!session) return;
+    dragRef.current = { startX: event.clientX, startY: event.clientY, lastY: event.clientY, moved: false, at: Date.now() };
+  };
+
+  const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    const dyPx = event.clientY - drag.lastY;
+    if (!drag.moved && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) > 8) {
+      drag.moved = true;
+    }
+    if (!drag.moved) return;
+    drag.lastY = event.clientY;
+    const box = frameBoxRef.current;
+    const rect = box?.getBoundingClientRect();
+    const ratio = rect && rect.height > 0 ? VIEW_H / rect.height : 1;
+    void sendInput({ type: 'scroll', dy: Math.round(dyPx * ratio) });
+  };
+
+  const onPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    dragRef.current = null;
+    if (!drag || !session) return;
+    if (drag.moved) return;
+    if (Date.now() - drag.at > 700) return;
+    const point = toPagePoint(event);
+    showCursor(point);
+    if (session.controlOwner !== 'user') {
+      setHint('AI가 조작 중이에요. 「제어권: 나」를 누르면 직접 누를 수 있어요.');
+      return;
+    }
+    void sendInput({ type: rightMode ? 'rightclick' : 'click', ...point });
+  };
+
+  const onWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    if (!session) return;
+    const box = frameBoxRef.current;
+    const rect = box?.getBoundingClientRect();
+    const ratio = rect && rect.height > 0 ? VIEW_H / rect.height : 1;
+    wheelRef.current.dy += event.deltaY * ratio;
+    if (wheelRef.current.timer) return;
+    wheelRef.current.timer = window.setTimeout(() => {
+      const dy = Math.round(wheelRef.current.dy);
+      wheelRef.current = { timer: 0, dy: 0 };
+      if (dy) void sendInput({ type: 'scroll', dy });
+    }, 90);
   };
 
   const onTypeKey = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (session?.controlOwner !== 'user') return;
+    // 한글 조합 중(IME)에는 키를 하나씩 보내지 않는다 — 조합이 끝난 글자를 「입력」 버튼으로 통째로 보낸다.
+    if (event.nativeEvent.isComposing || event.key === 'Process') return;
     if (event.key === 'Enter') {
       event.preventDefault();
       void sendInput({ type: 'key', key: 'Enter' });
@@ -236,10 +339,14 @@ export default function Browser() {
       void sendInput({ type: 'key', key: 'Tab' });
       return;
     }
-    if (event.key.length === 1) {
-      event.preventDefault();
-      void sendInput({ type: 'text', text: event.key });
-    }
+  };
+
+  /** 입력창의 글자(붙여넣기 포함)를 통째로 페이지에 넣는다 */
+  const sendTyped = () => {
+    const text = typed;
+    if (!text) return;
+    setTyped('');
+    void sendInput({ type: 'text', text });
   };
 
   const userControl = session?.controlOwner === 'user';
@@ -254,6 +361,15 @@ export default function Browser() {
             <Mascot name={profile.character as MascotName} hero size={30} />
           </span>
           <h1 className="min-w-0 flex-1 truncate text-[19px] font-bold tracking-[-0.02em]">Pomong Browser</h1>
+          {session ? (
+            <button
+              className="flex items-center gap-1 rounded-full bg-[#FFF1F6] px-2.5 py-1.5 text-[11.5px] font-bold text-[#E2568B]"
+              onClick={closeSession}
+              aria-label="세션 닫기"
+            >
+              <X size={13} /> 세션 닫기
+            </button>
+          ) : null}
           <span
             className={`rounded-full px-2.5 py-1 text-[11.5px] font-bold ${
               userControl ? 'bg-[#FFE9EF] text-[#E2568B]' : 'bg-[#EAFBF1] text-[#0F9668]'
@@ -373,30 +489,83 @@ export default function Browser() {
                 <button className="hidden rounded-lg p-2 text-[#B4B1C2] sm:block" aria-label="즐겨찾기">
                   <Star size={16} />
                 </button>
+                {/* 확대/축소 */}
+                <div className="ml-1 hidden items-center gap-0.5 rounded-full bg-[#F7F5FF] p-0.5 sm:flex">
+                  {[1, 1.5, 2].map((value) => (
+                    <button
+                      key={value}
+                      onClick={() => setZoom(value)}
+                      className={`rounded-full px-2 py-1 text-[11.5px] font-bold transition ${
+                        zoom === value ? 'bg-white text-[#7C63F6] shadow-sm' : 'text-[#9B98AB]'
+                      }`}
+                    >
+                      {value}x
+                    </button>
+                  ))}
+                </div>
+                <button
+                  className={`rounded-lg p-2 ${rightMode ? 'bg-[#FFF1F6] text-[#E2568B]' : 'text-[#6B677A] hover:bg-[#F7F5FF]'}`}
+                  onClick={() => setRightMode((v) => !v)}
+                  aria-label="우클릭 모드"
+                  title="우클릭 모드(다음 탭을 오른쪽 버튼으로)"
+                >
+                  <MousePointerClick size={16} />
+                </button>
                 <button className="rounded-lg p-2 text-[#6B677A] hover:bg-[#F7F5FF]" onClick={() => setShowLog((v) => !v)} aria-label="메뉴">
                   <MoreVertical size={17} />
                 </button>
+                <button className="rounded-lg p-2 text-[#E2568B] hover:bg-[#FFF1F6] lg:hidden" onClick={closeSession} aria-label="세션 닫기">
+                  <X size={17} />
+                </button>
               </div>
 
-              {/* 화면 */}
+              {/* 화면: 손가락 스와이프·휠로 스크롤, 1x/1.5x/2x 확대 */}
               <div className="relative bg-[#F7F8FB]">
-                <div className="relative w-full" style={{ aspectRatio: `${VIEW_W} / ${VIEW_H}` }} onClick={onFrameClick}>
-                  {frameUrl ? (
-                    <img src={frameUrl} alt="브라우저 화면" className="h-full w-full select-none object-contain" draggable={false} />
-                  ) : (
-                    <div className="flex h-full w-full items-center justify-center text-[13px] text-[#A8A5B8]">
-                      <Loader2 size={18} className="mr-2 animate-spin" /> 화면을 불러오는 중…
-                    </div>
-                  )}
-                  {!userControl ? (
-                    <span className="pointer-events-none absolute left-2 top-2 rounded-full bg-[#1F1D2B]/60 px-2.5 py-1 text-[11px] font-semibold text-white">
-                      AI 조작 중 · 보기 전용
-                    </span>
-                  ) : (
-                    <span className="pointer-events-none absolute left-2 top-2 rounded-full bg-[#E2568B]/90 px-2.5 py-1 text-[11px] font-semibold text-white">
-                      직접 조작 중 · 남은 {remaining}분
-                    </span>
-                  )}
+                <div className="max-h-[62vh] overflow-auto overscroll-contain bg-[#EEF0F6] px-1 py-1 touch-pan-y">
+                  <div
+                    ref={frameBoxRef}
+                    className="relative mx-auto w-full"
+                    style={{ width: `${zoom * 100}%`, aspectRatio: `${VIEW_W} / ${VIEW_H}`, cursor: rightMode ? 'context-menu' : 'pointer' }}
+                    onClick={onFrameClick}
+                    onContextMenu={onFrameContextMenu}
+                    onPointerDown={onPointerDown}
+                    onPointerMove={onPointerMove}
+                    onPointerUp={onPointerUp}
+                    onPointerCancel={() => (dragRef.current = null)}
+                    onWheel={onWheel}
+                  >
+                    {frameUrl ? (
+                      <img src={frameUrl} alt="브라우저 화면" className="h-full w-full select-none object-contain" draggable={false} />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-[13px] text-[#A8A5B8]">
+                        <Loader2 size={18} className="mr-2 animate-spin" /> 화면을 불러오는 중…
+                      </div>
+                    )}
+                    {cursor ? (
+                      <span
+                        key={cursor.key}
+                        className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2"
+                        style={{ left: `${(cursor.x / VIEW_W) * 100}%`, top: `${(cursor.y / VIEW_H) * 100}%` }}
+                      >
+                        <span className="absolute -left-4 -top-4 h-8 w-8 animate-ping rounded-full bg-[#7C63F6]/40" />
+                        <span className="absolute -left-2 -top-2 h-4 w-4 rounded-full border-2 border-white bg-[#7C63F6] shadow" />
+                      </span>
+                    ) : null}
+                    {!userControl ? (
+                      <span className="pointer-events-none absolute left-2 top-2 rounded-full bg-[#1F1D2B]/60 px-2.5 py-1 text-[11px] font-semibold text-white">
+                        AI 조작 중 · 보기 전용
+                      </span>
+                    ) : (
+                      <span className="pointer-events-none absolute left-2 top-2 rounded-full bg-[#E2568B]/90 px-2.5 py-1 text-[11px] font-semibold text-white">
+                        직접 조작 중 · 남은 {remaining}분
+                      </span>
+                    )}
+                    {rightMode ? (
+                      <span className="pointer-events-none absolute right-2 top-2 rounded-full bg-[#E2568B]/90 px-2.5 py-1 text-[11px] font-semibold text-white">
+                        우클릭 모드
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
 
                 {!userControl ? (
@@ -408,6 +577,33 @@ export default function Browser() {
                     <MousePointerClick size={14} /> 내가 조작
                   </button>
                 ) : null}
+
+                {/* 모바일 확대·우클릭·스크롤 도구 */}
+                <div className="flex items-center gap-1.5 border-t border-[#F4F2FA] bg-white px-2 py-1.5 sm:hidden">
+                  {[1, 1.5, 2].map((value) => (
+                    <button
+                      key={value}
+                      onClick={() => setZoom(value)}
+                      className={`rounded-full px-2.5 py-1 text-[11.5px] font-bold ${
+                        zoom === value ? 'bg-[#F1ECFF] text-[#7C63F6]' : 'bg-[#FAF9FD] text-[#9B98AB]'
+                      }`}
+                    >
+                      {value}x
+                    </button>
+                  ))}
+                  <button
+                    className={`ml-auto rounded-full px-2.5 py-1 text-[11.5px] font-bold ${rightMode ? 'bg-[#FFE9EF] text-[#E2568B]' : 'bg-[#FAF9FD] text-[#9B98AB]'}`}
+                    onClick={() => setRightMode((v) => !v)}
+                  >
+                    우클릭 {rightMode ? 'ON' : 'OFF'}
+                  </button>
+                  <button className="rounded-full bg-[#FAF9FD] px-2.5 py-1 text-[11.5px] font-bold text-[#9B98AB]" onClick={() => void sendInput({ type: 'scroll', dy: -400 })}>
+                    ↑
+                  </button>
+                  <button className="rounded-full bg-[#FAF9FD] px-2.5 py-1 text-[11.5px] font-bold text-[#9B98AB]" onClick={() => void sendInput({ type: 'scroll', dy: 400 })}>
+                    ↓
+                  </button>
+                </div>
               </div>
 
               {/* 입력 바(사용자가 조작할 때만) */}
@@ -416,11 +612,18 @@ export default function Browser() {
                   <input
                     ref={inputRef}
                     className="min-w-0 flex-1 rounded-full bg-white px-3 py-2 text-[13px] ring-1 ring-[#EFEDF6] focus:outline-none focus:ring-[#C9B8FF]"
-                    placeholder="입력창을 눌러 글자를 입력하세요 (Enter·Backspace도 전달돼요)"
+                    placeholder="입력창을 누르고 글자를 쓴 뒤 「입력」 (한글·붙여넣기 OK)"
                     value={typed}
                     onChange={(e) => setTyped(e.target.value)}
                     onKeyDown={onTypeKey}
                   />
+                  <button
+                    className="shrink-0 rounded-full bg-[#7C63F6] px-3 py-2 text-[12px] font-bold text-white disabled:opacity-40"
+                    onClick={sendTyped}
+                    disabled={!typed}
+                  >
+                    입력
+                  </button>
                   <button className="shrink-0 rounded-full bg-[#F3EEFF] px-3 py-2 text-[12px] font-bold text-[#7C63F6]" onClick={() => void sendInput({ type: 'key', key: 'Enter' })}>
                     Enter
                   </button>

@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { api, ApiError, type ChatMessage, type ModelsResponse, type Profile } from './api';
+import { api, ApiError, type ChatMessage, type ModelsResponse, type Profile, type TaskRun } from './api';
 
 export type AgentState = 'idle' | 'thinking' | 'working' | 'responding' | 'error';
 
@@ -26,6 +26,10 @@ interface AppStoreValue {
   selectModel: (provider: string, model?: string) => Promise<{ ok: boolean; message?: string; needsKey?: boolean }>;
   messages: ChatMessage[];
   messagesLoaded: boolean;
+  /** 이번 턴의 실시간 작업 카드(도구가 도는 동안) */
+  liveTask: TaskRun | null;
+  /** 지난 대화에 붙은 작업 카드 */
+  taskRuns: TaskRun[];
   sending: boolean;
   error: string;
   aiReady: boolean;
@@ -142,6 +146,8 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Profile>(DEFAULT_PROFILE);
   const [models, setModels] = useState<ModelsResponse | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [taskRuns, setTaskRuns] = useState<TaskRun[]>([]);
+  const [liveTask, setLiveTask] = useState<TaskRun | null>(null);
   const [messagesLoaded, setMessagesLoaded] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
@@ -181,8 +187,11 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       .catch(() => undefined);
     refreshModels();
     api
-      .get<{ messages: ChatMessage[] }>('/api/chat/messages')
-      .then((r) => setMessages(r.messages))
+      .get<{ messages: ChatMessage[]; taskRuns?: TaskRun[] }>('/api/chat/messages')
+      .then((r) => {
+        setMessages(r.messages);
+        setTaskRuns(r.taskRuns || []);
+      })
       .catch(() => undefined)
       .finally(() => setMessagesLoaded(true));
     api
@@ -214,13 +223,78 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
 
   const loadMessages = useCallback(async () => {
     try {
-      const r = await api.get<{ messages: ChatMessage[] }>('/api/chat/messages');
+      const r = await api.get<{ messages: ChatMessage[]; taskRuns?: TaskRun[] }>('/api/chat/messages');
       setMessages(r.messages);
+      setTaskRuns(r.taskRuns || []);
     } catch {
       /* not signed in yet */
     } finally {
       setMessagesLoaded(true);
     }
+  }, []);
+
+  /**
+   * 서버 이벤트(SSE): 중간 안내 말풍선·최종 답변·작업 카드를 실시간으로 받는다.
+   * POST 응답을 기다리지 않고도 "잠시만요" 말풍선과 진행 단계가 먼저 뜨게 하는 통로다.
+   */
+  useEffect(() => {
+    if (typeof EventSource === 'undefined') return;
+    let source: EventSource | null = null;
+    try {
+      source = new EventSource('/api/events');
+    } catch {
+      return;
+    }
+    const onMessage = (ev: MessageEvent) => {
+      try {
+        const event = JSON.parse(ev.data) as { type?: string; data?: Record<string, unknown> };
+        if (event.type === 'task') {
+          const run = event.data?.run as TaskRun | undefined;
+          if (run) setLiveTask(run);
+          return;
+        }
+        if (event.type === 'chat_message' || event.type === 'chat') {
+          const message = event.data?.message as ChatMessage | undefined;
+          if (!message || typeof message.id !== 'number') return;
+          setMessages((prev) => (prev.some((m) => m.id === message.id) ? prev : [...prev, message].sort((a, b) => a.id - b.id)));
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+    source.addEventListener('message', onMessage as EventListener);
+    source.onerror = () => {
+      /* 브라우저가 자동 재연결한다 */
+    };
+    return () => {
+      source?.removeEventListener('message', onMessage as EventListener);
+      source?.close();
+    };
+  }, []);
+
+  /** 앱을 보고 있는지 서버에 알려 준다(보고 있으면 푸시를 보내지 않는다). */
+  useEffect(() => {
+    const clientId = (() => {
+      try {
+        const saved = sessionStorage.getItem('pomong.pushClient');
+        if (saved) return saved;
+        const id = Math.random().toString(36).slice(2) + Date.now().toString(36);
+        sessionStorage.setItem('pomong.pushClient', id);
+        return id;
+      } catch {
+        return 'default';
+      }
+    })();
+    const ping = () => {
+      void api.post('/api/push/presence', { clientId, visible: document.visibilityState === 'visible' }).catch(() => undefined);
+    };
+    ping();
+    const timer = window.setInterval(ping, 25_000);
+    document.addEventListener('visibilitychange', ping);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', ping);
+    };
   }, []);
 
   /** 로그인/설정 완료 직후 프로필·모델·대화를 다시 불러온다. */
@@ -265,7 +339,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     };
     setMessages((prev) => [...prev, optimistic]);
     try {
-      const res = await api.post<{ message: ChatMessage; userMessage?: ChatMessage }>('/api/chat/messages', { message: content });
+      const res = await api.post<{ message: ChatMessage; userMessage?: ChatMessage; taskRun?: TaskRun | null }>('/api/chat/messages', { message: content });
       // 서버가 저장한 내 메시지(userMessage)로 임시 메시지를 바꾸고, AI 답변을 뒤에 붙인다.
       // 예전에는 응답에 AI 답변만 담겨 와서 내 메시지가 화면에서 사라졌다.
       const mine: ChatMessage = res.userMessage ?? { ...optimistic, id: res.message.id - 1 };
@@ -275,6 +349,9 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         next.push(res.message);
         return next.sort((a, b) => a.id - b.id);
       });
+      if (res.taskRun) {
+        setTaskRuns((prev) => [res.taskRun as TaskRun, ...prev.filter((r) => r.id !== (res.taskRun as TaskRun).id)]);
+      }
       setAiReady(true);
     } catch (err) {
       if (err instanceof ApiError && err.code === 'no_provider') {
@@ -287,6 +364,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     } finally {
       sendingRef.current = false;
       setSending(false);
+      setLiveTask(null);
       window.setTimeout(() => {
         api.get<AgentStatus & { ok: true }>('/api/agent/status').then((r) => setAgent({ state: r.state, label: r.label, detail: r.detail, startedAt: r.startedAt, lastError: r.lastError })).catch(() => undefined);
       }, 600);
@@ -315,6 +393,8 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       selectModel,
       messages,
       messagesLoaded,
+      liveTask,
+      taskRuns,
       sending,
       error,
       aiReady,
@@ -326,7 +406,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       visibleState,
       keyboardOpen,
     }),
-    [profile, models, refreshModels, refreshProfile, refreshAll, selectModel, messages, messagesLoaded, sending, error, aiReady, send, clearChat, draft, agent, visibleState, keyboardOpen]
+    [profile, models, refreshModels, refreshProfile, refreshAll, selectModel, messages, messagesLoaded, liveTask, taskRuns, sending, error, aiReady, send, clearChat, draft, agent, visibleState, keyboardOpen]
   );
 
   return <AppStore.Provider value={value}>{children}</AppStore.Provider>;

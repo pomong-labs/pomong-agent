@@ -1,20 +1,31 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Check, ExternalLink, LogOut, ShieldCheck, Sparkles } from 'lucide-react';
+import { Bell, BellOff, Check, ExternalLink, Globe, LogOut, Send, ShieldCheck, Sparkles, Trash2 } from 'lucide-react';
 import MascotFace from '../components/MascotFace';
-import { api, type ProviderId, type SettingsResponse } from '../lib/api';
+import { api, type ProviderId, type PushStatus, type SettingsResponse } from '../lib/api';
 import { useAppStore } from '../lib/store';
 import PolicySection from '../components/PolicySection';
+
+/** VAPID 공개키(base64url) → Uint8Array (PushManager.subscribe에 필요) */
+function urlBase64ToUint8Array(base64: string): BufferSource {
+  const padding = '='.repeat((4 - (base64.length % 4)) % 4);
+  const normalized = (base64 + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = window.atob(normalized);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i += 1) out[i] = raw.charCodeAt(i);
+  return out.buffer as ArrayBuffer;
+}
 
 /** 말투 선택지와 그 말투로 대화했을 때의 예시 (설정 화면에 그대로 보여 준다) */
 function toneOptions(callName: string, agentName: string) {
   const agent = agentName || 'Pomong';
+  const politeName = callName.endsWith('님') ? callName : `${callName} 님`;
   return [
     {
       id: 'polite' as const,
       label: '존댓말',
       hint: '정중하게',
-      example: `나: 오늘 날씨 어때?\n${agent}: ${callName}, 인제는 지금 흐리고 3도예요. 오후에 비 소식이 있으니 우산을 챙기시는 게 좋겠어요.`,
+      example: `나: 오늘 날씨 어때?\n${agent}: ${politeName}, 인제는 지금 흐리고 3도예요. 오후에 비 소식이 있으니 우산을 챙기시는 게 좋겠어요.`,
     },
     {
       id: 'casual' as const,
@@ -41,6 +52,12 @@ export default function SettingsPage() {
   const [keyBusy, setKeyBusy] = useState(false);
   const [keyMsg, setKeyMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
+  const [pushStatus, setPushStatus] = useState<PushStatus | null>(null);
+  const [pushOn, setPushOn] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushMsg, setPushMsg] = useState('');
+  const [browserBusy, setBrowserBusy] = useState(false);
+
   const load = () =>
     api
       .get<SettingsResponse>('/api/settings')
@@ -58,6 +75,92 @@ export default function SettingsPage() {
   useEffect(() => {
     load();
   }, []);
+
+  const loadPush = async () => {
+    const status = await api.get<PushStatus>('/api/push/status').catch(() => null);
+    setPushStatus(status);
+    try {
+      const reg = await navigator.serviceWorker?.getRegistration();
+      const sub = await reg?.pushManager.getSubscription();
+      setPushOn(Boolean(sub) && status?.subscriptions !== 0);
+    } catch {
+      setPushOn(false);
+    }
+  };
+
+  useEffect(() => {
+    if ('serviceWorker' in navigator) void loadPush();
+  }, []);
+
+  const enablePush = async () => {
+    setPushBusy(true);
+    setPushMsg('');
+    try {
+      if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+        throw new Error('이 브라우저는 푸시 알림을 지원하지 않아요. 아이폰은 홈 화면에 앱을 추가한 뒤 열어 주세요.');
+      }
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') throw new Error('알림 권한이 거부되었습니다. 브라우저 설정에서 알림을 허용해 주세요.');
+      const { publicKey } = await api.get<{ publicKey: string }>('/api/push/vapid-key');
+      const reg = await navigator.serviceWorker.ready;
+      const sub =
+        (await reg.pushManager.getSubscription()) ||
+        (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(publicKey) }));
+      const raw = sub.toJSON() as { endpoint?: string; keys?: { p256dh?: string; auth?: string } };
+      await api.post('/api/push/subscribe', { endpoint: raw.endpoint, keys: raw.keys, ua: navigator.userAgent });
+      setPushOn(true);
+      setPushMsg('푸시 알림을 켰어요. 앱을 보고 있지 않을 때만 알려드려요.');
+      await loadPush();
+    } catch (err) {
+      setPushMsg(err instanceof Error ? err.message : '푸시를 켜지 못했습니다.');
+    } finally {
+      setPushBusy(false);
+    }
+  };
+
+  const disablePush = async () => {
+    setPushBusy(true);
+    setPushMsg('');
+    try {
+      const reg = await navigator.serviceWorker?.getRegistration();
+      const sub = await reg?.pushManager.getSubscription();
+      if (sub) {
+        await api.post('/api/push/unsubscribe', { endpoint: sub.endpoint }).catch(() => undefined);
+        await sub.unsubscribe().catch(() => undefined);
+      }
+      setPushOn(false);
+      setPushMsg('푸시 알림을 껐어요.');
+      await loadPush();
+    } catch (err) {
+      setPushMsg(err instanceof Error ? err.message : '푸시를 끄지 못했습니다.');
+    } finally {
+      setPushBusy(false);
+    }
+  };
+
+  const sendTestPush = async () => {
+    setPushBusy(true);
+    setPushMsg('');
+    try {
+      const res = await api.post<{ sent: number; skipped: boolean; reason?: string }>('/api/push/test');
+      setPushMsg(res.sent ? '테스트 알림을 보냈어요.' : `보내지 못했어요(${res.reason || '구독 없음'}).`);
+    } catch (err) {
+      setPushMsg(err instanceof Error ? err.message : '테스트 알림을 보내지 못했습니다.');
+    } finally {
+      setPushBusy(false);
+    }
+  };
+
+  const resetBrowserState = async () => {
+    if (!window.confirm('저장된 브라우저 로그인 세션(쿠키)을 지울까요? 다시 로그인해야 합니다.')) return;
+    setBrowserBusy(true);
+    try {
+      await api.del('/api/browser/state');
+      setPushMsg('브라우저 로그인 세션을 초기화했어요.');
+    } finally {
+      setBrowserBusy(false);
+    }
+  };
 
   const saveProfile = async () => {
     await api.put('/api/settings/profile', { nickname, agentName, character, tone });
@@ -333,6 +436,46 @@ export default function SettingsPage() {
           ) : null}
         </section>
 
+        {/* 알림 · 브라우저 */}
+        <section className="mt-4 rounded-[24px] bg-white p-5 shadow-card ring-1 ring-[#F6F4FB] lg:p-6">
+          <h2 className="text-[16px] font-bold text-[#1F1D2B]">알림 · 브라우저</h2>
+          <div className="mt-3 flex items-center gap-3 rounded-2xl bg-[#FAF9FD] px-4 py-3">
+            <span className={`flex h-9 w-9 items-center justify-center rounded-xl ${pushOn ? 'bg-[#EAFBF1] text-[#12B886]' : 'bg-[#F3EEFF] text-[#8B72F6]'}`}>
+              {pushOn ? <Bell size={17} /> : <BellOff size={17} />}
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="text-[14px] font-semibold text-[#3B3947]">푸시 알림 받기</p>
+              <p className="text-[11.5px] leading-[1.5] text-[#8A8A9A]">
+                앱을 보고 있을 때는 알림이 뜨지 않아요. 답변 완료·로그인 필요·예약/워치 알림만 보내드려요.
+              </p>
+            </div>
+            <button
+              className={`relative h-6 w-11 shrink-0 rounded-full px-0.5 transition ${pushOn ? 'bg-[#9FDCC4]' : 'bg-[#E4E1EF]'}`}
+              onClick={() => (pushOn ? disablePush() : enablePush())}
+              disabled={pushBusy || !pushStatus?.enabled}
+              aria-label={pushOn ? '푸시 알림 끄기' : '푸시 알림 켜기'}
+            >
+              <span className={`block h-5 w-5 rounded-full bg-white shadow transition ${pushOn ? 'translate-x-[20px]' : 'translate-x-0'}`} />
+            </button>
+          </div>
+          {pushStatus && !pushStatus.enabled ? (
+            <p className="mt-2 text-[11.5px] text-[#C08A16]">푸시 키를 준비하지 못했어요{pushStatus.error ? ` (${pushStatus.error})` : ''}.</p>
+          ) : null}
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button className="pa-btn-ghost px-3 py-2 text-[12.5px]" onClick={sendTestPush} disabled={pushBusy || !pushOn}>
+              <Send size={14} /> 테스트 알림 보내기
+            </button>
+            <button className="pa-btn-ghost px-3 py-2 text-[12.5px]" onClick={resetBrowserState} disabled={browserBusy}>
+              <Globe size={14} /> <Trash2 size={13} /> 브라우저 로그인 세션 초기화
+            </button>
+          </div>
+          {pushMsg ? <p className="mt-2 rounded-xl bg-[#F7F5FF] px-3 py-2 text-[12px] text-[#5B4BC4]">{pushMsg}</p> : null}
+          <p className="mt-3 text-[11.5px] leading-[1.6] text-[#B4B1C2]">
+            브라우저 로그인 세션은 서버의 data/browser-state.json 에 보관돼, 앱을 다시 열어도 로그인이 유지됩니다.
+            아이폰은 사파리 공유 → “홈 화면에 추가”로 설치해야 푸시 알림을 받을 수 있어요.
+          </p>
+        </section>
+
         <PolicySection />
 
         {/* security / about */}
@@ -341,7 +484,7 @@ export default function SettingsPage() {
           <ul className="mt-3 divide-y divide-[#F6F4FB] text-[13.5px]">
             <li className="flex items-center justify-between py-3">
               <span className="text-pomong-sub">버전</span>
-              <span className="font-semibold text-[#3B3947]">v{data?.version || '0.4.0'}</span>
+              <span className="font-semibold text-[#3B3947]">v{data?.version || '0.5.0'}</span>
             </li>
             <li className="flex items-center justify-between py-3">
               <span className="text-pomong-sub">데이터 보관</span>
@@ -360,7 +503,7 @@ export default function SettingsPage() {
         </section>
 
         <p className="mt-6 flex items-center justify-center gap-1.5 text-[12px] text-[#B4B1C2]">
-          <Sparkles size={12} /> Pomong Agent v{data?.version || '0.4.0'} · Pomong Labs
+          <Sparkles size={12} /> Pomong Agent v{data?.version || '0.5.0'} · Pomong Labs
         </p>
       </div>
     </div>
