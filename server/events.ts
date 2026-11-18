@@ -30,7 +30,7 @@ let seq = 0;
 const buffer: AppEvent[] = [];
 const clients = new Set<Response>();
 
-export function publish(event: Omit<AppEvent, 'id' | 'at'>): AppEvent {
+export function publish(event: Omit<AppEvent, 'id' | 'at'>, options: { push?: boolean } = {}): AppEvent {
   seq += 1;
   const full: AppEvent = { ...event, id: seq, at: new Date().toISOString() };
   buffer.push(full);
@@ -44,7 +44,8 @@ export function publish(event: Omit<AppEvent, 'id' | 'at'>): AppEvent {
     }
   }
   // 앱을 보고 있지 않을 때만 휴대폰 알림으로도 보낸다(웹 푸시).
-  if (event.type === 'job' || event.type === 'watch' || event.type === 'handover' || event.type === 'chat') {
+  // push:false 는 호출부가 이미 다른 이벤트로 알림을 보냈을 때(중복 알림 방지).
+  if (options.push !== false && (event.type === 'job' || event.type === 'watch' || event.type === 'handover' || event.type === 'chat')) {
     void import('./push')
       .then((push) => push.notifyForEvent(event.type, full.title, full.body || '', full.data))
       .catch(() => undefined);

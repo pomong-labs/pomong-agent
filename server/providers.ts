@@ -5,10 +5,18 @@ export interface ChatMessage {
   content: string;
 }
 
+/**
+ * 멀티모달 파트 (v0.5.2): 채팅에 첨부한 사진을 AI가 직접 보게 한다.
+ * text = 글, image = base64로 넘기는 사진 한 장.
+ */
+export type AgentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image'; mime: string; dataBase64: string };
+
 /** 도구 호출을 주고받는 에이전트 루프용 메시지 (도구 결과 포함) */
 export type AgentMessage =
   | { role: 'system'; content: string }
-  | { role: 'user'; content: string }
+  | { role: 'user'; content: string; parts?: AgentPart[] }
   | { role: 'assistant'; content: string; toolCalls?: ToolCall[] }
   | { role: 'tool'; toolCallId: string; name: string; content: string };
 
@@ -82,6 +90,7 @@ export const GEMINI_FALLBACK_CHAIN: string[] = [
   'gemini-3.5-flash',
   'gemini-3.1-flash-lite',
   'gemini-flash-lite-latest',
+  'gemini-2.5-flash',
 ];
 
 /** 지원이 종료된 구형 모델 → 현재 모델 매핑 (저장된 설정 자동 마이그레이션용) */
@@ -221,9 +230,16 @@ function splitSystem(messages: AgentMessage[]): { system: string; turns: ToolRun
 type GeminiPart = {
   text?: string;
   thoughtSignature?: string;
+  inlineData?: { mimeType: string; data: string };
   functionCall?: { name?: string; args?: Record<string, unknown> };
   functionResponse?: { name?: string; response?: Record<string, unknown> };
 };
+
+/** 메시지의 파트를 프로바이더별 형태로 바꾸는 데 쓰는 공통 변환 */
+function textOrParts(turn: { content: string; parts?: AgentPart[] }): AgentPart[] {
+  if (turn.parts && turn.parts.length) return turn.parts;
+  return turn.content ? [{ type: 'text', text: turn.content }] : [];
+}
 
 async function geminiStep(
   modelName: string,
@@ -262,11 +278,24 @@ async function geminiStep(
       else contents.push({ role: 'model', parts });
       continue;
     }
+    // v0.5.2: 사진(inlineData)이 붙은 사용자 턴은 따로 보낸다.
+    const userParts: GeminiPart[] = [];
+    for (const part of textOrParts(turn)) {
+      if (part.type === 'text') {
+        if (part.text) userParts.push({ text: part.text });
+      } else {
+        userParts.push({ inlineData: { mimeType: part.mime, data: part.dataBase64 } });
+      }
+    }
+    if (!userParts.length) userParts.push({ text: '' });
+    const hasImage = userParts.some((p) => p.inlineData);
     const last = contents[contents.length - 1];
-    if (last && last.role === 'user' && !last.parts.some((p) => p.functionResponse)) {
-      last.parts.push({ text: turn.content });
+    const lastIsPlainTextUser =
+      last && last.role === 'user' && last.parts.every((p) => p.text !== undefined);
+    if (!hasImage && lastIsPlainTextUser) {
+      last.parts.push(...userParts);
     } else {
-      contents.push({ role: 'user', parts: [{ text: turn.content }] });
+      contents.push({ role: 'user', parts: userParts });
     }
   }
 
@@ -323,6 +352,16 @@ async function openAiStep(
   for (const turn of turns) {
     if (turn.role === 'tool') {
       messages.push({ role: 'tool', tool_call_id: turn.toolCallId, content: turn.content });
+    } else if (turn.role === 'user' && turn.parts?.some((p) => p.type === 'image')) {
+      // v0.5.2: 사진은 image_url(data URL)로 넘긴다.
+      messages.push({
+        role: 'user',
+        content: textOrParts(turn).map((part) =>
+          part.type === 'text'
+            ? { type: 'text', text: part.text }
+            : { type: 'image_url', image_url: { url: `data:${part.mime};base64,${part.dataBase64}` } }
+        ),
+      });
     } else if (turn.role === 'assistant') {
       const msg: OpenAiMessage = { role: 'assistant', content: turn.content || null };
       if (turn.toolCalls?.length) {
@@ -394,6 +433,16 @@ async function claudeStep(
   for (const turn of turns) {
     if (turn.role === 'tool') {
       push('user', [{ type: 'tool_result', tool_use_id: turn.toolCallId, content: turn.content }]);
+    } else if (turn.role === 'user' && turn.parts?.some((p) => p.type === 'image')) {
+      // v0.5.2: 사진은 base64 image 블록으로 넘긴다.
+      push(
+        'user',
+        textOrParts(turn).map((part) =>
+          part.type === 'text'
+            ? { type: 'text', text: part.text }
+            : { type: 'image', source: { type: 'base64', media_type: part.mime, data: part.dataBase64 } }
+        )
+      );
     } else if (turn.role === 'assistant') {
       const blocks: ClaudeContent[] = [];
       if (turn.content.trim()) blocks.push({ type: 'text', text: turn.content });
@@ -475,8 +524,22 @@ export async function runAgentStep(
     throw lastError instanceof Error ? lastError : new Error('Gemini 응답을 받지 못했습니다.');
   }
 
-  if (provider === 'openai') return openAiStep(modelName, apiKey, system, turns, tools);
-  return claudeStep(modelName, apiKey, system, turns, tools);
+  // v0.5.2: OpenAI·Claude도 혼잡(429/5xx)·응답 지연이면 같은 모델로 한 번 더 시도한다.
+  // (사용자에게 503이 그대로 노출되지 않게 하는 것이 목적 — 모델은 바꾸지 않는다)
+  const attempts = allowFallback ? 2 : 1;
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 900));
+    try {
+      return provider === 'openai'
+        ? await openAiStep(modelName, apiKey, system, turns, tools)
+        : await claudeStep(modelName, apiKey, system, turns, tools);
+    } catch (err) {
+      lastError = err;
+      if (!allowFallback || !isRetryableError(err)) throw err;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('AI 응답을 받지 못했습니다.');
 }
 
 export async function runChat(

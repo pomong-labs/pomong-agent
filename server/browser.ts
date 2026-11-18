@@ -704,7 +704,9 @@ export async function typeInto(args: { ref?: string; text: string; submit?: bool
   const type = await handle.first().getAttribute('type');
   const auto = await handle.first().getAttribute('autocomplete');
   if (type === 'password' || /cc-|one-time-code|주민/i.test(auto || '')) {
-    throw new Error('비밀번호·카드·인증번호 입력은 에이전트가 할 수 없습니다(하드블록). browser_handover로 사용자에게 넘기세요.');
+    throw new Error(
+      '비밀번호·카드·인증번호 입력은 에이전트가 직접 타이핑할 수 없습니다(하드블록). 비밀번호는 browser_login_with_vault(또는 browser_fill_vault)를 사용하세요. 카드·인증번호는 browser_handover로 사용자에게 넘기세요.'
+    );
   }
   await handle.first().fill(String(args.text || ''));
   if (args.submit) {
@@ -727,7 +729,8 @@ export async function typeInto(args: { ref?: string; text: string; submit?: bool
 export async function fillFromVault(
   ref: string,
   value: string,
-  field: 'username' | 'password'
+  field: 'username' | 'password',
+  options: { submit?: boolean } = {}
 ): Promise<{ sessionId: string; snapshot: string }> {
   if (!value) throw new Error('금고에 저장된 값이 비어 있습니다.');
   const session = activeSession();
@@ -742,6 +745,13 @@ export async function fillFromVault(
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
   });
+  if (options.submit) {
+    // v0.5.2: 로그인 버튼을 따로 부르지 않아도 되게 Enter로 바로 전송한다.
+    await Promise.all([
+      s.page.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => undefined),
+      handle.press('Enter').catch(() => undefined),
+    ]);
+  }
   const data = await takeSnapshot(s.page);
   touch(session.id, { url: data.url, title: data.title });
   void saveState(s);
@@ -755,6 +765,193 @@ export async function fillFromVault(
     data.url
   );
   return { sessionId: session.id, snapshot: formatSnapshot(data, session.id) };
+}
+
+/* ------------------------------------------------------------------ */
+/* 금고 원스톱 로그인 (v0.5.2)                                            */
+/* ------------------------------------------------------------------ */
+
+export interface LoginRefs {
+  usernameRef: string | null;
+  passwordRef: string | null;
+  submitRef: string | null;
+}
+
+/**
+ * 로그인 화면에서 아이디·비밀번호·로그인 버튼의 ref를 스스로 찾아낸다.
+ * (가벼운 모델이 ref를 잘못 짚거나 빠뜨려도 한 번의 호출로 끝나게 하려는 장치)
+ */
+export async function detectLoginRefs(page: Page): Promise<LoginRefs> {
+  try {
+    return (await withTimeout(
+      page.evaluate(() => {
+        const visible = (el: Element): boolean => {
+          const rect = (el as HTMLElement).getBoundingClientRect();
+          if (rect.width < 4 || rect.height < 4) return false;
+          const style = window.getComputedStyle(el as HTMLElement);
+          return style.visibility !== 'hidden' && style.display !== 'none';
+        };
+        const refOf = (el: Element | null): string | null => {
+          const ref = el?.getAttribute('data-pomong-ref');
+          return ref || null;
+        };
+        const inputs = Array.from(document.querySelectorAll<HTMLInputElement>('input')).filter(
+          (el) => visible(el) && !el.disabled && el.type !== 'hidden'
+        );
+        const passwordInput =
+          inputs.find((el) => el.type === 'password') || null;
+        let usernameInput: HTMLInputElement | null = null;
+        if (passwordInput) {
+          const all = Array.from(document.querySelectorAll<HTMLInputElement>('input'));
+          const index = all.indexOf(passwordInput);
+          for (let i = index - 1; i >= 0; i -= 1) {
+            const el = all[i];
+            const type = (el.getAttribute('type') || 'text').toLowerCase();
+            if (!visible(el) || el.disabled) continue;
+            if (['text', 'email', 'tel', 'search', 'number', ''].includes(type)) {
+              usernameInput = el;
+              break;
+            }
+          }
+        }
+        if (!usernameInput) {
+          usernameInput =
+            inputs.find((el) => ['email', 'text', 'tel'].includes((el.getAttribute('type') || 'text').toLowerCase()) && /아이디|이메일|id|email|login|username/i.test(`${el.name} ${el.id} ${el.placeholder}`)) ||
+            null;
+        }
+        const form = passwordInput?.closest('form') || null;
+        const buttons = Array.from(
+          (form || document).querySelectorAll<HTMLElement>('button, input[type=submit], [role=button], a')
+        ).filter(visible);
+        const label = (el: HTMLElement) =>
+          `${(el.textContent || '').trim()} ${el.getAttribute('aria-label') || ''} ${(el as HTMLInputElement).value || ''}`.trim();
+        const submitButton =
+          buttons.find((el) => /로그인|로그\s*인|sign\s*in|log\s*in|continue|계속/i.test(label(el))) ||
+          buttons.find((el) => (el as HTMLButtonElement).type === 'submit') ||
+          (form ? form.querySelector<HTMLElement>('button[type=submit]') : null);
+        return {
+          usernameRef: refOf(usernameInput),
+          passwordRef: refOf(passwordInput),
+          submitRef: refOf(submitButton),
+        };
+      }),
+      10_000,
+      '로그인 항목 찾기'
+    )) as LoginRefs;
+  } catch {
+    return { usernameRef: null, passwordRef: null, submitRef: null };
+  }
+}
+
+/** 입력창을 실제로 채우고 input/change 이벤트를 일으킨다(SPA 프레임워크 대응). */
+async function fillRef(page: Page, ref: string, value: string): Promise<boolean> {
+  const selector = `[data-pomong-ref="${String(ref || '').replace(/[^a-zA-Z0-9_-]/g, '')}"]`;
+  const handle = page.locator(selector).first();
+  if (!(await handle.count())) return false;
+  await handle.fill(value);
+  await handle.evaluate((el) => {
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  return true;
+}
+
+export interface LoginWithVaultResult {
+  sessionId: string;
+  snapshot: string;
+  filledUsername: boolean;
+  filledPassword: boolean;
+  submitted: 'click' | 'enter' | 'none';
+  /** 아직 로그인 화면이면 true (아이디·비밀번호가 틀렸거나 2차 인증일 수 있다) */
+  stillOnLogin: boolean;
+  url: string;
+  title: string;
+}
+
+/**
+ * 금고 값으로 **아이디 입력 → 비밀번호 입력 → 로그인 버튼 클릭**을 한 번에 끝낸다.
+ * 값은 이 함수 안에서만 쓰고 로그·응답·AI 대화에는 남기지 않는다.
+ * ref를 주지 않으면 화면에서 스스로 찾는다(가벼운 모델의 누락 방지).
+ */
+export async function loginWithVault(input: {
+  username?: string | null;
+  password: string;
+  usernameRef?: string;
+  passwordRef?: string;
+  submitRef?: string;
+  submit?: boolean;
+}): Promise<LoginWithVaultResult> {
+  if (!input.password) throw new Error('금고에 저장된 비밀번호가 비어 있습니다.');
+  const session = activeSession();
+  if (!session) throw new Error('열린 브라우저 세션이 없습니다. browser_open으로 로그인 페이지를 먼저 여세요.');
+  guardAgent(session, evaluateUrl(session.url || 'about:blank').level);
+  const s = await ensureLive(session.id);
+  // ref를 잡기 위해 화면을 한 번 읽는다(스냅샷이 요소에 ref를 붙인다).
+  const before = await takeSnapshot(s.page);
+  const detected = await detectLoginRefs(s.page);
+  const usernameRef = input.usernameRef || detected.usernameRef || '';
+  const passwordRef = input.passwordRef || detected.passwordRef || '';
+  const submitRef = input.submitRef || detected.submitRef || '';
+  if (!passwordRef) {
+    throw new Error('비밀번호 입력창을 찾지 못했습니다. browser_snapshot으로 화면을 확인하고 password_ref를 지정해 다시 부르세요.');
+  }
+
+  let filledUsername = false;
+  if (input.username && usernameRef) filledUsername = await fillRef(s.page, usernameRef, input.username);
+  const filledPassword = await fillRef(s.page, passwordRef, input.password);
+  if (!filledPassword) throw new Error(`비밀번호 입력창을 채우지 못했습니다: ${passwordRef}`);
+
+  let submitted: LoginWithVaultResult['submitted'] = 'none';
+  if (input.submit !== false) {
+    if (submitRef) {
+      const selector = `[data-pomong-ref="${submitRef.replace(/[^a-zA-Z0-9_-]/g, '')}"]`;
+      const button = s.page.locator(selector).first();
+      if ((await button.count()) && (await button.isVisible().catch(() => false))) {
+        await Promise.all([
+          s.page.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => undefined),
+          button.click({ timeout: 15_000 }).catch(() => undefined),
+        ]);
+        submitted = 'click';
+      }
+    }
+    if (submitted === 'none') {
+      // 버튼을 못 찾았으면 비밀번호 칸에서 Enter(대부분의 로그인 폼이 전송된다)
+      const pwd = s.page.locator(`[data-pomong-ref="${passwordRef.replace(/[^a-zA-Z0-9_-]/g, '')}"]`).first();
+      if (await pwd.count()) {
+        await Promise.all([
+          s.page.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => undefined),
+          pwd.press('Enter').catch(() => undefined),
+        ]);
+        submitted = 'enter';
+      }
+    }
+    // 화면이 바뀌거나 2차 인증으로 넘어가는 시간을 잠깐 준다.
+    await s.page.waitForLoadState('networkidle', { timeout: 8_000 }).catch(() => undefined);
+  }
+
+  const data = await takeSnapshot(s.page);
+  const stillOnLogin = data.elements.some((el) => el.type === 'password') || /비밀번호|password/i.test(data.text.slice(0, 400));
+  touch(session.id, { url: data.url, title: data.title });
+  void saveState(s);
+  logAction(
+    session.id,
+    'agent',
+    'browser.login_with_vault',
+    { usernameRef, passwordRef, submitRef, filledUsername, submitted, password: '***' },
+    `${stillOnLogin ? '로그인 화면 유지' : '로그인 통과 추정'} · ${submitted === 'click' ? '로그인 버튼 클릭' : submitted === 'enter' ? 'Enter 전송' : '전송 안 함'}`,
+    data.url
+  );
+  void before;
+  return {
+    sessionId: session.id,
+    snapshot: formatSnapshot(data, session.id),
+    filledUsername,
+    filledPassword,
+    submitted,
+    stillOnLogin,
+    url: data.url,
+    title: data.title,
+  };
 }
 
 export async function extract(sessionId?: string): Promise<{ url: string; text: string }> {

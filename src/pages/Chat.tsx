@@ -1,11 +1,31 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Check, CheckCheck, CheckCircle2, ChevronDown, CircleDashed, Clock3, Globe, KeyRound, Loader2, Mic, Paperclip, Send, ShieldCheck, Sparkles, X, XCircle } from 'lucide-react';
+import {
+  Check,
+  CheckCheck,
+  CheckCircle2,
+  ChevronDown,
+  CircleDashed,
+  Clock3,
+  Download,
+  FileText,
+  Globe,
+  Image as ImageIcon,
+  KeyRound,
+  Loader2,
+  Mic,
+  Paperclip,
+  Send,
+  ShieldCheck,
+  Sparkles,
+  X,
+  XCircle,
+} from 'lucide-react';
 import AppHeader from '../components/AppHeader';
 import Mascot, { type MascotName } from '../components/Mascot';
 import ModelBar from '../components/ModelBar';
 import { StatsCard, TasksCard } from '../components/Cards';
-import { type ChatMessage, type LoginRequest, type TaskRun } from '../lib/api';
+import { type ChatAttachment, type ChatMessage, type LoginRequest, type TaskRun } from '../lib/api';
 import { formatClock } from '../lib/format';
 import { useAppStore } from '../lib/store';
 
@@ -72,6 +92,54 @@ export default function Chat() {
   } = useAppStore();
   const navigate = useNavigate();
   const scrollRef = useRef<HTMLDivElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  /** v0.5.2: 아직 보내지 않은 첨부(사진·파일) */
+  const [pending, setPending] = useState<{ id: string; view: ChatAttachment; preview?: string }[]>([]);
+  const [uploading, setUploading] = useState(0);
+  const [attachError, setAttachError] = useState('');
+  const [preview, setPreview] = useState<{ url: string; name: string } | null>(null);
+
+  const MAX_FILES = 6;
+  const MAX_BYTES = 15 * 1024 * 1024;
+
+  const uploadFiles = useCallback(async (files: FileList | null) => {
+    if (!files || !files.length) return;
+    setAttachError('');
+    const picked = Array.from(files);
+    const room = Math.max(0, MAX_FILES - pending.length);
+    const list = picked.slice(0, room);
+    if (picked.length > room) setAttachError(`한 번에 최대 ${MAX_FILES}개까지 첨부할 수 있어요.`);
+    for (const file of list) {
+      if (file.size > MAX_BYTES) {
+        setAttachError(`'${file.name}'은 15MB를 넘어 첨부하지 못했어요.`);
+        continue;
+      }
+      setUploading((n) => n + 1);
+      try {
+        const params = new URLSearchParams({ name: file.name, session: 'default' });
+        const res = await fetch(`/api/chat/upload?${params.toString()}`, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': file.type || 'application/octet-stream' },
+          body: file,
+        });
+        const data = (await res.json().catch(() => null)) as { ok?: boolean; attachment?: ChatAttachment; message?: string } | null;
+        if (!res.ok || !data?.attachment) throw new Error(data?.message || '업로드하지 못했어요.');
+        const view = data.attachment;
+        setPending((prev) => [
+          ...prev,
+          { id: view.id, view, preview: view.kind === 'image' ? view.url : undefined },
+        ]);
+      } catch (err) {
+        setAttachError(err instanceof Error ? err.message : '업로드하지 못했어요.');
+      } finally {
+        setUploading((n) => n - 1);
+      }
+    }
+  }, [pending.length]);
+
+  const removePending = (id: string) => setPending((prev) => prev.filter((p) => p.id !== id));
 
   /** 작업 카드는 실제 도구가 한 번이라도 돈 경우에만 보여 준다(빈 0단계 카드 숨김). */
   const hasWork = (run: TaskRun | null | undefined): run is TaskRun =>
@@ -114,8 +182,11 @@ export default function Chat() {
   }, [keyboardOpen, pinToBottom]);
 
   const submit = () => {
-    if (!draft.trim() || sending) return;
-    void send(draft);
+    if ((!draft.trim() && !pending.length) || sending || uploading) return;
+    const ids = pending.map((p) => p.id);
+    void send(draft, ids);
+    setPending([]);
+    setAttachError('');
   };
 
   const onClear = () => {
@@ -153,19 +224,18 @@ export default function Chat() {
           {messages.map((m) =>
             m.role === 'user' ? (
               <div key={m.id} className="flex flex-col items-end gap-1.5 animate-fade-up">
-                <div className="flex max-w-[85%] items-end gap-2.5">
-                  <div
-                    className="rounded-[22px] rounded-br-lg px-4 py-3 text-[15px] leading-relaxed text-[#2A2A35] shadow-[0_2px_10px_rgba(120,100,200,0.05)] sm:text-[16px]"
-                    style={{ background: 'linear-gradient(135deg,#EFE8FF,#E7DFFC)' }}
-                  >
-                    {m.content}
-                  </div>
-                  <div className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#EDE7FC] text-[#8B72F6] sm:flex">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9">
-                      <circle cx="12" cy="8.5" r="3.6" />
-                      <path d="M4.8 20c.6-3.7 3.6-5.7 7.2-5.7s6.6 2 7.2 5.7" strokeLinecap="round" />
-                    </svg>
-                  </div>
+                <div className="flex max-w-[85%] flex-col items-end gap-2">
+                  {m.attachments?.length ? (
+                    <MessageAttachments items={m.attachments} onPreview={setPreview} />
+                  ) : null}
+                  {m.content ? (
+                    <div
+                      className="rounded-[22px] rounded-br-lg px-4 py-3 text-[15px] leading-relaxed text-[#2A2A35] shadow-[0_2px_10px_rgba(120,100,200,0.05)] sm:text-[16px]"
+                      style={{ background: 'linear-gradient(135deg,#EFE8FF,#E7DFFC)' }}
+                    >
+                      {m.content}
+                    </div>
+                  ) : null}
                 </div>
                 <div className="flex items-center gap-1.5 pr-1 text-[12px] text-[#A8A5B8]">
                   {formatClock(m.createdAt)}
@@ -185,6 +255,7 @@ export default function Chat() {
                 vault={vault}
                 onLoginSubmit={submitLoginCard}
                 onLoginDismiss={dismissLoginCard}
+                onPreview={setPreview}
               />
             )
           )}
@@ -285,11 +356,30 @@ export default function Chat() {
           </div>
           {!keyboardOpen ? (
             <p className="mt-2 hidden text-center text-[11.5px] text-[#C0BCCD] lg:block">
-              Enter 전송 / Shift+Enter 줄바꿈 · 선택한 모델로 응답합니다
+              Enter 전송 / Shift+Enter 줄바꿈 · 사진·파일도 붙여서 보낼 수 있어요
             </p>
           ) : null}
         </div>
       </div>
+
+      {/* 사진 크게 보기 */}
+      {preview ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+          onClick={() => setPreview(null)}
+          role="button"
+          aria-label="사진 닫기"
+        >
+          <img src={preview.url} alt={preview.name} className="max-h-[86vh] max-w-full rounded-2xl object-contain" />
+          <button
+            className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-full bg-white/15 text-white"
+            onClick={() => setPreview(null)}
+            aria-label="닫기"
+          >
+            <X size={20} />
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -323,6 +413,7 @@ function AssistantBubble({
   vault,
   onLoginSubmit,
   onLoginDismiss,
+  onPreview,
 }: {
   message: ChatMessage;
   character: string;
@@ -332,6 +423,7 @@ function AssistantBubble({
   vault: { configured: boolean; unlocked: boolean };
   onLoginSubmit: (id: string, input: { username: string; password: string; masterPin?: string }) => Promise<{ ok: boolean; message?: string }>;
   onLoginDismiss: (id: string) => Promise<void>;
+  onPreview: (p: { url: string; name: string }) => void;
 }) {
   const { models } = useAppStore();
   const answeredModel = message.model ? message.model.split(':').slice(-1)[0] : '';
@@ -345,6 +437,11 @@ function AssistantBubble({
         {taskRun ? <TaskCard run={taskRun} /> : null}
         <div className="rounded-[24px] bg-white p-4 shadow-card ring-1 ring-[#F6F4FB] sm:p-5">
         <RichText text={message.content} />
+        {message.attachments?.length ? (
+          <div className="mt-2.5 flex justify-start">
+            <MessageAttachments items={message.attachments} onPreview={onPreview} />
+          </div>
+        ) : null}
         {message.meta?.type === 'server_stats' && message.meta.stats ? <StatsCard stats={message.meta.stats} /> : null}
         {message.meta?.type === 'tasks' && message.meta.tasks ? <TasksCard tasks={message.meta.tasks} /> : null}
         {message.meta?.type === 'browser' ? <BrowserCard sessionId={message.meta.browserSession || null} /> : null}
@@ -377,15 +474,75 @@ function AssistantBubble({
   );
 }
 
+function fileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)}KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+}
+
+/** 말풍선에 붙은 사진 썸네일과 파일 칩 (v0.5.2) */
+function MessageAttachments({
+  items,
+  onPreview,
+}: {
+  items: ChatAttachment[];
+  onPreview: (p: { url: string; name: string }) => void;
+}) {
+  const images = items.filter((i) => i.kind === 'image');
+  const files = items.filter((i) => i.kind !== 'image');
+  return (
+    <div className="flex flex-col items-end gap-1.5">
+      {images.length ? (
+        <div className="flex flex-wrap justify-end gap-1.5">
+          {images.map((img) => (
+            <img
+              key={img.id}
+              src={img.url}
+              alt={img.filename}
+              loading="lazy"
+              className="h-28 w-28 cursor-zoom-in rounded-2xl object-cover shadow-sm ring-1 ring-[#E9E3FA] sm:h-32 sm:w-32"
+              onClick={() => onPreview({ url: img.url, name: img.filename })}
+            />
+          ))}
+        </div>
+      ) : null}
+      {files.map((file) => (
+        <a
+          key={file.id}
+          href={file.downloadUrl}
+          className="flex max-w-[280px] items-center gap-2 rounded-xl bg-white px-2.5 py-2 shadow-sm ring-1 ring-[#EAE6F6] transition active:scale-[0.99]"
+        >
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#F5F1FF] text-[#7C63F6]">
+            <FileText size={14} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[12px] font-semibold text-[#3B3947]">{file.filename}</span>
+            <span className="block text-[10.5px] text-[#A8A5B8]">
+              {fileSize(file.size)} · {file.kind === 'pdf' ? 'PDF' : file.kind === 'text' ? '텍스트' : '파일'} 내려받기
+            </span>
+          </span>
+          <Download size={13} className="shrink-0 text-[#B4B1C2]" />
+        </a>
+      ))}
+    </div>
+  );
+}
+
 /** 작업 중 먼저 도착하는 짧은 안내 말풍선(chat_notify) */
 function NoticeBubble({ message, character }: { message: ChatMessage; character: string }) {
+  const automation = message.meta?.automation;
   return (
     <div className="flex items-start gap-2.5 animate-fade-up lg:gap-3.5">
       <div className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#F1ECFF] ring-1 ring-[#EAE3FF] sm:flex lg:h-11 lg:w-11">
         <Mascot name={character as MascotName} size={24} />
       </div>
       <div className="min-w-0 max-w-[88%] rounded-[20px] rounded-tl-md bg-[#F8F5FF] px-4 py-3 ring-1 ring-[#EFE7FF] sm:max-w-[76%]">
-        <p className="text-[14.5px] leading-[1.65] text-[#4B3FA6]">{message.content}</p>
+        {automation ? (
+          <span className="mb-1.5 inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-[10.5px] font-bold text-[#7C63F6] ring-1 ring-[#EAE3FF]">
+          {automation === 'job' ? '예약 실행 결과' : '워치 알림'}
+          </span>
+        ) : null}
+        <p className="whitespace-pre-line text-[14.5px] leading-[1.65] text-[#4B3FA6]">{message.content}</p>
         <span className="mt-1 block text-[11px] text-[#B4A9DA]">{formatClock(message.createdAt)}</span>
       </div>
     </div>

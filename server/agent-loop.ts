@@ -1,4 +1,4 @@
-import { runAgentStep, type AgentMessage, type ProviderId, type ToolSpec } from './providers';
+import { runAgentStep, type AgentMessage, type AgentPart, type ProviderId, type ToolSpec } from './providers';
 
 /**
  * 에이전트 도구 루프 (Phase 1 구조 그대로).
@@ -11,8 +11,8 @@ export interface AgentLoopOptions {
   model: string;
   /** 시스템 프롬프트 (호출자가 만든다) */
   system: string;
-  /** 이전 대화 (system 제외) */
-  history: { role: 'user' | 'assistant'; content: string }[];
+  /** 이전 대화 (system 제외) — parts에 사진이 붙을 수 있다(v0.5.2) */
+  history: { role: 'user' | 'assistant'; content: string; parts?: AgentPart[] }[];
   /** 채팅 세션 id — 로그인 카드처럼 화면에 붙는 도구가 쓴다 */
   sessionId?: string;
   tools: ToolSpec[];
@@ -48,7 +48,12 @@ export interface AgentLoopResult {
 export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoopResult> {
   const conversation: AgentMessage[] = [
     { role: 'system', content: options.system },
-    ...options.history.map((m) => ({ role: m.role, content: m.content }) as AgentMessage),
+    ...options.history.map(
+      (m) =>
+        (m.role === 'user'
+          ? ({ role: 'user', content: m.content, parts: m.parts } as AgentMessage)
+          : ({ role: 'assistant', content: m.content } as AgentMessage))
+    ),
   ];
 
   let model = options.model;
@@ -67,7 +72,8 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
       break;
     }
 
-    const result = await runAgentStep(options.provider, options.apiKey, model, conversation, options.tools, step === 0);
+    // v0.5.2: 모델 혼잡(503·high demand)은 어느 단계에서든 대체 모델로 재시도한다.
+    const result = await runAgentStep(options.provider, options.apiKey, model, conversation, options.tools, true);
     model = result.model;
     steps += 1;
 

@@ -69,6 +69,20 @@
   button {
     font-family: inherit;
   }
+
+  /*
+   * 아이폰 사파리/PWA는 입력창 글자가 16px보다 작으면 포커스할 때 화면을 확대한다.
+   * 금고·설정·기억함·자동화·채팅 어디를 눌러도 확대되지 않게 모바일에서는 16px를 보장한다.
+   * (Tailwind 유틸리티 text-[13px] 같은 클래스보다 우선하도록 !important를 쓴다)
+   */
+  @media (max-width: 1024px) {
+    input,
+    textarea,
+    select,
+    .pa-input {
+      font-size: 16px !important;
+    }
+  }
 }
 
 @layer components {

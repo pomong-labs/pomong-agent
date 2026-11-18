@@ -114,6 +114,26 @@ export interface ChatMeta {
   tools?: string[];
   browserSession?: string | null;
   taskRunId?: string;
+  /** v0.5.2: 예약·워치 결과가 채팅방에 선톡으로 올 때 */
+  automation?: 'job' | 'watch';
+  badge?: string;
+  jobId?: string | null;
+  runId?: string | null;
+  watcherId?: string | null;
+  eventId?: string | null;
+}
+
+/** v0.5.2: 채팅에 붙은 사진·파일 */
+export interface ChatAttachment {
+  id: string;
+  filename: string;
+  mime: string;
+  size: number;
+  kind: 'image' | 'text' | 'pdf' | 'other';
+  url: string;
+  downloadUrl: string;
+  messageId: number | null;
+  createdAt: string;
 }
 
 export interface TaskStep {
@@ -176,6 +196,8 @@ export interface PushStatus {
   subscriptions: number;
   error: string | null;
   foreground?: boolean;
+  /** v0.5.2: VAPID 발신자 주소(문제 진단용) */
+  subject?: string;
 }
 
 export interface ChatMessage {
@@ -183,6 +205,7 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   meta: ChatMeta | null;
+  attachments?: ChatAttachment[];
   createdAt: string;
   model?: string | null;
 }

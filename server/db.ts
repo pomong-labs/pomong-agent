@@ -292,6 +292,27 @@ CREATE INDEX IF NOT EXISTS idx_login_requests ON login_requests(session_id, crea
 // v0.5.1: 작업 카드는 실제 도구가 돌 때만 만든다. 예전 버전이 남긴 빈 카드는 지운다.
 db.prepare("DELETE FROM task_runs WHERE steps = 0").run();
 
+/* ------------------------------------------------------------------ */
+/* v0.5.2 schema: 채팅 첨부(사진·파일)                                   */
+/* 파일 자체는 data/uploads/ 에 두고, 여기에는 메타데이터만 남긴다.        */
+/* ------------------------------------------------------------------ */
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS chat_attachments (
+  id         TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  message_id INTEGER,
+  filename   TEXT NOT NULL,
+  mime       TEXT NOT NULL,
+  size       INTEGER NOT NULL,
+  kind       TEXT NOT NULL DEFAULT 'other',
+  path       TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chat_attachments_message ON chat_attachments(message_id);
+CREATE INDEX IF NOT EXISTS idx_chat_attachments_session ON chat_attachments(session_id, created_at DESC);
+`);
+
 
 /* ------------------------------------------------------------------ */
 /* Settings                                                            */

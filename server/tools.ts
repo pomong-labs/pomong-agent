@@ -8,6 +8,7 @@ import * as jobs from './jobs';
 import * as watchers from './watchers';
 import * as memory from './memory';
 import * as loginRequests from './login-requests';
+import * as attachments from './attachments';
 import { webSearch, formatSearch } from './web-search';
 import type { ToolSpec } from './providers';
 
@@ -303,15 +304,32 @@ export const TOOL_SPECS: ToolSpec[] = [
   {
     name: 'browser_fill_vault',
     description:
-      '금고에 저장된 아이디/비밀번호를 브라우저 입력창에 서버가 직접 채운다(값은 AI에게 전달되지 않는다). 로그인 화면에서만 쓴다. 금고가 잠겨 있으면 먼저 금고 잠금 해제를 안내한다.',
+      '금고에 저장된 아이디/비밀번호를 브라우저 입력창에 서버가 직접 채운다(값은 AI에게 전달되지 않는다). 로그인 화면에서만 쓴다. 아이디·비밀번호·로그인 버튼을 한 번에 끝내려면 browser_login_with_vault를 쓰는 것이 좋다. 금고가 잠겨 있으면 먼저 금고 잠금 해제를 안내한다.',
     parameters: {
       type: 'object',
       properties: {
         vault_id: { type: 'string', description: 'vault_find_for_site가 준 항목 id' },
         field: { type: 'string', enum: ['username', 'password'], description: '채울 값' },
         ref: { type: 'string', description: '입력창 요소 ref (browser_snapshot에서 확인)' },
+        submit: { type: 'boolean', description: '비밀번호를 채운 뒤 Enter까지 눌러 전송할지(기본 false)' },
       },
       required: ['vault_id', 'field', 'ref'],
+    },
+  },
+  {
+    name: 'browser_login_with_vault',
+    description:
+      '금고 계정으로 로그인을 **한 번에 끝낸다**: 아이디 입력 → 비밀번호 입력 → 로그인 버튼 클릭까지 서버가 직접 한다(값은 AI에게 전달되지 않는다). 로그인 화면에서 vault_find_for_site로 항목 id를 찾았으면 이것만 부르면 된다. ref는 비워 두어도 서버가 화면에서 찾는다. 인증번호(OTP)·캡차가 나오면 그때만 browser_handover를 쓴다.',
+    parameters: {
+      type: 'object',
+      properties: {
+        vault_id: { type: 'string', description: '금고 항목 id (vault_find_for_site 결과)' },
+        username_ref: { type: 'string', description: '아이디 입력창 ref (없으면 자동 탐색)' },
+        password_ref: { type: 'string', description: '비밀번호 입력창 ref (없으면 자동 탐색)' },
+        submit_ref: { type: 'string', description: '로그인 버튼 ref (없으면 자동 탐색)' },
+        submit: { type: 'boolean', description: '로그인 버튼을 누를지(기본 true)' },
+      },
+      required: ['vault_id'],
     },
   },
 
@@ -431,6 +449,21 @@ export const TOOL_SPECS: ToolSpec[] = [
       required: ['name', 'url'],
     },
   },
+
+  /* ------------------ v0.5.2: 채팅 첨부 파일 ------------------ */
+  {
+    name: 'attachment_read',
+    description:
+      '사용자가 채팅에 첨부한 파일의 내용을 다시 읽는다. 첨부는 대부분 자동으로 프롬프트에 포함되므로, 내용이 잘렸거나 파일 정보만 전달됐을 때 쓴다. id는 [첨부] 블록에 적힌 값을 쓴다.',
+    parameters: {
+      type: 'object',
+      properties: {
+        attachment_id: { type: 'string', description: '첨부 id' },
+        max_chars: { type: 'number', description: '읽을 최대 글자 수(기본 12000)' },
+      },
+      required: ['attachment_id'],
+    },
+  },
 ];
 
 /** 앱 '더보기 → 도구 목록' 화면에 보여줄 도구 설명 */
@@ -525,6 +558,12 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
     label: '금고 자동 로그인',
     summary: '금고 계정으로 로그인 화면을 채워요. 비밀번호는 AI에게 전달되지 않아요.',
     example: '깃허브 로그인해줘',
+  },
+  {
+    name: 'browser_login_with_vault',
+    label: '원스톱 로그인',
+    summary: '아이디·비밀번호 입력부터 로그인 버튼 클릭까지 한 번에 끝내요. OTP·캡차만 내게 넘어와요.',
+    example: '깃허브에 금고 계정으로 로그인해줘',
   },
   {
     name: 'vault_request_login',
@@ -825,8 +864,8 @@ export async function runTool(name: string, args: Record<string, unknown>, ctx: 
         const values = vault.secretForFill(vaultId);
         const value = field === 'password' ? values.secret : values.username;
         if (!value) return { content: `이 항목에는 ${field === 'password' ? '비밀번호' : '아이디'}가 저장되어 있지 않습니다.` };
-        const result = await browser.fillFromVault(ref, value, field);
-        return { content: `${field === 'password' ? '비밀번호' : '아이디'}를 금고에서 채웠습니다(값은 기록하지 않음).\n\n${result.snapshot}`, meta: 'browser' };
+        const result = await browser.fillFromVault(ref, value, field, { submit: Boolean(args.submit) });
+        return { content: `${field === 'password' ? '비밀번호' : '아이디'}를 금고에서 채웠습니다(값은 기록하지 않음).${args.submit ? ' Enter로 전송했습니다.' : ''}\n\n${result.snapshot}`, meta: 'browser' };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (message.includes('잠겨')) {
@@ -837,6 +876,55 @@ export async function runTool(name: string, args: Record<string, unknown>, ctx: 
         }
         return { content: `자동 입력에 실패했습니다: ${message}` };
       }
+    }
+    case 'browser_login_with_vault': {
+      const vaultId = String(args.vault_id || '');
+      if (!vaultId) return { content: '금고 항목 id가 필요합니다(vault_find_for_site로 먼저 찾으세요).' };
+      try {
+        const values = vault.secretForFill(vaultId);
+        if (!values.secret) return { content: '이 항목에는 비밀번호가 저장되어 있지 않습니다.' };
+        const result = await browser.loginWithVault({
+          username: values.username,
+          password: values.secret,
+          usernameRef: args.username_ref ? String(args.username_ref) : undefined,
+          passwordRef: args.password_ref ? String(args.password_ref) : undefined,
+          submitRef: args.submit_ref ? String(args.submit_ref) : undefined,
+          submit: args.submit === undefined ? true : Boolean(args.submit),
+        });
+        const done = `아이디 ${result.filledUsername ? '입력 완료' : '칸을 찾지 못해 건너뜀'} · 비밀번호 입력 완료 · ${
+          result.submitted === 'click' ? '로그인 버튼 클릭' : result.submitted === 'enter' ? 'Enter로 전송' : '전송하지 않음'
+        } (값은 기록하지 않음).`;
+        const next = result.stillOnLogin
+          ? '\n\n※ 아직 로그인 화면으로 보입니다. 아이디·비밀번호가 틀렸거나 인증번호(OTP)·캡차·2단계 인증일 수 있습니다. 화면에 인증번호·캡차가 있으면 browser_handover로 사용자에게 넘기고, 그냥 로그인 실패 문구라면 사용자에게 금고의 계정 정보를 확인해 달라고 알려 주세요.'
+          : '\n\n※ 로그인 화면을 벗어났습니다. 이어서 하려던 일을 계속하세요.';
+        return { content: `${done}${next}\n\n${result.snapshot}`, meta: 'browser' };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (message.includes('잠겨')) {
+          return {
+            content:
+              '금고가 잠겨 있어 자동 로그인을 할 수 없습니다. 사용자에게 금고 탭에서 PIN으로 잠금을 해제해 달라고 안내한 뒤 다시 시도하세요.',
+          };
+        }
+        return { content: `자동 로그인에 실패했습니다: ${message}` };
+      }
+    }
+    case 'attachment_read': {
+      const id = String(args.attachment_id || '').trim();
+      if (!id) return { content: '첨부 id가 필요합니다.' };
+      const row = attachments.getRow(id);
+      if (!row) return { content: `첨부를 찾지 못했습니다: ${id}` };
+      if (row.kind === 'image') {
+        return { content: `'${row.filename}'은 사진입니다(${(row.size / 1024).toFixed(0)}KB). 사진은 대화에 첨부될 때 이미 함께 전달됩니다.` };
+      }
+      const maxChars = Math.min(40_000, Math.max(500, Number(args.max_chars) || 12_000));
+      const content = attachments.readTextContent(row, maxChars);
+      if (!content) {
+        return {
+          content: `'${row.filename}'의 내용을 텍스트로 읽지 못했습니다(형식: ${row.mime}, ${(row.size / 1024).toFixed(0)}KB). 파일은 서버 data/${row.path} 에 저장되어 있습니다. 사용자에게 이 사실을 알리고, 필요하면 텍스트로 붙여 달라고 안내하세요.`,
+        };
+      }
+      return { content: `<file name="${row.filename}" (앞부분)>\n${content}\n</file>` };
     }
     case 'time_now': {
       const now = new Date();

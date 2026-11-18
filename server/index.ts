@@ -28,6 +28,7 @@ import {
   setLastGoodGeminiModel,
   testProvider,
   type AgentMessage,
+  type AgentPart,
   type ProviderId,
 } from './providers';
 import { TOOL_SPECS, TOOL_CATALOG, runTool, listTaskRows, toTaskView, normalizeDue, normalizePriority, type TaskRow } from './tools';
@@ -44,6 +45,8 @@ import * as services from './services';
 import * as push from './push';
 import * as taskRuns from './task-runs';
 import * as loginRequests from './login-requests';
+import * as attachments from './attachments';
+import { postAutomationMessage } from './automation-chat';
 import type { TaskRunView } from './task-runs';
 
 ensureDataDir();
@@ -540,12 +543,20 @@ function systemPrompt(memoryBlock = ''): string {
       '사용자의 서버 상태와 할 일 목록을 실시간으로 볼 수 있어. 사실에 근거해서만 말하고, 모르는 것은 모른다고 해.'
     ),
     s(
+      '로그인 페이지가 404이거나 "페이지를 찾을 수 없습니다" 화면이 뜨면 바로 포기하지 마세요. 해당 서비스의 메인 도메인(예: https://kmong.com/)으로 이동해 화면에서 "로그인"·"로그인/회원가입" 버튼을 찾아 누른 뒤 이어서 하세요. 주소를 모르겠으면 web_search로 "사이트이름 로그인"을 찾아 실제 주소를 확인하세요.',
+      '로그인 페이지가 404이거나 "페이지를 찾을 수 없습니다" 화면이 뜨면 바로 포기하지 마. 그 서비스의 메인 도메인(예: https://kmong.com/)으로 이동해 "로그인"·"로그인/회원가입" 버튼을 찾아 누른 뒤 이어서 해. 주소를 모르겠으면 web_search로 "사이트이름 로그인"을 찾아 실제 주소를 확인해.'
+    ),
+    s(
+      '사용자가 사진이나 파일을 첨부하면 그 내용을 실제로 보고 답하세요. 사진은 함께 전달되므로 "볼 수 없다"고 하지 말고 무엇이 보이는지 설명하세요. 파일 내용은 [첨부] 블록에 들어 있고, 잘렸거나 읽지 못한 파일은 attachment_read 도구로 다시 읽거나 사용자에게 물어보세요. 첨부와 상관없는 추측은 하지 마세요.',
+      '사용자가 사진이나 파일을 첨부하면 그 내용을 실제로 보고 답해. 사진은 함께 전달되니까 "볼 수 없다"고 하지 말고 뭐가 보이는지 설명해. 파일 내용은 [첨부] 블록에 들어 있고, 잘렸거나 못 읽은 파일은 attachment_read 도구로 다시 읽거나 사용자에게 물어봐. 첨부와 상관없는 추측은 하지 마.'
+    ),
+    s(
       '도구를 쓸 수 있습니다: 할 일 조회(tasks_list)·추가(tasks_add)·완료(tasks_complete), 금고 항목 이름 조회(vault_list), 서버 상태(server_stats), 날씨 조회(weather_get), 현재 시각(time_now), 웹 브라우저(browser_open·snapshot·click·type·extract·screenshot·handover·close), 예약·워치(automation_list·job_create·watch_create).',
       '도구를 쓸 수 있어: 할 일 조회(tasks_list)·추가(tasks_add)·완료(tasks_complete), 금고 항목 이름 조회(vault_list), 서버 상태(server_stats), 날씨 조회(weather_get), 현재 시각(time_now), 웹 브라우저(browser_open·snapshot·click·type·extract·screenshot·handover·close), 예약·워치(automation_list·job_create·watch_create).'
     ),
     s(
-      '더 쓸 수 있는 도구: 무료 웹 검색(web_search), 중간 안내 말풍선(chat_notify), 영구 기억(memory_save·memory_search·memory_delete), 금고 계정 찾기(vault_find_for_site)·자동 입력(browser_fill_vault), 로그인 카드 띄우기(vault_request_login).',
-      '더 쓸 수 있는 도구: 무료 웹 검색(web_search), 중간 안내 말풍선(chat_notify), 영구 기억(memory_save·memory_search·memory_delete), 금고 계정 찾기(vault_find_for_site)·자동 입력(browser_fill_vault), 로그인 카드 띄우기(vault_request_login).'
+      '더 쓸 수 있는 도구: 무료 웹 검색(web_search), 중간 안내 말풍선(chat_notify), 영구 기억(memory_save·memory_search·memory_delete), 금고 계정 찾기(vault_find_for_site)·자동 입력(browser_fill_vault)·원스톱 로그인(browser_login_with_vault), 로그인 카드 띄우기(vault_request_login), 첨부 파일 다시 읽기(attachment_read).',
+      '더 쓸 수 있는 도구: 무료 웹 검색(web_search), 중간 안내 말풍선(chat_notify), 영구 기억(memory_save·memory_search·memory_delete), 금고 계정 찾기(vault_find_for_site)·자동 입력(browser_fill_vault)·원스톱 로그인(browser_login_with_vault), 로그인 카드 띄우기(vault_request_login), 첨부 파일 다시 읽기(attachment_read).'
     ),
     s(
       '작업이 오래 걸릴 것 같으면(브라우저 열기, 여러 사이트 확인, 긴 검색 등) 도구를 부르기 전에 chat_notify로 "깃허브 연동해 드릴게요, 잠시만요!" 같은 짧은 안내를 먼저 보내세요. 한 번의 요청에서 한 번만 보냅니다.',
@@ -556,8 +567,8 @@ function systemPrompt(memoryBlock = ''): string {
       '기억 규칙(중요): 사용자가 "기억해 줘"라고 하지 않아도, 대화 중 드러난 취향·습관·직업·중요한 인물·약속·프로젝트 규칙은 memory_save로 조용히 저장해. 저장은 답변을 쓰기 전에 하고, 사용자에게 "저장했어"라고 굳이 말하지 않아도 돼. 인사·날씨 같은 일회성은 저장하지 마.'
     ),
     s(
-      '로그인·연동이 필요한 작업일 때는 절대 "직접 로그인하세요"로 끝내지 말고 이 순서로 하세요. ① vault_find_for_site로 금고 계정을 찾습니다. ② 계정이 있고 금고가 열려 있으면 browser_open(로그인 주소) → browser_snapshot으로 입력창 ref 확인 → browser_fill_vault로 아이디·비밀번호 입력 → 로그인 버튼을 browser_click까지 직접 하고, 인증번호(OTP)·캡차만 browser_handover로 넘깁니다. ③ 계정이 없으면 vault_request_login(service, login_url, site_host)을 불러 채팅에 로그인 카드를 띄우고 "아래 카드에 계정 정보를 입력해 주시면 제가 바로 로그인해 드릴게요!"라고 안내합니다(이때 브라우저는 열지 않습니다). 사용자가 카드를 저장하면 그 사실이 시스템 메시지로 전달되니, 그때 browser_open부터 이어서 로그인을 끝내세요. ④ 금고 자체가 잠겨 있으면 카드의 PIN 입력란을 안내합니다. 계정이 2개 이상인데 기본 계정이 없으면 임의로 고르지 말고 어느 계정을 쓸지 물어보세요.',
-      '로그인·연동이 필요한 작업일 때는 절대 "직접 로그인해"로 끝내지 말고 이 순서로 해. ① vault_find_for_site로 금고 계정을 찾아. ② 계정이 있고 금고가 열려 있으면 browser_open(로그인 주소) → browser_snapshot으로 입력창 ref 확인 → browser_fill_vault로 아이디·비밀번호 입력 → 로그인 버튼을 browser_click까지 직접 하고, 인증번호(OTP)·캡차만 browser_handover로 넘겨. ③ 계정이 없으면 vault_request_login(service, login_url, site_host)을 불러 채팅에 로그인 카드를 띄우고 "아래 카드에 계정 정보를 입력해 주시면 제가 바로 로그인해 드릴게요!"라고 안내해(이때 브라우저는 열지 않아). 사용자가 카드를 저장하면 그 사실이 시스템 메시지로 전달되니, 그때 browser_open부터 이어서 로그인을 끝내줘. ④ 금고 자체가 잠겨 있으면 카드의 PIN 입력란을 안내해. 계정이 2개 이상인데 기본 계정이 없으면 임의로 고르지 말고 어느 계정을 쓸지 물어봐.'
+      '로그인·연동이 필요한 작업일 때는 절대 "직접 로그인하세요"로 끝내지 말고 이 순서로 하세요. ① vault_find_for_site로 금고 계정을 찾습니다. ② 계정이 있고 금고가 열려 있으면 browser_open(로그인 주소) → browser_login_with_vault(vault_id) 한 번으로 아이디 입력·비밀번호 입력·로그인 버튼 클릭까지 끝내고, 인증번호(OTP)·캡차·2단계 인증이 떴을 때만 browser_handover로 넘깁니다. browser_fill_vault만 부르고 끝내거나 로그인 버튼을 누르지 않은 채 사용자에게 넘기지 마세요. ③ 계정이 없으면 vault_request_login(service, login_url, site_host)을 불러 채팅에 로그인 카드를 띄우고 "아래 카드에 계정 정보를 입력해 주시면 제가 바로 로그인해 드릴게요!"라고 안내합니다(이때 브라우저는 열지 않습니다). 사용자가 카드를 저장하면 그 사실이 시스템 메시지로 전달되니, 그때 browser_open부터 이어서 로그인을 끝내세요. ④ 금고 자체가 잠겨 있으면 카드의 PIN 입력란을 안내합니다. 계정이 2개 이상인데 기본 계정이 없으면 임의로 고르지 말고 어느 계정을 쓸지 물어보세요.',
+      '로그인·연동이 필요한 작업일 때는 절대 "직접 로그인해"로 끝내지 말고 이 순서로 해. ① vault_find_for_site로 금고 계정을 찾아. ② 계정이 있고 금고가 열려 있으면 browser_open(로그인 주소) → browser_login_with_vault(vault_id) 한 번으로 아이디 입력·비밀번호 입력·로그인 버튼 클릭까지 끝내고, 인증번호(OTP)·캡차·2단계 인증이 떴을 때만 browser_handover로 넘겨. browser_fill_vault만 부르고 끝내거나 로그인 버튼을 누르지 않은 채 사용자에게 넘기지 마. ③ 계정이 없으면 vault_request_login(service, login_url, site_host)을 불러 채팅에 로그인 카드를 띄우고 "아래 카드에 계정 정보를 입력해 주시면 제가 바로 로그인해 드릴게요!"라고 안내해(이때 브라우저는 열지 않아). 사용자가 카드를 저장하면 그 사실이 시스템 메시지로 전달되니, 그때 browser_open부터 이어서 로그인을 끝내줘. ④ 금고 자체가 잠겨 있으면 카드의 PIN 입력란을 안내해. 계정이 2개 이상인데 기본 계정이 없으면 임의로 고르지 말고 어느 계정을 쓸지 물어봐.'
     ),
     s(
       '쿠팡·무신사처럼 봇을 막는 사이트에서 browser_open이 막히거나 오류가 나면, 곧바로 web_search로 같은 정보를 찾아 답하세요. 사이트 안에서만 볼 수 있는 값(내 주문·장바구니·재고)은 추측하지 말고 그 사실을 알려 주세요.',
@@ -627,14 +638,18 @@ app.get('/api/chat/messages', requireAuth, (req, res) => {
   const rows = db
     .prepare('SELECT id, role, content, meta, model, created_at FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT 100')
     .all(session) as { id: number; role: string; content: string; meta: string | null; model: string | null; created_at: string }[];
+  const ordered = rows.reverse();
+  // v0.5.2: 말풍선에 붙은 사진·파일도 함께 내려준다.
+  const files = attachments.listForMessages(ordered.map((r) => r.id));
   res.json({
     ok: true,
-    messages: rows.reverse().map((r) => ({
+    messages: ordered.map((r) => ({
       id: r.id,
       role: r.role,
       content: r.content,
       meta: r.meta ? JSON.parse(r.meta) : null,
       model: r.model,
+      attachments: files[r.id] || [],
       createdAt: r.created_at,
     })),
     // 지난 대화의 작업 카드(단계 로그 포함)도 함께 준다.
@@ -649,12 +664,75 @@ app.delete('/api/chat/messages', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+/* --------------------------- attachments -------------------------- */
+
+/**
+ * 채팅 첨부 업로드 (v0.5.2)
+ * 기존 클라이언트 라이브러리(multer 등)를 더하지 않으려고 원본 바이트(body)를 그대로 받는다.
+ * 파일 이름은 ?name= 쿼리나 x-filename 헤더로 받는다.
+ */
+app.post(
+  '/api/chat/upload',
+  requireAuth,
+  express.raw({ type: () => true, limit: '16mb' }),
+  (req, res) => {
+    const raw = req.body as unknown;
+    if (!Buffer.isBuffer(raw) || !raw.length) {
+      res.status(400).json({ ok: false, code: 'empty_file', message: '파일이 비어 있습니다.' });
+      return;
+    }
+    const rawName = String((req.query.name as string) || req.headers['x-filename'] || 'file');
+    let filename = rawName;
+    try {
+      filename = decodeURIComponent(rawName);
+    } catch {
+      /* 그대로 쓴다 */
+    }
+    const mime = String(req.headers['x-file-type'] || req.headers['content-type'] || '').split(';')[0].trim();
+    try {
+      const view = attachments.saveUpload({
+        sessionId: String((req.query.session as string) || 'default'),
+        filename,
+        mime: mime && mime !== 'application/octet-stream' ? mime : attachments.guessMime(filename),
+        data: raw,
+      });
+      res.json({ ok: true, attachment: view });
+    } catch (err) {
+      res.status(400).json({ ok: false, code: 'upload_failed', message: err instanceof Error ? err.message : String(err) });
+    }
+  }
+);
+
+/** 첨부 파일 내려주기(사진은 화면에, ?download=1 은 내려받기) */
+app.get('/api/chat/attachments/:id', requireAuth, (req, res) => {
+  const row = attachments.getRow(req.params.id);
+  if (!row) {
+    res.status(404).json({ ok: false, code: 'not_found', message: '첨부를 찾을 수 없습니다.' });
+    return;
+  }
+  const file = attachments.absolutePath(row);
+  if (!fs.existsSync(file)) {
+    res.status(410).json({ ok: false, code: 'file_gone', message: '첨부 파일이 서버에 없습니다.' });
+    return;
+  }
+  res.setHeader('Content-Type', row.mime || 'application/octet-stream');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cache-Control', 'private, max-age=86400');
+  const download = String(req.query.download || '') === '1';
+  const disposition = download || row.kind !== 'image' ? 'attachment' : 'inline';
+  res.setHeader(
+    'Content-Disposition',
+    `${disposition}; filename*=UTF-8''${encodeURIComponent(row.filename)}`
+  );
+  res.sendFile(file);
+});
+
 /* --------------------------- chat turn core ------------------------ */
 
 interface ChatTurnInput {
   session: string;
-  /** 모델에게 넘길 이전 대화 (system 제외) */
-  history: { role: 'user' | 'assistant'; content: string }[];
+  /** 모델에게 넘길 이전 대화 (system 제외) — parts에 사진이 붙을 수 있다 */
+  history: { role: 'user' | 'assistant'; content: string; parts?: AgentPart[] }[];
   /** 메타(카드) 판별에 쓸 사용자 요청 원문 */
   prompt: string;
   /** 로그인 카드 저장처럼 시스템이 이어서 시키는 턴 */
@@ -830,10 +908,17 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
 }
 
 app.post('/api/chat/messages', requireAuth, async (req, res) => {
-  const { message, session = 'default' } = req.body as { message?: string; session?: string };
+  const { message, session = 'default', attachmentIds } = req.body as {
+    message?: string;
+    session?: string;
+    attachmentIds?: string[];
+  };
   const text = String(message || '').trim();
-  if (!text) {
-    res.status(400).json({ ok: false, code: 'empty_message', message: '메시지를 입력해 주세요.' });
+  const ids = Array.isArray(attachmentIds)
+    ? attachmentIds.map((v) => String(v)).filter(Boolean).slice(0, attachments.MAX_FILES_PER_MESSAGE)
+    : [];
+  if (!text && !ids.length) {
+    res.status(400).json({ ok: false, code: 'empty_message', message: '메시지나 첨부 파일을 보내 주세요.' });
     return;
   }
   if (text.length > 8000) {
@@ -854,25 +939,24 @@ app.post('/api/chat/messages', requireAuth, async (req, res) => {
   const userInfo = db
     .prepare('INSERT INTO messages(session_id, role, content, meta, created_at) VALUES(?,?,?,?,?)')
     .run(session, 'user', text, null, now);
-
-  const history = db
-    .prepare('SELECT role, content FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT 20')
-    .all(session) as { role: string; content: string }[];
-  const turns = history
-    .reverse()
-    .map((m) => ({ role: m.role === 'assistant' ? ('assistant' as const) : ('user' as const), content: m.content }));
+  const userMessageId = Number(userInfo.lastInsertRowid);
+  const savedAttachments = ids.length ? attachments.attachToMessage(ids, userMessageId, session) : [];
+  // 첨부만 보냈으면 모델에게는 그 사실을 알려 준다.
+  const prompt = text || '첨부한 파일을 확인해 주세요.';
+  const history = buildModelHistory(session);
 
   try {
-    const result = await runChatTurn({ session, history: turns, prompt: text });
+    const result = await runChatTurn({ session, history, prompt });
     res.json({
       ok: true,
       message: result.assistantMessage,
       // 사용자가 보낸 메시지도 저장된 그대로 돌려준다(화면에서 사라지지 않게).
       userMessage: {
-        id: Number(userInfo.lastInsertRowid),
+        id: userMessageId,
         role: 'user',
         content: text,
         meta: null,
+        attachments: savedAttachments,
         createdAt: now,
       },
       model: result.model,
@@ -885,6 +969,45 @@ app.post('/api/chat/messages', requireAuth, async (req, res) => {
     res.status(502).json({ ok: false, code: 'provider_error', message: `AI 응답을 받지 못했습니다. (${message2.slice(0, 200)})` });
   }
 });
+
+/**
+ * 모델에게 넘길 대화 기록을 만든다(v0.5.2: 첨부 포함).
+ * - 글: 저장된 그대로 + 첨부 파일 내용(앞부분)
+ * - 사진: 최근 사용자 메시지 2개까지만 실제 이미지로 넘긴다(서버·모델 부담 제한)
+ */
+function buildModelHistory(session: string): { role: 'user' | 'assistant'; content: string; parts?: AgentPart[] }[] {
+  const rows = db
+    .prepare('SELECT id, role, content FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT 20')
+    .all(session) as { id: number; role: string; content: string }[];
+  const ordered = rows.reverse();
+  const files = attachments.listForMessages(ordered.map((r) => r.id));
+  const imageRows = ordered
+    .filter((r) => r.role === 'user' && (files[r.id] || []).some((a) => a.kind === 'image'))
+    .map((r) => r.id);
+  const inlineRows = new Set(imageRows.slice(-2));
+  let textBudget = 24_000;
+
+  return ordered.map((row) => {
+    const role = row.role === 'assistant' ? ('assistant' as const) : ('user' as const);
+    const list = files[row.id] || [];
+    if (!list.length) return { role, content: row.content };
+    const block = attachments.buildPromptBlock(
+      list.map((a) => a.id),
+      { images: inlineRows.has(row.id), maxChars: textBudget > 6000 ? 6000 : Math.max(800, textBudget) }
+    );
+    textBudget = Math.max(0, textBudget - block.text.length);
+    const content = `${row.content}${block.text ? `\n\n[첨부]\n${block.text}` : ''}`;
+    if (!block.images.length) return { role, content };
+    return {
+      role,
+      content,
+      parts: [
+        { type: 'text' as const, text: content },
+        ...block.images.map((img) => ({ type: 'image' as const, mime: img.mime, dataBase64: img.dataBase64 })),
+      ],
+    };
+  });
+}
 
 /**
  * 로그인 카드 저장 뒤 후속 턴.
@@ -901,8 +1024,8 @@ async function runLoginFollowUp(request: loginRequests.LoginRequestView, vaultId
     `[시스템] 사용자가 '${request.service}' 로그인 정보를 금고(vault_id: ${vaultId})에 저장했습니다. ` +
     `지금 바로 ${request.loginUrl} 으로 이동해 browser_fill_vault로 로그인을 완료하세요. ` +
     `비밀번호는 금고에서 서버가 직접 채우므로 너는 값을 알 필요가 없습니다. ` +
-    `browser_open → browser_snapshot으로 아이디/비밀번호 입력창 ref를 확인 → browser_fill_vault(username)·browser_fill_vault(password) → 로그인 버튼 browser_click 순서로 하고, ` +
-    `인증번호(OTP)·캡차가 나오면 browser_handover로 사용자에게 넘기세요. 끝나면 무엇이 되었는지 한두 줄로 알려 주세요.`;
+    `browser_open → browser_login_with_vault(vault_id: ${vaultId}) 한 번으로 아이디·비밀번호 입력과 로그인 버튼 클릭까지 끝내고, ` +
+    `인증번호(OTP)·캡차·2단계 인증이 나오면 browser_handover로 사용자에게 넘기세요. 끝나면 무엇이 되었는지 한두 줄로 알려 주세요.`;
   const history = db
     .prepare('SELECT role, content FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT 20')
     .all(request.sessionId) as { role: string; content: string }[];
@@ -1588,6 +1711,21 @@ app.delete('/api/policies/:pattern', requireAuth, (req, res) => {
 
 /* ------------------------------ static ---------------------------- */
 
+// 본문 크기 초과(첨부 15MB 초과 등)는 스택 대신 한 줄 안내로 돌려준다.
+app.use((err: unknown, _req: Request, res: Response, next: (e?: unknown) => void) => {
+  const type = (err as { type?: string })?.type;
+  if (type === 'entity.too.large') {
+    res.status(413).json({ ok: false, code: 'too_large', message: '파일이 너무 큽니다. 한 파일은 최대 15MB까지 첨부할 수 있어요.' });
+    return;
+  }
+  if (res.headersSent) {
+    next(err);
+    return;
+  }
+  addLog('error', `요청 처리 오류: ${err instanceof Error ? err.message : String(err)}`);
+  res.status(500).json({ ok: false, code: 'server_error', message: '서버에서 요청을 처리하지 못했습니다.' });
+});
+
 function serveSetupLocked(res: Response): void {
   res.status(410).type('html').send(`<!doctype html><html lang="ko"><head><meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -1711,27 +1849,57 @@ app.listen(PORT, HOST, () => {
       return { text: loop.text || '실행을 마쳤습니다.', steps: loop.steps };
     },
     (job, run) => {
-      publish({
-        type: 'job',
-        title:
-          run.status === 'ok'
-            ? `${job.name} 완료`
-            : run.status === 'approval_needed'
-              ? `${job.name} · 승인이 필요해요`
-              : `${job.name} 실패`,
-        body: (run.result || run.error || '').slice(0, 300),
-        data: { jobId: job.id, runId: run.id, status: run.status },
+      const failed = run.status === 'failed';
+      const approval = run.status === 'approval_needed';
+      const resultText = (run.result || run.error || '').trim();
+      const body = resultText || (failed ? '실행 중 오류가 났습니다.' : '실행을 마쳤습니다.');
+      // v0.5.2: 자동화 탭 로그에만 남기지 않고 메인 채팅방에 선톡으로 남긴다(+푸시).
+      const posted = postAutomationMessage({
+        kind: 'job',
+        badge: failed ? `예약 실패: ${job.name}` : `예약 알림: ${job.name}`,
+        body,
+        jobId: job.id,
+        runId: run.id,
+        notifyTitle: failed ? `${job.name} 실패` : approval ? `${job.name} · 승인이 필요해요` : `${job.name} 완료`,
+        notifyBody: body,
       });
+      publish(
+        {
+          type: 'job',
+          title: failed ? `${job.name} 실패` : approval ? `${job.name} · 승인이 필요해요` : `${job.name} 완료`,
+          body: body.slice(0, 300),
+          data: { jobId: job.id, runId: run.id, status: run.status, chatMessageId: posted?.messageId || null },
+        },
+        // 채팅 선톡이 이미 푸시를 보냈으면 중복 알림을 막는다.
+        { push: !posted }
+      );
     }
   );
 
   watchers.setWatchNotifier((watcher, event) => {
-    publish({
-      type: 'watch',
-      title: event.kind === 'changed' ? `${watcher.name} 변경 감지` : `${watcher.name} · ${event.kind}`,
-      body: (event.diffSummary || '').slice(0, 300),
-      data: { watcherId: watcher.id, eventId: event.id, kind: event.kind, url: watcher.url },
-    });
+    // 처음 기록(first)·복구는 조용히 넘기고, 실제 변화와 실패만 채팅방에 남긴다.
+    const meaningful = event.kind === 'changed' || event.kind === 'failed';
+    const head = event.kind === 'changed' ? `워치 변경: ${watcher.name}` : `워치 확인 실패: ${watcher.name}`;
+    const posted = meaningful
+      ? postAutomationMessage({
+          kind: 'watch',
+          badge: head,
+          body: [event.diffSummary || '', watcher.url].filter(Boolean).join('\n'),
+          watcherId: watcher.id,
+          eventId: event.id,
+          notifyTitle: head,
+          notifyBody: event.diffSummary || watcher.url,
+        })
+      : null;
+    publish(
+      {
+        type: 'watch',
+        title: event.kind === 'changed' ? `${watcher.name} 변경 감지` : `${watcher.name} · ${event.kind}`,
+        body: (event.diffSummary || '').slice(0, 300),
+        data: { watcherId: watcher.id, eventId: event.id, kind: event.kind, url: watcher.url, chatMessageId: posted?.messageId || null },
+      },
+      { push: !posted }
+    );
   });
   watchers.startWatcherLoop();
   browser.resetStaleSessions();

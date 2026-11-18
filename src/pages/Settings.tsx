@@ -143,8 +143,18 @@ export default function SettingsPage() {
     setPushBusy(true);
     setPushMsg('');
     try {
-      const res = await api.post<{ sent: number; skipped: boolean; reason?: string }>('/api/push/test');
-      setPushMsg(res.sent ? '테스트 알림을 보냈어요.' : `보내지 못했어요(${res.reason || '구독 없음'}).`);
+      const res = await api.post<{ sent: number; skipped: boolean; reason?: string; code?: string; details?: string[] }>(
+        '/api/push/test'
+      );
+      if (res.sent) {
+        setPushMsg('테스트 알림을 보냈어요.');
+      } else {
+        // v0.5.2: '구독 없음'으로 뭉뚜리지 않고 실제 이유를 보여 준다.
+        const lines = [res.reason || '알 수 없는 이유로 보내지 못했어요.'];
+        if (res.code === 'no_subscription') lines.push('아래 알림 스위치를 껐다 켜면 이 기기가 다시 등록됩니다.');
+        if (res.details?.length) lines.push(`서버 응답: ${res.details.join(' / ')}`);
+        setPushMsg(lines.join('\n'));
+      }
     } catch (err) {
       setPushMsg(err instanceof Error ? err.message : '테스트 알림을 보내지 못했습니다.');
     } finally {
@@ -471,10 +481,15 @@ export default function SettingsPage() {
               <Globe size={14} /> <Trash2 size={13} /> 브라우저 로그인 세션 초기화
             </button>
           </div>
-          {pushMsg ? <p className="mt-2 rounded-xl bg-[#F7F5FF] px-3 py-2 text-[12px] text-[#5B4BC4]">{pushMsg}</p> : null}
+          {pushMsg ? (
+            <p className="mt-2 whitespace-pre-line rounded-xl bg-[#F7F5FF] px-3 py-2 text-[12px] leading-relaxed text-[#5B4BC4]">
+              {pushMsg}
+            </p>
+          ) : null}
           <p className="mt-3 text-[11.5px] leading-[1.6] text-[#B4B1C2]">
             브라우저 로그인 세션은 서버의 data/browser-state.json 에 보관돼, 앱을 다시 열어도 로그인이 유지됩니다.
             아이폰은 사파리 공유 → “홈 화면에 추가”로 설치해야 푸시 알림을 받을 수 있어요.
+            {pushStatus?.subject ? ` (발신자 주소: ${pushStatus.subject})` : ''}
           </p>
         </section>
 
@@ -486,7 +501,7 @@ export default function SettingsPage() {
           <ul className="mt-3 divide-y divide-[#F6F4FB] text-[13.5px]">
             <li className="flex items-center justify-between py-3">
               <span className="text-pomong-sub">버전</span>
-              <span className="font-semibold text-[#3B3947]">v{data?.version || '0.5.1'}</span>
+              <span className="font-semibold text-[#3B3947]">v{data?.version || '0.5.2'}</span>
             </li>
             <li className="flex items-center justify-between py-3">
               <span className="text-pomong-sub">데이터 보관</span>
@@ -505,7 +520,7 @@ export default function SettingsPage() {
         </section>
 
         <p className="mt-6 flex items-center justify-center gap-1.5 text-[12px] text-[#B4B1C2]">
-          <Sparkles size={12} /> Pomong Agent v{data?.version || '0.5.0'} · Pomong Labs
+          <Sparkles size={12} /> Pomong Agent v{data?.version || '0.5.2'} · Pomong Labs
         </p>
       </div>
     </div>

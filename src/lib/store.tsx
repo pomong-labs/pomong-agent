@@ -42,7 +42,7 @@ interface AppStoreValue {
     input: { username: string; password: string; masterPin?: string }
   ) => Promise<{ ok: boolean; message?: string }>;
   dismissLoginCard: (id: string) => Promise<void>;
-  send: (text: string) => Promise<void>;
+  send: (text: string, attachmentIds?: string[]) => Promise<void>;
   clearChat: () => Promise<void>;
   draft: string;
   setDraft: (value: string) => void;
@@ -360,9 +360,10 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     [refreshModels]
   );
 
-  const send = useCallback(async (text: string) => {
+  const send = useCallback(async (text: string, attachmentIds?: string[]) => {
     const content = text.trim();
-    if (!content || sendingRef.current) return;
+    const ids = (attachmentIds || []).filter(Boolean);
+    if ((!content && !ids.length) || sendingRef.current) return;
     sendingRef.current = true;
     setSending(true);
     setError('');
@@ -372,11 +373,15 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       role: 'user',
       content,
       meta: null,
+      attachments: [],
       createdAt: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, optimistic]);
     try {
-      const res = await api.post<{ message: ChatMessage; userMessage?: ChatMessage; taskRun?: TaskRun | null }>('/api/chat/messages', { message: content });
+      const res = await api.post<{ message: ChatMessage; userMessage?: ChatMessage; taskRun?: TaskRun | null }>('/api/chat/messages', {
+        message: content,
+        attachmentIds: ids.length ? ids : undefined,
+      });
       // 서버가 저장한 내 메시지(userMessage)로 임시 메시지를 바꾸고, AI 답변을 뒤에 붙인다.
       // 예전에는 응답에 AI 답변만 담겨 와서 내 메시지가 화면에서 사라졌다.
       const mine: ChatMessage = res.userMessage ?? { ...optimistic, id: res.message.id - 1 };
