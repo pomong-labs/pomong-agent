@@ -154,6 +154,22 @@ function timeout(ms: number): AbortSignal {
   return AbortSignal.timeout(ms);
 }
 
+/**
+ * v0.5.4: 모델 호출의 시간 제한 신호에 '사용자 중지(■ 중지)' 신호를 합친다.
+ * 사용자가 중지하면 진행 중인 fetch도 즉시 끊긴다.
+ */
+function withCancel(limit: AbortSignal, signal?: AbortSignal): AbortSignal {
+  if (!signal) return limit;
+  const anyOf = (AbortSignal as unknown as { any?: (signals: AbortSignal[]) => AbortSignal }).any;
+  if (typeof anyOf === 'function') return anyOf([limit, signal]);
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  if (limit.aborted || signal.aborted) abort();
+  limit.addEventListener('abort', abort, { once: true });
+  signal.addEventListener('abort', abort, { once: true });
+  return controller.signal;
+}
+
 function errorText(status: number, body: string): string {
   try {
     const parsed = JSON.parse(body) as { error?: { message?: string } | string; message?: string };
@@ -246,7 +262,8 @@ async function geminiStep(
   apiKey: string,
   system: string,
   turns: ToolRunMessage[],
-  tools?: ToolSpec[]
+  tools?: ToolSpec[],
+  signal?: AbortSignal
 ): Promise<ChatResult> {
   // Gemini는 같은 역할의 턴이 연달아 오면 합쳐서 보낸다.
   const contents: { role: 'user' | 'model'; parts: GeminiPart[] }[] = [];
@@ -313,7 +330,7 @@ async function geminiStep(
         generationConfig: { temperature: 0.7, maxOutputTokens: 1600 },
       }),
       // 모델이 응답하지 않고 매달려 있으면 다음 후보로 빨리 넘어가도록 시도당 시간을 제한한다.
-      signal: timeout(25000),
+      signal: withCancel(timeout(25000), signal),
     }
   );
   const body = await res.text();
@@ -345,7 +362,8 @@ async function openAiStep(
   apiKey: string,
   system: string,
   turns: ToolRunMessage[],
-  tools?: ToolSpec[]
+  tools?: ToolSpec[],
+  signal?: AbortSignal
 ): Promise<ChatResult> {
   const messages: OpenAiMessage[] = [];
   if (system) messages.push({ role: 'system', content: system });
@@ -389,7 +407,7 @@ async function openAiStep(
         ? tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }))
         : undefined,
     }),
-    signal: timeout(60000),
+    signal: withCancel(timeout(60000), signal),
   });
   const body = await res.text();
   if (!res.ok) throw new ProviderError(res.status, errorText(res.status, body));
@@ -423,6 +441,7 @@ async function claudeStep(
   system: string,
   turns: ToolRunMessage[],
   tools?: ToolSpec[]
+  , signal?: AbortSignal
 ): Promise<ChatResult> {
   const messages: { role: 'user' | 'assistant'; content: ClaudeContent[] }[] = [];
   const push = (role: 'user' | 'assistant', blocks: ClaudeContent[]) => {
@@ -467,7 +486,7 @@ async function claudeStep(
         ? tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters }))
         : undefined,
     }),
-    signal: timeout(60000),
+    signal: withCancel(timeout(60000), signal),
   });
   const body = await res.text();
   if (!res.ok) throw new ProviderError(res.status, errorText(res.status, body));
@@ -496,7 +515,8 @@ export async function runAgentStep(
   model: string,
   messages: AgentMessage[],
   tools?: ToolSpec[],
-  allowFallback = false
+  allowFallback = false,
+  signal?: AbortSignal
 ): Promise<ChatResult> {
   const modelName = normalizeModel(provider, model);
   const { system, turns } = splitSystem(messages);
@@ -512,7 +532,7 @@ export async function runAgentStep(
       for (const candidate of candidates) {
         if (lastError && Date.now() - startedAt > 75000) break; // 전체 예산을 넘기면 여기서 멈춘다
         try {
-          const result = await geminiStep(candidate, apiKey, system, turns, tools);
+          const result = await geminiStep(candidate, apiKey, system, turns, tools, signal);
           lastGoodGeminiModel = result.model;
           return result;
         } catch (err) {
@@ -532,8 +552,8 @@ export async function runAgentStep(
     if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 900));
     try {
       return provider === 'openai'
-        ? await openAiStep(modelName, apiKey, system, turns, tools)
-        : await claudeStep(modelName, apiKey, system, turns, tools);
+        ? await openAiStep(modelName, apiKey, system, turns, tools, signal)
+        : await claudeStep(modelName, apiKey, system, turns, tools, signal);
     } catch (err) {
       lastError = err;
       if (!allowFallback || !isRetryableError(err)) throw err;

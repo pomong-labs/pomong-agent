@@ -23,6 +23,8 @@ export interface ServiceEntry {
   emoji: string;
   examples: string[];
   note?: string;
+  /** v0.5.4: 이 사이트 로그인 화면의 실제 특이사항(자동 로그인 중 막힐 때 AI가 바로 판단하도록) */
+  loginNote?: string;
 }
 
 export const SERVICE_CATEGORIES: { id: ServiceCategory | 'all'; label: string }[] = [
@@ -65,6 +67,8 @@ export const SERVICES: ServiceEntry[] = [
     tint: '#FDEEEC',
     color: '#D9544D',
     emoji: '✉️',
+    loginNote:
+      '구글은 2단계 로그인입니다(아이디 입력 → 다음 → 비밀번호). 로그인 중 패스키·2단계 인증·\"이 브라우저를 기억하시겠습니까?\" 화면이 나오면 자동으로 끝낼 수 없으니 화면에 적힌 문구를 그대로 알려 주세요.',
     examples: ['안 읽은 메일 중요한 것만 알려줘', '이번 주에 온 영수증 메일 찾아줘', '메일 답장 초안 써줘'],
   },
   {
@@ -94,10 +98,12 @@ export const SERVICES: ServiceEntry[] = [
     name: '무신사',
     category: 'shopping',
     match: ['musinsa', '무신사'],
-    loginUrl: 'https://www.musinsa.com/app/member/login',
+    loginUrl: 'https://member.one.musinsa.com/login',
     tint: '#F2F2F4',
     color: '#1C1C1E',
     emoji: '👕',
+    loginNote:
+      '무신사 로그인은 member.one.musinsa.com/login 의 React 화면입니다. 아이디·비밀번호 input이 숨은 필드(encryptMemberId/encryptPassword)와 reCAPTCHA(isCheckGoogleRecaptcha)를 함께 쓰므로, 로그인 버튼을 눌러도 화면이 그대로면 캡차·이메일 인증·비밀번호 오류를 먼저 의심하고 화면 문구를 사용자에게 그대로 전하세요.',
     examples: ['무신사 장바구니 확인해줘', '내 사이즈로 재입고된 무스탕 찾아줘', '주문한 옷 배송 조회해줘'],
   },
   {
@@ -167,6 +173,7 @@ export const SERVICES: ServiceEntry[] = [
     emoji: '💼',
     examples: ['크몽 새 메시지 확인해줘', '내 판매 통계 알려줘', '이번 주 주문 확인해줘'],
     note: '로그인 전용 주소(/login) 없음 — 메인 오른쪽 위 로그인 버튼으로 들어갑니다.',
+    loginNote: '크몽은 헤더의 [로그인] 버튼을 누르면 모달이 열립니다. kmong.com/login 은 404이므로 열지 마세요. 로그인 후에는 휴대폰/이메일 인증이 나올 수 있습니다.',
   },
   {
     id: 'routenote',

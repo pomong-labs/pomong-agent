@@ -15,7 +15,10 @@ export type AppEventType =
   | 'chat'
   | 'chat_message'
   | 'task'
-  | 'login_request';
+  | 'login_request'
+  | 'vault_unlock_request'
+  | 'memory'
+  | 'agent_stop';
 
 export interface AppEvent {
   id: number;

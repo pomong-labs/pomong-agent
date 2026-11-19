@@ -731,6 +731,14 @@ export async function typeInto(args: { ref?: string; text: string; submit?: bool
   if (!session) throw new Error('열린 브라우저 세션이 없습니다.');
   guardAgent(session, evaluateUrl(session.url || 'about:blank').level);
   const s = await ensureLive(session.id);
+  // v0.5.4: `[금고...]` `[vault...]` 같은 임시 문구를 실제 글자로 타이핑하지 못하게 막는다.
+  // (가벼운 모델이 금고 값을 대괄호 자리표시자로 쓰고, 그 글자가 사이트에 그대로 들어가던 문제)
+  const placeholder = String(args.text || '');
+  if (/[\[【]\s*(금고|vault|저장된|보관된|saved|저장돼|보안\s*정보)/i.test(placeholder) || /^\s*[\[【][^\]】]*[\]】]\s*$/.test(placeholder)) {
+    throw new Error(
+      '대괄호로 감싼 임시 문구는 입력할 수 없습니다. 실제 아이디·비밀번호는 browser_login_with_vault(vault_id) 또는 browser_fill_vault(vault_id, field, ref)로 서버가 금고에서 직접 채웁니다. 비밀번호를 직접 타이핑하지 마세요.'
+    );
+  }
   const selector = `[data-pomong-ref="${String(args.ref || '').replace(/[^a-zA-Z0-9_-]/g, '')}"]`;
   if (!args.ref) throw new Error('입력할 요소의 ref가 필요합니다(browser_snapshot에서 확인).');
   const handle = s.page.locator(selector);
@@ -1009,6 +1017,169 @@ async function openLoginModal(page: Page): Promise<boolean> {
   return false;
 }
 
+export interface LoginScreenRead {
+  url: string;
+  title: string;
+  passwordField: boolean;
+  usernameField: boolean;
+  /** 화면에 실제로 보이는 오류·안내 문구 */
+  notice: string | null;
+  /** 자동 로그인을 계속할 수 없게 막는 요소 */
+  blocked: 'captcha' | 'passkey' | 'otp' | 'wrong_password' | 'email_verify' | 'bot_check' | 'account_locked' | null;
+}
+
+const BLOCK_PATTERNS: { kind: NonNullable<LoginScreenRead['blocked']>; test: RegExp }[] = [
+  { kind: 'captcha', test: /(recaptcha|hcaptcha|로봇이 아닙니다|i'?m not a robot|보안\s*문자|captcha)/i },
+  { kind: 'passkey', test: /(패스키|passkey|보안\s*키|security\s*key)/i },
+  { kind: 'otp', test: /(인증\s*번호|verification code|one-time|2단계\s*인증|2-?step|two-step|authenticator)/i },
+  { kind: 'email_verify', test: /(이메일\s*인증|메일로\s*인증|verify your email|인증\s*메일)/i },
+  { kind: 'bot_check', test: /(자동\s*입력|비정상적인\s*접근|접근이\s*차단|too many (attempts|requests)|잠시 후 다시)/i },
+  { kind: 'account_locked', test: /(계정이\s*잠|이용이\s*제한|account (is )?(locked|disabled|suspended))/i },
+  { kind: 'wrong_password', test: /(비밀번호가\s*(틀|일치하지|올바르지)|잘못된\s*비밀번호|아이디\s*또는\s*비밀번호|incorrect (password|username)|wrong password|invalid (password|credentials)|일치하는\s*(회원|계정)\s*정보가)/i },
+];
+
+/**
+ * 로그인 화면의 **실제 안내 문구**를 읽는다 (v0.5.4).
+ *
+ * 무신사·구글처럼 로그인 버튼을 눌러도 화면이 그대로면, 예전에는 AI가 76초 동안
+ * "아직 로그인 화면"이라는 말만 되풀이했다. 이제 화면에 찍힌 오류·캡차·패스키·
+ * 인증번호 안내를 그대로 뽑아 결과에 담아, AI가 즉시 handover하거나 정확한 사유를
+ * 사용자에게 말할 수 있게 한다.
+ */
+export async function readLoginScreen(page: Page): Promise<LoginScreenRead> {
+  const raw = (await withTimeout(
+    page.evaluate(() => {
+      const visible = (el: Element): boolean => {
+        const rect = (el as HTMLElement).getBoundingClientRect();
+        if (rect.width < 2 || rect.height < 2) return false;
+        const style = window.getComputedStyle(el as HTMLElement);
+        return style.visibility !== 'hidden' && style.display !== 'none' && Number(style.opacity) !== 0;
+      };
+      const clean = (text: string) => text.replace(/\s+/g, ' ').trim();
+      const candidates: string[] = [];
+      const selectors = [
+        '[role="alert"]',
+        '[aria-live]',
+        '[class*="error" i]',
+        '[class*="Error"]',
+        '[id*="error" i]',
+        '[class*="alert" i]',
+        '[class*="warn" i]',
+        '[class*="notice" i]',
+        '[class*="invalid" i]',
+        'small',
+        'p',
+      ];
+      for (const selector of selectors) {
+        for (const el of Array.from(document.querySelectorAll(selector)).slice(0, 40)) {
+          if (!visible(el)) continue;
+          const text = clean((el as HTMLElement).innerText || '');
+          if (text.length < 2 || text.length > 220) continue;
+          if (candidates.includes(text)) continue;
+          candidates.push(text);
+          if (candidates.length >= 24) break;
+        }
+        if (candidates.length >= 24) break;
+      }
+      const inputs = Array.from(document.querySelectorAll<HTMLInputElement>('input'));
+      return {
+        url: location.href,
+        title: document.title,
+        passwordField: inputs.some((el) => el.type === 'password' && visible(el)),
+        usernameField: inputs.some(
+          (el) => ['text', 'email', 'tel'].includes((el.getAttribute('type') || 'text').toLowerCase()) && visible(el)
+        ),
+        candidates,
+        body: (document.body?.innerText || '').slice(0, 4000),
+      };
+    }),
+    12_000,
+    '로그인 화면 읽기'
+  )) as {
+    url: string;
+    title: string;
+    passwordField: boolean;
+    usernameField: boolean;
+    candidates: string[];
+    body: string;
+  };
+
+  const haystack = `${raw.candidates.join(' \n ')} \n ${raw.body}`;
+  const blocked = classifyLoginScreen(haystack);
+  // 오류 문구처럼 보이는 짧은 후보를 우선으로, 없으면 null.
+  const looksLikeMessage = (text: string) =>
+    /(비밀번호|아이디|계정|인증|캡차|로봇|패스키|실패|오류|틀렸|일치|잠|차단|확인해|다시|required|incorrect|invalid|error|failed|captcha|verify)/i.test(
+      text
+    );
+  const preferred = raw.candidates.filter(looksLikeMessage);
+  const notice = (preferred[0] || '').slice(0, 200) || null;
+  return {
+    url: raw.url,
+    title: raw.title,
+    passwordField: raw.passwordField,
+    usernameField: raw.usernameField,
+    notice,
+    blocked,
+  };
+}
+
+/**
+ * 화면 글자만 보고 '무엇 때문에 자동 로그인이 막혔는지' 판단한다 (v0.5.4, 단위 검증용).
+ * 순서가 중요하다: 캡차·패스키·인증번호가 '비밀번호' 단어보다 먼저 와야 오탐이 없다.
+ */
+export function classifyLoginScreen(text: string): LoginScreenRead['blocked'] {
+  for (const pattern of BLOCK_PATTERNS) {
+    if (pattern.test.test(text)) return pattern.kind;
+  }
+  return null;
+}
+
+/** 비밀번호 입력창이 실제로 나타날 때까지 기다린다(2단계 로그인: 최대 8초). */
+async function waitForPasswordField(page: Page, timeoutMs = 8_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const count = await page.locator('input[type=password]').count().catch(() => 0);
+    if (count > 0) {
+      // 화면에 실제로 보이는지까지 확인한다(숨은 input 오탐 방지).
+      for (let i = 0; i < count; i += 1) {
+        if (await page.locator('input[type=password]').nth(i).isVisible().catch(() => false)) return true;
+      }
+    }
+    await page.waitForTimeout(250);
+  }
+  return false;
+}
+
+/**
+ * 1단계(아이디) 화면에서 '다음/계속' 버튼을 찾아 누른다 (v0.5.4).
+ * 구글·마이크로소프트처럼 아이디 → 다음 → 비밀번호 두 화면으로 나뉜 로그인용.
+ */
+async function clickNextStep(page: Page, submitRef?: string): Promise<'click' | 'enter' | 'none'> {
+  const selector = submitRef ? `[data-pomong-ref="${submitRef.replace(/[^a-zA-Z0-9_-]/g, '')}"]` : '';
+  if (selector) {
+    const button = page.locator(selector).first();
+    if ((await button.count()) && (await button.isVisible().catch(() => false))) {
+      await button.click({ timeout: 8_000 }).catch(() => undefined);
+      return 'click';
+    }
+  }
+  const names = /^(다음|계속|next|continue|로그인|login|sign in)$/i;
+  for (const role of ['button', 'link'] as const) {
+    const candidate = page.getByRole(role, { name: names }).first();
+    if ((await candidate.count().catch(() => 0)) > 0 && (await candidate.isVisible().catch(() => false))) {
+      await candidate.click({ timeout: 8_000 }).catch(() => undefined);
+      return 'click';
+    }
+  }
+  // 버튼을 못 찾으면 아이디 칸에서 Enter (대부분의 1단계 폼이 전송된다).
+  const textInput = page.locator('input[type=email], input[type=text], input[name*=id i], input[name*=email i]').first();
+  if ((await textInput.count().catch(() => 0)) > 0) {
+    await textInput.press('Enter').catch(() => undefined);
+    return 'enter';
+  }
+  return 'none';
+}
+
 export interface LoginWithVaultResult {
   sessionId: string;
   snapshot: string;
@@ -1019,12 +1190,23 @@ export interface LoginWithVaultResult {
   stillOnLogin: boolean;
   url: string;
   title: string;
+  /** 'single' = 한 화면 로그인, 'two_step' = 아이디 → 다음 → 비밀번호 */
+  steps: 'single' | 'two_step';
+  /** 화면에 실제로 보이는 안내·오류 문구 */
+  notice: string | null;
+  /** 자동 로그인을 이어갈 수 없게 막는 요소(있으면 사용자에게 넘겨야 한다) */
+  blocked: LoginScreenRead['blocked'];
 }
 
 /**
- * 금고 값으로 **아이디 입력 → 비밀번호 입력 → 로그인 버튼 클릭**을 한 번에 끝낸다.
+ * 금고 값으로 로그인을 끝낸다 (v0.5.2 → v0.5.4 2단계 지원).
+ *
+ * ① 한 화면 로그인: 아이디 → 비밀번호 → 로그인
+ * ② 두 화면 로그인(구글·마이크로소프트): 아이디 → 다음/계속 클릭 → 비밀번호 창 대기(최대 8초)
+ *    → 비밀번호 → 로그인
+ * ③ 1단계 후 패스키·캡차·2차 인증·오류가 나오면 즉시 화면의 실제 문구와 함께 반환
+ *
  * 값은 이 함수 안에서만 쓰고 로그·응답·AI 대화에는 남기지 않는다.
- * ref를 주지 않으면 화면에서 스스로 찾는다(가벼운 모델의 누락 방지).
  */
 export async function loginWithVault(input: {
   username?: string | null;
@@ -1039,6 +1221,7 @@ export async function loginWithVault(input: {
   if (!session) throw new Error('열린 브라우저 세션이 없습니다. browser_open으로 로그인 페이지를 먼저 여세요.');
   guardAgent(session, evaluateUrl(session.url || 'about:blank').level);
   const s = await ensureLive(session.id);
+
   // ref를 잡기 위해 화면을 한 번 읽는다(스냅샷이 요소에 ref를 붙인다).
   let before = await takeSnapshot(s.page);
   let detected = await detectLoginRefs(s.page);
@@ -1049,19 +1232,59 @@ export async function loginWithVault(input: {
       detected = await detectLoginRefs(s.page);
     }
   }
-  const usernameRef = input.usernameRef || detected.usernameRef || '';
-  const passwordRef = input.passwordRef || detected.passwordRef || '';
-  const submitRef = input.submitRef || detected.submitRef || '';
-  if (!passwordRef) {
-    throw new Error(
-      `로그인 입력창을 찾지 못했습니다(${before.url}). 이 화면에는 아이디·비밀번호 칸이 없습니다. ` +
-        '이미 로그인된 세션이거나 로그인 버튼이 없는 화면일 수 있으니 browser_snapshot으로 현재 화면을 확인하고, ' +
-        '그래도 로그인할 곳이 없으면 browser_handover로 사용자에게 넘기세요.'
-    );
+
+  let steps: LoginWithVaultResult['steps'] = 'single';
+  let usernameRef = input.usernameRef || detected.usernameRef || '';
+  let passwordRef = input.passwordRef || detected.passwordRef || '';
+  let submitRef = input.submitRef || detected.submitRef || '';
+  let filledUsername = false;
+
+  /**
+   * v0.5.4: 2단계 로그인.
+   * 비밀번호 칸이 아직 없고 아이디 칸만 있으면, 아이디를 넣고 다음/계속을 눌러
+   * 비밀번호 화면을 연다. (구글 accounts.google.com, 마이크로소프트 등)
+   */
+  if (!passwordRef && usernameRef) {
+    steps = 'two_step';
+    if (input.username && usernameRef) filledUsername = await fillRef(s.page, usernameRef, input.username);
+    else if (input.username) {
+      // ref를 못 찾아도 화면의 첫 이메일/텍스트 칸으로 시도한다.
+      const fallback = s.page.locator('input[type=email], input[type=text]').first();
+      if ((await fallback.count().catch(() => 0)) > 0) {
+        const ref = await fallback.getAttribute('data-pomong-ref');
+        if (ref) filledUsername = await fillRef(s.page, ref, input.username);
+      }
+    }
+    if (filledUsername) {
+      const advanced = await clickNextStep(s.page, submitRef);
+      if (advanced !== 'none') {
+        await s.page.waitForLoadState('domcontentloaded', { timeout: 15_000 }).catch(() => undefined);
+        const appeared = await waitForPasswordField(s.page, 8_000);
+        if (appeared) {
+          before = await takeSnapshot(s.page);
+          detected = await detectLoginRefs(s.page);
+          passwordRef = input.passwordRef || detected.passwordRef || '';
+          submitRef = input.submitRef || detected.submitRef || '';
+          usernameRef = usernameRef || detected.usernameRef || '';
+        }
+      }
+    }
   }
 
-  let filledUsername = false;
-  if (input.username && usernameRef) filledUsername = await fillRef(s.page, usernameRef, input.username);
+  const screenNow = await readLoginScreen(s.page);
+  if (!passwordRef) {
+    // 1단계 뒤 패스키·캡차·2차 인증·계정 오류가 나온 경우: 실제 문구와 함께 알린다.
+    const reason = screenNow.blocked
+      ? `자동 로그인을 이어갈 수 없습니다(사유: ${LOGIN_BLOCK_LABELS[screenNow.blocked]}${
+          screenNow.notice ? ` · 화면 안내: "${screenNow.notice}"` : ''
+        }). browser_handover로 사용자에게 넘기세요.`
+      : `로그인 입력창을 찾지 못했습니다(${screenNow.url}).${
+          screenNow.notice ? ` 화면 안내: "${screenNow.notice}"` : ' 이 화면에는 아이디·비밀번호 칸이 없습니다.'
+        } 이미 로그인된 세션이거나 로그인 버튼이 없는 화면일 수 있으니 browser_snapshot으로 현재 화면을 확인하고, 그래도 로그인할 곳이 없으면 browser_handover로 사용자에게 넘기세요.`;
+    throw new Error(reason);
+  }
+
+  if (!filledUsername && input.username && usernameRef) filledUsername = await fillRef(s.page, usernameRef, input.username);
   const filledPassword = await fillRef(s.page, passwordRef, input.password);
   if (!filledPassword) throw new Error(`비밀번호 입력창을 채우지 못했습니다: ${passwordRef}`);
 
@@ -1091,18 +1314,25 @@ export async function loginWithVault(input: {
     }
     // 화면이 바뀌거나 2차 인증으로 넘어가는 시간을 잠깐 준다.
     await s.page.waitForLoadState('networkidle', { timeout: 8_000 }).catch(() => undefined);
+    await s.page.waitForTimeout(600);
   }
 
   const data = await takeSnapshot(s.page);
-  const stillOnLogin = data.elements.some((el) => el.type === 'password') || /비밀번호|password/i.test(data.text.slice(0, 400));
+  const screen = await readLoginScreen(s.page);
+  // v0.5.4: '비밀번호 찾기' 같은 글자만으로 로그인 화면이라고 판단하던 오탐을 없앴다.
+  const stillOnLogin =
+    screen.passwordField || screen.blocked !== null || (await s.page.locator('input[type=password]').count().catch(() => 0)) > 0;
+  const notice = screen.notice && stillOnLogin ? screen.notice : null;
   touch(session.id, { url: data.url, title: data.title });
   void saveState(s);
   logAction(
     session.id,
     'agent',
     'browser.login_with_vault',
-    { usernameRef, passwordRef, submitRef, filledUsername, submitted, password: '***' },
-    `${stillOnLogin ? '로그인 화면 유지' : '로그인 통과 추정'} · ${submitted === 'click' ? '로그인 버튼 클릭' : submitted === 'enter' ? 'Enter 전송' : '전송 안 함'}`,
+    { usernameRef, passwordRef, submitRef, filledUsername, submitted, steps, password: '***' },
+    `${stillOnLogin ? '로그인 화면 유지' : '로그인 통과 추정'}${screen.blocked ? ` · ${LOGIN_BLOCK_LABELS[screen.blocked]}` : ''} · ${
+      submitted === 'click' ? '로그인 버튼 클릭' : submitted === 'enter' ? 'Enter 전송' : '전송 안 함'
+    }`,
     data.url
   );
   void before;
@@ -1115,8 +1345,21 @@ export async function loginWithVault(input: {
     stillOnLogin,
     url: data.url,
     title: data.title,
+    steps,
+    notice,
+    blocked: stillOnLogin ? screen.blocked : null,
   };
 }
+
+export const LOGIN_BLOCK_LABELS: Record<NonNullable<LoginScreenRead['blocked']>, string> = {
+  captcha: '로봇 확인(캡차)',
+  passkey: '패스키·보안키 인증',
+  otp: '인증번호(2단계 인증)',
+  wrong_password: '아이디·비밀번호 불일치',
+  email_verify: '이메일 인증',
+  bot_check: '자동 접근 차단',
+  account_locked: '계정 잠금·이용 제한',
+};
 
 export async function extract(sessionId?: string): Promise<{ url: string; text: string }> {
   const session = sessionId ? row(sessionId) : activeSession();

@@ -25,6 +25,8 @@ export interface AgentLoopOptions {
   /** 이 시각(epoch ms)을 넘으면 중단 */
   deadline?: number;
   cancelled?: () => boolean;
+  /** v0.5.4: 사용자가 '■ 중지'를 누르면 전달되는 신호(진행 중인 모델 호출도 끊는다) */
+  signal?: AbortSignal;
   onStep?: (info: { index: number; text: string; tools: string[] }) => void;
   /** v0.5.3: flags에는 '금고 계정 없음'같은 서버 판단용 신호가 들어온다. */
   onToolResult?: (name: string, content: string, flags?: ToolResult['flags']) => void;
@@ -73,6 +75,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
   let lastTool: { name: string; content: string } | null = null;
   let lastError: string | null = null;
   let handover = false;
+  const stopped = (): boolean => Boolean(options.signal?.aborted) || Boolean(options.cancelled?.());
 
   const done = (extra: Partial<AgentLoopResult> = {}): AgentLoopResult => ({
     text: reply,
@@ -89,7 +92,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
   });
 
   for (let step = 0; step < Math.max(1, options.maxSteps); step += 1) {
-    if (options.cancelled?.()) {
+    if (stopped()) {
       return done({ cancelled: true });
     }
     if (options.deadline && Date.now() > options.deadline) {
@@ -98,7 +101,14 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
     }
 
     // v0.5.2: 모델 혼잡(503·high demand)은 어느 단계에서든 대체 모델로 재시도한다.
-    const result = await runAgentStep(options.provider, options.apiKey, model, conversation, options.tools, true);
+    let result;
+    try {
+      result = await runAgentStep(options.provider, options.apiKey, model, conversation, options.tools, true, options.signal);
+    } catch (err) {
+      // 사용자가 중지했거나 응답 대기가 끊긴 경우는 오류가 아니라 '중지'로 끝낸다.
+      if (stopped()) return done({ cancelled: true });
+      throw err;
+    }
     model = result.model;
     steps += 1;
 
@@ -112,6 +122,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
     options.onStep?.({ index: step, text: result.text, tools: result.toolCalls.map((c) => c.name) });
 
     for (const call of result.toolCalls) {
+      if (stopped()) return done({ cancelled: true });
       if (options.toolsAllow && options.toolsAllow.length && !options.toolsAllow.includes(call.name)) {
         blocked.push(call.name);
         conversation.push({

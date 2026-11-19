@@ -41,11 +41,16 @@ module.exports = {
           '0%': { transform: 'scale(.94)', opacity: '0' },
           '100%': { transform: 'scale(1)', opacity: '1' },
         },
+        'slide-right': {
+          '0%': { transform: 'translateX(-100%)' },
+          '100%': { transform: 'translateX(0)' },
+        },
       },
       animation: {
         'fade-up': 'fade-up .45s cubic-bezier(.22,1,.36,1) both',
         float: 'float 4.5s ease-in-out infinite',
         pop: 'pop .28s cubic-bezier(.22,1,.36,1) both',
+        'slide-right': 'slide-right .24s cubic-bezier(.22,1,.36,1) both',
       },
     },
   },

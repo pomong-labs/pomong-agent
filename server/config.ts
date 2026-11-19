@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-export const APP_VERSION = '0.5.3';
+export const APP_VERSION = '0.5.4';
 export const APP_NAME = 'Pomong Agent';
 
 /** Root of the project at runtime (inside the container: /app). */

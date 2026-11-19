@@ -45,11 +45,17 @@ import * as services from './services';
 import * as push from './push';
 import * as taskRuns from './task-runs';
 import * as loginRequests from './login-requests';
+import * as vaultUnlock from './vault-unlock';
+import * as chatSessions from './sessions';
+import * as memoryExtract from './memory-extract';
 import * as attachments from './attachments';
 import { postAutomationMessage } from './automation-chat';
 import type { TaskRunView } from './task-runs';
 
 ensureDataDir();
+
+/** v0.5.4: 진행 중인 채팅 틴의 중지 신호 (방 id → AbortController) */
+const liveTurns = new Map<string, AbortController>();
 
 /* ------------------------------------------------------------------ */
 /* App state helpers                                                   */
@@ -664,6 +670,90 @@ app.delete('/api/chat/messages', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+/* ---------------------- 채팅 메시지 검색 (v0.5.4) ---------------------- */
+
+/** 모든 방의 메시지를 키워드로 찾는다(방 제목·보낸 사람·시각 포함). */
+app.get('/api/chat/search', requireAuth, (req, res) => {
+  const q = String(req.query.q || '').trim();
+  const only = String(req.query.session || '').trim();
+  if (!q) {
+    res.json({ ok: true, results: [] });
+    return;
+  }
+  const rows = db
+    .prepare(
+      `SELECT m.id, m.session_id, m.role, m.content, m.created_at, s.title AS session_title
+       FROM messages m LEFT JOIN chat_sessions s ON s.id = m.session_id
+       WHERE m.content LIKE ? ${only ? 'AND m.session_id = ?' : ''}
+       ORDER BY m.id DESC LIMIT 40`
+    )
+    .all(...(only ? [`%${q}%`, only] : [`%${q}%`])) as {
+    id: number;
+    session_id: string;
+    role: string;
+    content: string;
+    created_at: string;
+    session_title: string | null;
+  }[];
+  const needle = q.toLowerCase();
+  const results = rows.map((row) => {
+    const text = String(row.content || '');
+    const at = text.toLowerCase().indexOf(needle);
+    const start = Math.max(0, at - 24);
+    const snippet = (start > 0 ? '…' : '') + text.slice(start, start + 96).replace(/\s+/g, ' ').trim();
+    return {
+      id: row.id,
+      sessionId: row.session_id,
+      sessionTitle: row.session_title || row.session_id,
+      role: row.role,
+      snippet,
+      createdAt: row.created_at,
+    };
+  });
+  res.json({ ok: true, results });
+});
+
+/* ------------------------ 다중 대화방 (v0.5.4) ----------------------- */
+
+app.get('/api/chat/sessions', requireAuth, (_req, res) => {
+  res.json({ ok: true, sessions: chatSessions.listSessions() });
+});
+
+app.post('/api/chat/sessions', requireAuth, (req, res) => {
+  const title = String((req.body as { title?: string })?.title || '').trim();
+  const created = chatSessions.createSession(title || undefined);
+  res.json({ ok: true, session: created });
+});
+
+app.patch('/api/chat/sessions/:id', requireAuth, (req, res) => {
+  const title = String((req.body as { title?: string })?.title || '').trim();
+  try {
+    const session = chatSessions.renameSession(req.params.id, title);
+    if (!session) {
+      res.status(404).json({ ok: false, code: 'session_not_found', message: '대화방을 찾을 수 없습니다.' });
+      return;
+    }
+    res.json({ ok: true, session });
+  } catch (err) {
+    res.status(400).json({ ok: false, code: 'rename_failed', message: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/** 방 삭제 = 그 방의 대화도 삭제. 'default' 방은 비우기만 한다. */
+app.delete('/api/chat/sessions/:id', requireAuth, (req, res) => {
+  const result = chatSessions.deleteSession(req.params.id);
+  res.json({ ok: true, ...result, sessions: chatSessions.listSessions() });
+});
+
+/** 방을 비우기(대화만 지우고 방은 남긴다) */
+app.post('/api/chat/sessions/:id/clear', requireAuth, (req, res) => {
+  db.prepare('DELETE FROM messages WHERE session_id = ?').run(req.params.id);
+  db.prepare('UPDATE chat_sessions SET updated_at = ? WHERE id = ?').run(new Date().toISOString(), req.params.id);
+  addLog('info', '대화방을 비웠습니다');
+  res.json({ ok: true });
+});
+
+
 /* --------------------------- attachments -------------------------- */
 
 /**
@@ -736,7 +826,9 @@ interface ChatTurnInput {
   /** 메타(카드) 판별에 쓸 사용자 요청 원문 */
   prompt: string;
   /** 로그인 카드 저장처럼 시스템이 이어서 시키는 턴 */
-  trigger?: 'login_card';
+  trigger?: 'login_card' | 'vault_unlock';
+  /** v0.5.4: '■ 중지' 버튼으로 끊을 수 있는 신호 */
+  signal?: AbortSignal;
 }
 
 interface ChatTurnResult {
@@ -819,6 +911,7 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
       tools: TOOL_SPECS,
       maxSteps: MAX_STEPS,
       sessionId: session,
+      signal: input.signal,
       onStep: (info) => {
         if (info.tools.length) setAgentState('working', info.tools.join(', '));
         else setAgentState('thinking', `${PROVIDERS[config.provider].label} ${info.index === 0 ? config.model : ''}`.trim());
@@ -855,6 +948,9 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
     const model = loop.model;
     let reply = loop.text;
     usedTools.push(...loop.tools);
+    if (loop.cancelled && !reply.trim()) {
+      reply = '알겠어요, 작업을 중지했어요. 이어서 하려면 다시 말씀해 주세요.';
+    }
 
     /**
      * v0.5.3: 로그인 카드 서버 안전장치.
@@ -879,6 +975,9 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
     if (!reply.trim()) {
       reply = buildEmptyReply(loop, { browserUsed, loginCardService: autoCardService });
     }
+    if (loop.cancelled && !/중지/.test(reply)) {
+      reply = `${reply.trim()}\n\n(작업을 중지했어요.)`.trim();
+    }
 
     setAgentState('responding', `${PROVIDERS[config.provider].label} ${model}`);
     const base = detectMeta(input.prompt);
@@ -895,6 +994,8 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
     const messageId = Number(info.lastInsertRowid);
     // 이번 턴에 띄운 로그인 카드를 이 답변 말풍선에 붙인다(새로고침해도 같은 자리).
     loginRequests.linkPendingToMessage(session, messageId);
+    // v0.5.4: 금고 PIN 입력 카드도 같은 자리에 붙인다.
+    vaultUnlock.linkPendingToMessage(session, messageId);
     // 실제로 응답한 모델을 기억해 두면 다음 대화부터는 그 모델로 바로 시도한다.
     if (config.provider === 'gemini') {
       const good = getLastGoodGeminiModel();
@@ -927,6 +1028,8 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
       body: reply.slice(0, 160),
       data: { message: assistantMessage, session },
     });
+    // v0.5.4: 대화가 끝난 뒤 백그라운드에서 오래 기억할 사실만 골라 저장한다(응답을 기다리게 하지 않는다).
+    if (!input.trigger) void extractMemoriesAfterTurn(session, input.prompt, reply);
     return { assistantMessage, model, provider: config.provider, tools: usedTools, taskRun };
   } catch (err) {
     if (runId) taskRuns.finishRun(runId, 'failed');
@@ -937,12 +1040,67 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
   }
 }
 
+/* ----------------------- 자동 기억 추출 (v0.5.4) ------------------------ */
+
+/**
+ * 대화 한 틴이 끝난 뒤, 오래 기억할 가치가 있는 사실만 골라 memories에 저장한다.
+ * 사용자 응답을 기다리게 하지 않으려고 비동기로 돌리고, 실패해도 대화는 그대로 둔다.
+ */
+async function extractMemoriesAfterTurn(session: string, userText: string, assistantText: string): Promise<void> {
+  try {
+    if (!memoryExtract.shouldExtract(userText, assistantText)) return;
+    if (memoryExtract.memoryCapReached()) return;
+    const config = activeConfig();
+    if (!config.apiKeyEnc) return;
+    const { decrypt, serverKey } = await import('./crypto');
+    const apiKey = decrypt(String(config.apiKeyEnc), serverKey());
+    const existing = memoryExtract.existingMemories(200);
+    const result = await runAgentStep(
+      config.provider,
+      apiKey,
+      config.model,
+      [
+        { role: 'system', content: memoryExtract.extractionSystemPrompt() },
+        {
+          role: 'user',
+          content: [
+            '[방금 끝난 대화]',
+            `사용자: ${userText.slice(0, 1600)}`,
+            `AI: ${assistantText.slice(0, 1200)}`,
+            '',
+            '[이미 저장된 기억]',
+            existing.length ? existing.slice(0, 80).map((m) => `- ${m}`).join('\n') : '(없음)',
+          ].join('\n'),
+        },
+      ],
+      undefined,
+      false
+    );
+    const items = memoryExtract.parseExtraction(result.text);
+    if (!items.length) return;
+    let saved = 0;
+    for (const item of items) {
+      if (memoryExtract.isDuplicate(item.content, existing)) continue;
+      memory.createMemory({ content: item.content, category: item.category, importance: item.importance, source: 'chat' });
+      existing.push(item.content);
+      saved += 1;
+    }
+    if (saved > 0) {
+      addLog('info', `대화에서 기억 ${saved}개를 자동으로 저장했습니다`);
+      publish({ type: 'memory', title: '기억 저장', body: '', data: { count: saved, session } });
+    }
+  } catch (err) {
+    addLog('warn', `자동 기억 추출을 건너뛰었습니다: ${err instanceof Error ? err.message.slice(0, 100) : String(err)}`);
+  }
+}
+
 app.post('/api/chat/messages', requireAuth, async (req, res) => {
-  const { message, session = 'default', attachmentIds } = req.body as {
+  const { message, attachmentIds } = req.body as {
     message?: string;
     session?: string;
     attachmentIds?: string[];
   };
+  const session = String((req.body as { session?: string })?.session || 'default');
   const text = String(message || '').trim();
   const ids = Array.isArray(attachmentIds)
     ? attachmentIds.map((v) => String(v)).filter(Boolean).slice(0, attachments.MAX_FILES_PER_MESSAGE)
@@ -966,6 +1124,10 @@ app.post('/api/chat/messages', requireAuth, async (req, res) => {
   }
 
   const now = new Date().toISOString();
+  // v0.5.4: 방이 없으면 만들고, 첫 메시지로 방 제목을 붙인다.
+  chatSessions.ensureSession(session);
+  chatSessions.autoTitle(session, text || '첨부 파일');
+  chatSessions.touchSession(session);
   const userInfo = db
     .prepare('INSERT INTO messages(session_id, role, content, meta, created_at) VALUES(?,?,?,?,?)')
     .run(session, 'user', text, null, now);
@@ -975,8 +1137,12 @@ app.post('/api/chat/messages', requireAuth, async (req, res) => {
   const prompt = text || '첨부한 파일을 확인해 주세요.';
   const history = buildModelHistory(session);
 
+  // v0.5.4: 사용자가 '■ 중지'를 누를 수 있게 이번 턴의 AbortController를 기억해 둔다.
+  const controller = new AbortController();
+  liveTurns.set(session, controller);
+
   try {
-    const result = await runChatTurn({ session, history, prompt });
+    const result = await runChatTurn({ session, history, prompt, signal: controller.signal });
     res.json({
       ok: true,
       message: result.assistantMessage,
@@ -996,8 +1162,38 @@ app.post('/api/chat/messages', requireAuth, async (req, res) => {
     });
   } catch (err) {
     const message2 = err instanceof Error ? err.message : String(err);
+    if (controller.signal.aborted) {
+      // 사용자가 중지한 경우는 오류 화면을 띄우지 않는다.
+      res.json({ ok: false, code: 'cancelled', message: '작업을 중지했어요.' });
+      return;
+    }
     res.status(502).json({ ok: false, code: 'provider_error', message: `AI 응답을 받지 못했습니다. (${message2.slice(0, 200)})` });
+  } finally {
+    if (liveTurns.get(session) === controller) liveTurns.delete(session);
   }
+});
+
+/** AI 답변·브라우저 작업 중지 (■ 중지) */
+app.post('/api/chat/stop', requireAuth, (req, res) => {
+  const session = String((req.body as { session?: string })?.session || 'default');
+  const targets = session === 'all' ? Array.from(liveTurns.entries()) : liveTurns.has(session) ? [[session, liveTurns.get(session) as AbortController] as const] : [];
+  let stopped = 0;
+  for (const [key, controller] of targets) {
+    controller.abort();
+    liveTurns.delete(key as string);
+    stopped += 1;
+  }
+  // 브라우저를 조작 중이었다면 화면 동작도 정지시킨다(진행 중인 클릭·입력이 이어지지 않게).
+  if (stopped) setAgentState('idle');
+  addLog('info', stopped ? '사용자가 작업을 중지했습니다' : '중지할 진행 중인 작업이 없습니다');
+  publish({ type: 'agent_stop', title: '작업 중지', body: '', data: { session, stopped } });
+  res.json({ ok: true, stopped });
+});
+
+/** 지금 진행 중인 턴이 있는지(새로고침 후에도 중지 버튼을 보여 주기 위해) */
+app.get('/api/chat/running', requireAuth, (req, res) => {
+  const session = String(req.query.session || 'default');
+  res.json({ ok: true, running: liveTurns.has(session) });
 });
 
 /**
@@ -1186,7 +1382,13 @@ app.get('/api/vault/items/:id/reveal', requireAuth, (req, res) => {
  */
 app.get('/api/vault/login-cards', requireAuth, (req, res) => {
   const session = String(req.query.session || 'default');
-  res.json({ ok: true, requests: loginRequests.listForSession(session), ...vault.vaultMeta() });
+  res.json({
+    ok: true,
+    requests: loginRequests.listForSession(session),
+    // v0.5.4: 금고가 잠겨 있어 PIN을 받아야 하는 카드
+    unlockRequests: vaultUnlock.listForSession(session),
+    ...vault.vaultMeta(),
+  });
 });
 
 /** 카드에 입력한 계정을 금고에 저장하고, AI에게 후속 턴을 붙겨 브라우저 로그인을 이어 간다. */
@@ -1250,6 +1452,103 @@ app.post('/api/vault/login-card/:id/cancel', requireAuth, (req, res) => {
   loginRequests.setStatus(request.id, 'cancelled');
   res.json({ ok: true });
 });
+
+/* -------------------- 금고 PIN 해제 카드 (v0.5.4) ------------------- */
+
+/**
+ * 채팅 카드에 PIN이 들어오면 금고 잠금을 풀고, 중단했던 로그인/자동 입력을 이어서 한다.
+ * PIN 원문은 검증에만 쓰고 어디에도 저장·기록하지 않는다.
+ */
+app.post('/api/vault/unlock-card/:id/submit', requireAuth, (req, res) => {
+  const request = vaultUnlock.get(req.params.id);
+  if (!request) {
+    res.status(404).json({ ok: false, code: 'unlock_card_not_found', message: 'PIN 입력 카드를 찾을 수 없습니다.' });
+    return;
+  }
+  if (request.status !== 'pending') {
+    res.status(409).json({ ok: false, code: 'already_handled', message: '이미 처리된 카드입니다.' });
+    return;
+  }
+  const pin = String((req.body as { pin?: string })?.pin || '').trim();
+  if (!/^\d{4,12}$/.test(pin)) {
+    res.status(400).json({ ok: false, code: 'invalid_pin', message: 'PIN은 4~12자리 숫자입니다.' });
+    return;
+  }
+  if (!vault.vaultConfigured()) {
+    res.status(400).json({ ok: false, code: 'vault_not_configured', message: '금고가 아직 만들어지지 않았습니다.' });
+    return;
+  }
+  if (!vault.unlockVault(pin)) {
+    addLog('warn', '금고 PIN 입력이 올바르지 않습니다');
+    res.status(401).json({ ok: false, code: 'vault_locked', message: '금고 PIN이 올바르지 않습니다.' });
+    return;
+  }
+  vaultUnlock.setStatus(request.id, 'unlocked');
+  addLog('info', `금고 PIN 카드로 잠금을 해제했습니다 · ${request.service || '요청'}`);
+  void runVaultUnlockFollowUp(request);
+  res.json({ ok: true, unlocked: true, followUp: true });
+});
+
+app.post('/api/vault/unlock-card/:id/cancel', requireAuth, (req, res) => {
+  const request = vaultUnlock.get(req.params.id);
+  if (!request) {
+    res.status(404).json({ ok: false, code: 'unlock_card_not_found', message: 'PIN 입력 카드를 찾을 수 없습니다.' });
+    return;
+  }
+  vaultUnlock.setStatus(request.id, 'cancelled');
+  res.json({ ok: true });
+});
+
+/** 잠금 해제 뒤 중단했던 작업을 AI 후속 턴으로 이어 간다. */
+async function runVaultUnlockFollowUp(request: vaultUnlock.VaultUnlockRequestView): Promise<void> {
+  const config = activeConfig();
+  if (!config.apiKeyEnc) {
+    addLog('warn', '금고 잠금은 풀렸지만 AI 키가 없어 후속 작업을 진행하지 못했습니다');
+    return;
+  }
+  let intent: { tool?: string; vaultId?: string | null; field?: string | null; ref?: string | null } = {};
+  try {
+    intent = request.intent ? (JSON.parse(request.intent) as typeof intent) : {};
+  } catch {
+    intent = {};
+  }
+  const detail: string[] = [];
+  if (intent.tool === 'browser_login_with_vault' && intent.vaultId) {
+    detail.push(
+      `browser_login_with_vault(vault_id: ${intent.vaultId})를 다시 호출해 로그인을 끝내세요.` +
+        ' 2단계 로그인(아이디 → 다음 → 비밀번호)은 서버가 알아서 진행하고, 패스키·캡차·인증번호가 나오면 browser_handover로 넘기세요.'
+    );
+  } else if (intent.tool === 'browser_fill_vault' && intent.vaultId) {
+    detail.push(
+      `browser_fill_vault(vault_id: ${intent.vaultId}, field: '${intent.field || 'password'}', ref: '${intent.ref || ''}')를 다시 호출하세요. 화면이 바뀌었으면 browser_snapshot으로 ref를 다시 확인하세요.`
+    );
+  } else if (intent.tool === 'vault_list') {
+    detail.push('vault_list를 다시 호출해 금고 항목을 확인하고, 원래 요청을 이어서 처리하세요.');
+  } else {
+    detail.push('직전에 하던 작업을 이어서 진행하세요.');
+  }
+  const trigger =
+    `[시스템] 사용자가 채팅 카드에서 금고 PIN을 입력해 금고 잠금이 해제되었습니다${request.service ? ` (서비스: ${request.service})` : ''}. ` +
+    `${detail.join(' ')} 값은 금고에서 서버가 직접 채우므로 너는 비밀번호를 알 필요가 없습니다. 끝나면 무엇이 되었는지 한두 줄로 알려 주세요.`;
+  const history = db
+    .prepare('SELECT role, content FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT 20')
+    .all(request.sessionId) as { role: string; content: string }[];
+  const turns = history
+    .reverse()
+    .map((m) => ({ role: m.role === 'assistant' ? ('assistant' as const) : ('user' as const), content: m.content }));
+  turns.push({ role: 'user', content: trigger });
+  try {
+    await runChatTurn({
+      session: request.sessionId,
+      history: turns,
+      prompt: `${request.service || '금고'} 로그인 이어서`,
+      trigger: 'vault_unlock',
+    });
+  } catch (err) {
+    addLog('error', `금고 해제 후속 실행 실패: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 
 /* ------------------------------ memory ---------------------------- */
 
@@ -1622,6 +1921,137 @@ app.post('/api/watchers/:id/check', requireAuth, async (req, res) => {
 
 app.get('/api/watchers/:id/events', requireAuth, (req, res) => {
   res.json({ ok: true, events: watchers.listEvents(req.params.id, 30) });
+});
+
+/* -------------------- 자동화 테스트 실행·기록 (v0.5.4) -------------------- */
+
+/**
+ * 예약(job)이든 웹 감시(watcher)든 같은 id로 '지금 한 번 실행'을 지원한다.
+ * 화면에서는 자동화 카드마다 테스트 버튼과 최근 실행 성공/실패 기록을 보여 준다.
+ */
+app.post('/api/automations/:id/run-now', requireAuth, async (req, res) => {
+  const id = req.params.id;
+  const job = jobs.listJobs().find((j) => j.id === id);
+  if (job) {
+    try {
+      const { run } = await jobs.runJobNow(id, 'manual');
+      res.json({ ok: true, kind: 'job', run });
+    } catch (err) {
+      res.status(400).json({ ok: false, code: 'run_failed', message: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+  const watcher = watchers.getWatcher(id);
+  if (watcher) {
+    try {
+      const result = await watchers.checkWatcherNow(id, 'manual');
+      res.json({ ok: true, kind: 'watcher', watcher: result.watcher, event: result.event });
+    } catch (err) {
+      res.status(400).json({ ok: false, code: 'check_failed', message: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+  res.status(404).json({ ok: false, code: 'automation_not_found', message: '자동화를 찾을 수 없습니다.' });
+});
+
+app.get('/api/automations/:id/runs', requireAuth, (req, res) => {
+  const id = req.params.id;
+  if (jobs.listJobs().some((j) => j.id === id)) {
+    res.json({ ok: true, kind: 'job', runs: jobs.listRuns(id, 20) });
+    return;
+  }
+  if (watchers.getWatcher(id)) {
+    res.json({ ok: true, kind: 'watcher', runs: watchers.listEvents(id, 20) });
+    return;
+  }
+  res.status(404).json({ ok: false, code: 'automation_not_found', message: '자동화를 찾을 수 없습니다.' });
+});
+
+/* --------------------- 데이터 백업 내보내기 (v0.5.4) ---------------------- */
+
+/**
+ * 고사양 서버로 옮길 때 쓸 JSON 백업.
+ * - 기억함·대화·대화방·자동화(예약·감시)·할 일·설정을 담는다.
+ * - 금고는 **메타(제목·종류·아이디·메모)만** 담고 비밀번호·API 키 평문은 절대 넣지 않는다.
+ * - 설정 값 중 키·토큰·금고 열쇠는 [redacted] 로 가린다.
+ */
+app.get('/api/backup/export', requireAuth, (_req, res) => {
+  const exportedAt = new Date().toISOString();
+  const redact = (key: string): boolean => /(apikeyenc|wrappedkey|salt|token|secret|password|vapid)/i.test(key);
+  const settingsRows = db.prepare('SELECT key, value FROM settings ORDER BY key').all() as { key: string; value: string }[];
+  const settings: Record<string, unknown> = {};
+  for (const row of settingsRows) {
+    if (redact(row.key)) {
+      settings[row.key] = '[redacted]';
+      continue;
+    }
+    try {
+      settings[row.key] = JSON.parse(row.value);
+    } catch {
+      settings[row.key] = row.value;
+    }
+  }
+  const sessions = chatSessions.listSessions().map((s) => ({
+    id: s.id,
+    title: s.title,
+    createdAt: s.createdAt,
+    updatedAt: s.updatedAt,
+  }));
+  const messages = db
+    .prepare('SELECT id, session_id, role, content, meta, model, created_at FROM messages ORDER BY id')
+    .all() as { id: number; session_id: string; role: string; content: string; meta: string | null; model: string | null; created_at: string }[];
+  const memories = memory.listMemories(undefined, 5000).map((m) => ({
+    id: m.id,
+    category: m.category,
+    content: m.content,
+    importance: m.importance,
+    source: m.source,
+    createdAt: m.createdAt,
+    updatedAt: m.updatedAt,
+  }));
+  const vaultMetaRows = db
+    .prepare('SELECT id, title, type, username, notes, is_default, created_at, updated_at FROM vault_items ORDER BY created_at')
+    .all() as { id: string; title: string; type: string; username: string | null; notes: string | null; is_default: number; created_at: string; updated_at: string }[];
+  const tasks = db.prepare('SELECT id, title, done, due, priority, notes, created_at FROM tasks ORDER BY created_at').all();
+  const payload = {
+    format: 'pomong-agent-backup',
+    formatVersion: 1,
+    app: APP_NAME,
+    version: APP_VERSION,
+    exportedAt,
+    counts: {
+      sessions: sessions.length,
+      messages: messages.length,
+      memories: memories.length,
+      jobs: jobs.listJobs().length,
+      watchers: watchers.listWatchers().length,
+      vaultItems: vaultMetaRows.length,
+      tasks: (tasks as unknown[]).length,
+    },
+    sessions,
+    messages: messages.map((m) => ({ ...m, meta: m.meta ? (JSON.parse(m.meta) as unknown) : null })),
+    memories,
+    tasks,
+    jobs: jobs.listJobs(),
+    watchers: watchers.listWatchers(),
+    settings,
+    // 비밀번호(secret)는 넣지 않는다. 다른 서버에서 다시 입력해야 한다.
+    vault: vaultMetaRows.map((row) => ({
+      title: row.title,
+      type: row.type,
+      username: row.username,
+      notes: row.notes,
+      isDefault: Number(row.is_default) === 1,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      secretIncluded: false,
+    })),
+  };
+  const stamp = exportedAt.slice(0, 10).replace(/-/g, '');
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="pomong-agent-backup-${stamp}.json"`);
+  res.send(JSON.stringify(payload, null, 2));
+  addLog('info', '데이터 백업을 내보냈습니다');
 });
 
 /* ----------------------------- events ----------------------------- */

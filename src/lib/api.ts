@@ -245,6 +245,32 @@ export interface LoginRequest {
   updatedAt: string;
 }
 
+/** 금고 PIN 입력 카드 (v0.5.4) — PIN은 서버로만 가고 어디에도 저장되지 않는다. */
+export interface VaultUnlockRequest {
+  id: string;
+  sessionId: string;
+  service: string | null;
+  loginUrl: string | null;
+  vaultId: string | null;
+  intent: string | null;
+  note: string | null;
+  status: 'pending' | 'unlocked' | 'cancelled';
+  messageId: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 다중 대화방 (v0.5.4) */
+export interface ChatSession {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+  preview: string;
+  isDefault: boolean;
+}
+
 export interface MeResponse {
   ok: true;
   user: { username: string };

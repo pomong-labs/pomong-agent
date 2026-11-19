@@ -1,5 +1,15 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { api, ApiError, type ChatMessage, type LoginRequest, type ModelsResponse, type Profile, type TaskRun } from './api';
+import {
+  api,
+  ApiError,
+  type ChatMessage,
+  type ChatSession,
+  type LoginRequest,
+  type ModelsResponse,
+  type Profile,
+  type TaskRun,
+  type VaultUnlockRequest,
+} from './api';
 
 export type AgentState = 'idle' | 'thinking' | 'working' | 'responding' | 'error';
 
@@ -35,6 +45,8 @@ interface AppStoreValue {
   aiReady: boolean;
   /** 채팅에 떠 있는 로그인 카드 (금고에 계정이 없을 때) */
   loginRequests: LoginRequest[];
+  /** 채팅에 떠 있는 금고 PIN 입력 카드 (v0.5.4) */
+  unlockRequests: VaultUnlockRequest[];
   /** 금고가 잠겨 있으면 카드에서 PIN을 받아야 한다 */
   vault: { configured: boolean; unlocked: boolean };
   submitLoginCard: (
@@ -42,6 +54,18 @@ interface AppStoreValue {
     input: { username: string; password: string; masterPin?: string }
   ) => Promise<{ ok: boolean; message?: string }>;
   dismissLoginCard: (id: string) => Promise<void>;
+  submitUnlockCard: (id: string, pin: string) => Promise<{ ok: boolean; message?: string }>;
+  dismissUnlockCard: (id: string) => Promise<void>;
+  /** 대화방 (v0.5.4) */
+  sessions: ChatSession[];
+  activeSession: string;
+  refreshSessions: () => Promise<void>;
+  switchSession: (id: string) => Promise<void>;
+  newSession: () => Promise<string | null>;
+  renameSession: (id: string, title: string) => Promise<void>;
+  deleteSession: (id: string) => Promise<void>;
+  /** AI 답변·작업 중지 */
+  stop: () => Promise<void>;
   send: (text: string, attachmentIds?: string[]) => Promise<void>;
   clearChat: () => Promise<void>;
   draft: string;
@@ -158,6 +182,17 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   const [taskRuns, setTaskRuns] = useState<TaskRun[]>([]);
   const [liveTask, setLiveTask] = useState<TaskRun | null>(null);
   const [loginRequests, setLoginRequests] = useState<LoginRequest[]>([]);
+  const [unlockRequests, setUnlockRequests] = useState<VaultUnlockRequest[]>([]);
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [activeSession, setActiveSession] = useState<string>(() => {
+    try {
+      return localStorage.getItem('pomong.activeSession') || 'default';
+    } catch {
+      return 'default';
+    }
+  });
+  const activeSessionRef = useRef(activeSession);
+  activeSessionRef.current = activeSession;
   const [vaultState, setVaultState] = useState<{ configured: boolean; unlocked: boolean }>({ configured: false, unlocked: false });
   const [messagesLoaded, setMessagesLoaded] = useState(false);
   const [sending, setSending] = useState(false);
@@ -198,13 +233,20 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       .catch(() => undefined);
     refreshModels();
     api
-      .get<{ messages: ChatMessage[]; taskRuns?: TaskRun[] }>('/api/chat/messages')
+      .get<{ messages: ChatMessage[]; taskRuns?: TaskRun[] }>(
+        `/api/chat/messages?session=${encodeURIComponent(activeSessionRef.current)}`
+      )
       .then((r) => {
         setMessages(r.messages);
         setTaskRuns(r.taskRuns || []);
       })
       .catch(() => undefined)
       .finally(() => setMessagesLoaded(true));
+    // v0.5.4: 대화방 목록
+    api
+      .get<{ sessions: ChatSession[] }>('/api/chat/sessions')
+      .then((r) => setSessions(r.sessions || []))
+      .catch(() => undefined);
     api
       .get<{ aiConfigured: boolean }>('/api/auth/me')
       .then((r) => setAiReady(r.aiConfigured))
@@ -232,9 +274,14 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     };
   }, [sending]);
 
-  const loadMessages = useCallback(async () => {
+  const loadMessages = useCallback(async (sessionId?: string) => {
+    const id = sessionId || activeSessionRef.current;
     try {
-      const r = await api.get<{ messages: ChatMessage[]; taskRuns?: TaskRun[] }>('/api/chat/messages');
+      const r = await api.get<{ messages: ChatMessage[]; taskRuns?: TaskRun[] }>(
+        `/api/chat/messages?session=${encodeURIComponent(id)}`
+      );
+      // 다른 방으로 빠르게 넘어간 뒤 늦게 도착한 예전 응답이 현재 대화를 덮지 않게 한다.
+      if (id !== activeSessionRef.current) return;
       setMessages(r.messages);
       setTaskRuns(r.taskRuns || []);
     } catch {
@@ -244,11 +291,83 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  /** 채팅에 떠 있던 로그인 카드(대기·최근 저장)와 금고 잠금 상태 */
-  const loadLoginCards = useCallback(async () => {
+  const refreshSessions = useCallback(async () => {
     try {
-      const r = await api.get<{ requests: LoginRequest[]; configured: boolean; unlocked: boolean }>('/api/vault/login-cards');
+      const r = await api.get<{ sessions: ChatSession[] }>('/api/chat/sessions');
+      setSessions(r.sessions || []);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const switchSession = useCallback(
+    async (id: string) => {
+      if (!id || id === activeSessionRef.current) return;
+      activeSessionRef.current = id;
+      setActiveSession(id);
+      try {
+        localStorage.setItem('pomong.activeSession', id);
+      } catch {
+        /* ignore */
+      }
+      setMessages([]);
+      setTaskRuns([]);
+      setLiveTask(null);
+      setLoginRequests([]);
+      setUnlockRequests([]);
+      setError('');
+      await loadMessages(id);
+      void refreshSessions();
+    },
+    [loadMessages, refreshSessions]
+  );
+
+  const newSession = useCallback(async (): Promise<string | null> => {
+    try {
+      const r = await api.post<{ session: ChatSession }>('/api/chat/sessions', {});
+      await refreshSessions();
+      await switchSession(r.session.id);
+      return r.session.id;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '새 대화를 만들지 못했습니다.');
+      return null;
+    }
+  }, [refreshSessions, switchSession]);
+
+  const renameSession = useCallback(
+    async (id: string, title: string) => {
+      await api.patch(`/api/chat/sessions/${id}`, { title }).catch(() => undefined);
+      await refreshSessions();
+    },
+    [refreshSessions]
+  );
+
+  const deleteSession = useCallback(
+    async (id: string) => {
+      await api.del(`/api/chat/sessions/${id}`).catch(() => undefined);
+      await refreshSessions();
+      if (id === activeSessionRef.current) {
+        // 지금 보던 방을 지웠으면 첫 방으로 돌아간다.
+        activeSessionRef.current = '';
+        await switchSession('default');
+      }
+    },
+    [refreshSessions, switchSession]
+  );
+
+  /** 채팅에 떠 있던 로그인 카드(대기·최근 저장)·금고 PIN 카드와 금고 잠금 상태 */
+  const loadLoginCards = useCallback(async (sessionId?: string) => {
+    const id = sessionId || activeSessionRef.current;
+    try {
+      const r = await api.get<{
+        requests: LoginRequest[];
+        unlockRequests?: VaultUnlockRequest[];
+        configured: boolean;
+        unlocked: boolean;
+      }>(`/api/vault/login-cards?session=${encodeURIComponent(id)}`);
+      if (id !== activeSessionRef.current) return;
       setLoginRequests(r.requests || []);
+      setUnlockRequests(r.unlockRequests || []);
       setVaultState({ configured: r.configured, unlocked: r.unlocked });
     } catch {
       /* ignore */
@@ -257,7 +376,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     void loadLoginCards();
-  }, [loadLoginCards]);
+  }, [loadLoginCards, activeSession]);
 
   /**
    * 서버 이벤트(SSE): 중간 안내 말풍선·최종 답변·작업 카드를 실시간으로 받는다.
@@ -282,7 +401,23 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         if (event.type === 'chat_message' || event.type === 'chat') {
           const message = event.data?.message as ChatMessage | undefined;
           if (!message || typeof message.id !== 'number') return;
+          // 다른 대화방의 메시지가 지금 보는 방에 섮이지 않게 한다.
+          const eventSession = event.data?.session ? String(event.data.session) : null;
+          if (eventSession && eventSession !== activeSessionRef.current) return;
           setMessages((prev) => (prev.some((m) => m.id === message.id) ? prev : [...prev, message].sort((a, b) => a.id - b.id)));
+          return;
+        }
+        if (event.type === 'vault_unlock_request') {
+          const request = event.data?.request as VaultUnlockRequest | undefined;
+          if (!request || !request.id) return;
+          if (request.sessionId && request.sessionId !== activeSessionRef.current) return;
+          setUnlockRequests((prev) => {
+            const next = prev.some((r) => r.id === request.id)
+              ? prev.map((r) => (r.id === request.id ? request : r))
+              : [...prev, request];
+            return next.filter((r) => r.status !== 'cancelled').sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+          });
+          void loadLoginCards();
           return;
         }
         if (event.type === 'login_request') {
@@ -390,6 +525,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     try {
       const res = await api.post<{ message: ChatMessage; userMessage?: ChatMessage; taskRun?: TaskRun | null }>('/api/chat/messages', {
         message: content,
+        session: activeSessionRef.current,
         attachmentIds: ids.length ? ids : undefined,
       });
       // 서버가 저장한 내 메시지(userMessage)로 임시 메시지를 바꾸고, AI 답변을 뒤에 붙인다.
@@ -406,6 +542,11 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       }
       setAiReady(true);
     } catch (err) {
+      if (err instanceof ApiError && err.code === 'cancelled') {
+        // 사용자가 '■ 중지'를 누른 경우는 오류가 아니다.
+        void loadMessages();
+        return;
+      }
       if (err instanceof ApiError && err.code === 'no_provider') {
         setAiReady(false);
         await refreshModels();
@@ -417,17 +558,31 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       sendingRef.current = false;
       setSending(false);
       setLiveTask(null);
+      void refreshSessions();
       window.setTimeout(() => {
         api.get<AgentStatus & { ok: true }>('/api/agent/status').then((r) => setAgent({ state: r.state, label: r.label, detail: r.detail, startedAt: r.startedAt, lastError: r.lastError })).catch(() => undefined);
       }, 600);
     }
-  }, [refreshModels, loadMessages]);
+  }, [refreshModels, loadMessages, refreshSessions]);
 
   const clearChat = useCallback(async () => {
-    await api.del('/api/chat/messages').catch(() => undefined);
+    await api.del(`/api/chat/messages?session=${encodeURIComponent(activeSessionRef.current)}`).catch(() => undefined);
     setMessages([]);
     setError('');
-  }, []);
+    void refreshSessions();
+  }, [refreshSessions]);
+
+  /** AI 답변·브라우저 작업 중지 (■ 중지) */
+  const stop = useCallback(async () => {
+    const id = activeSessionRef.current;
+    await api.post('/api/chat/stop', { session: id }).catch(() => undefined);
+    sendingRef.current = false;
+    setSending(false);
+    setLiveTask(null);
+    setError('');
+    window.setTimeout(() => void loadMessages(id), 500);
+    void refreshSessions();
+  }, [loadMessages, refreshSessions]);
 
   /** 로그인 카드: 아이디·비밀번호(필요하면 금고 PIN)를 서버로 보낸다. 값은 이 화면 밖으로 남지 않는다. */
   const submitLoginCard = useCallback(
@@ -449,6 +604,26 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   const dismissLoginCard = useCallback(async (id: string) => {
     await api.post(`/api/vault/login-card/${id}/cancel`).catch(() => undefined);
     setLoginRequests((prev) => prev.filter((r) => r.id !== id));
+  }, []);
+
+  /** v0.5.4: 금고 PIN 입력 카드 — PIN은 서버로만 보내고 저장하지 않는다. */
+  const submitUnlockCard = useCallback(
+    async (id: string, pin: string) => {
+      try {
+        await api.post(`/api/vault/unlock-card/${id}/submit`, { pin });
+        setUnlockRequests((prev) => prev.map((r) => (r.id === id ? { ...r, status: 'unlocked' as const } : r)));
+        setVaultState((prev) => ({ ...prev, unlocked: true }));
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, message: err instanceof Error ? err.message : 'PIN을 확인하지 못했습니다.' };
+      }
+    },
+    []
+  );
+
+  const dismissUnlockCard = useCallback(async (id: string) => {
+    await api.post(`/api/vault/unlock-card/${id}/cancel`).catch(() => undefined);
+    setUnlockRequests((prev) => prev.filter((r) => r.id !== id));
   }, []);
 
   const visibleState: AgentState = sending
@@ -473,9 +648,20 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       error,
       aiReady,
       loginRequests,
+      unlockRequests,
       vault: vaultState,
       submitLoginCard,
       dismissLoginCard,
+      submitUnlockCard,
+      dismissUnlockCard,
+      sessions,
+      activeSession,
+      refreshSessions,
+      switchSession,
+      newSession,
+      renameSession,
+      deleteSession,
+      stop,
       send,
       clearChat,
       draft,
@@ -484,7 +670,42 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       visibleState,
       keyboardOpen,
     }),
-    [profile, models, refreshModels, refreshProfile, refreshAll, selectModel, messages, messagesLoaded, liveTask, taskRuns, sending, error, aiReady, loginRequests, vaultState, submitLoginCard, dismissLoginCard, send, clearChat, draft, agent, visibleState, keyboardOpen]
+    [
+      profile,
+      models,
+      refreshModels,
+      refreshProfile,
+      refreshAll,
+      selectModel,
+      messages,
+      messagesLoaded,
+      liveTask,
+      taskRuns,
+      sending,
+      error,
+      aiReady,
+      loginRequests,
+      unlockRequests,
+      vaultState,
+      submitLoginCard,
+      dismissLoginCard,
+      submitUnlockCard,
+      dismissUnlockCard,
+      sessions,
+      activeSession,
+      refreshSessions,
+      switchSession,
+      newSession,
+      renameSession,
+      deleteSession,
+      stop,
+      send,
+      clearChat,
+      draft,
+      agent,
+      visibleState,
+      keyboardOpen,
+    ]
   );
 
   return <AppStore.Provider value={value}>{children}</AppStore.Provider>;

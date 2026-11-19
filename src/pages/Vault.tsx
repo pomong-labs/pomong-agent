@@ -539,6 +539,7 @@ function ItemModal({
     try {
       const payload = { title, type, secret, notes, isDefault, username: type === 'login' ? username : undefined };
       if (editing && initial) {
+        // v0.5.4: 비밀번호를 비워 두면 기존 값을 그대로 둔다(서버가 그렇게 처리한다).
         await api.patch(`/api/vault/items/${initial.id}`, payload);
       } else {
         await api.post('/api/vault/items', payload);
@@ -590,10 +591,23 @@ function ItemModal({
           ) : null}
           <textarea
             className="pa-input min-h-[90px] resize-y font-mono text-[13px]"
-            placeholder={type === 'memo' ? '메모 내용' : type === 'login' ? '비밀번호' : 'API 키 값'}
+            placeholder={
+              editing
+                ? '비워두면 기존 값 유지'
+                : type === 'memo'
+                  ? '메모 내용'
+                  : type === 'login'
+                    ? '비밀번호'
+                    : 'API 키 값'
+            }
             value={secret}
             onChange={(e) => setSecret(e.target.value)}
           />
+          {editing ? (
+            <p className="text-[11.5px] leading-[1.5] text-[#B4B1C2]">
+              아이디·메모·기본 계정만 고쳐도 돼요. 비밀번호를 비워 두면 저장된 값이 그대로 유지됩니다.
+            </p>
+          ) : null}
           <input className="pa-input" placeholder="메모 (선택)" value={notes} onChange={(e) => setNotes(e.target.value)} />
           {type === 'login' ? (
             <button
@@ -619,7 +633,7 @@ function ItemModal({
           <button className="pa-btn-ghost flex-1" onClick={onClose}>
             취소
           </button>
-          <button className="pa-btn-primary flex-1" onClick={save} disabled={busy || !title.trim() || !secret.trim()}>
+          <button className="pa-btn-primary flex-1" onClick={save} disabled={busy || !title.trim() || (!editing && !secret.trim())}>
             저장
           </button>
         </div>

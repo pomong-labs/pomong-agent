@@ -315,6 +315,67 @@ CREATE INDEX IF NOT EXISTS idx_chat_attachments_session ON chat_attachments(sess
 
 
 /* ------------------------------------------------------------------ */
+/* v0.5.4 schema: 다중 대화방 · 금고 PIN 해제 카드                        */
+/* 기존 'default' 방의 대화(messages.session_id='default')는 그대로 둔다.  */
+/* PIN 원문은 어디에도 저장하지 않는다.                                    */
+/* ------------------------------------------------------------------ */
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS chat_sessions (
+  id         TEXT PRIMARY KEY,
+  title      TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  archived   INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_updated ON chat_sessions(updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS vault_unlock_requests (
+  id         TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  service    TEXT,
+  login_url  TEXT,
+  vault_id   TEXT,
+  intent     TEXT,
+  note       TEXT,
+  status     TEXT NOT NULL DEFAULT 'pending',
+  message_id INTEGER,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_vault_unlock_requests ON vault_unlock_requests(session_id, created_at DESC);
+`);
+
+// 예전 대화가 있는데 방 목록이 비어 있으면 'default' 방을 만들어 준다.
+{
+  const now = new Date().toISOString();
+  db.prepare('INSERT OR IGNORE INTO chat_sessions(id, title, created_at, updated_at) VALUES(?,?,?,?)').run(
+    'default',
+    '첫 대화',
+    now,
+    now
+  );
+  // 메시지가 있는데 방 목록에 없는 세션이 있으면 제목을 첫 메시지로 잡아 만든다.
+  const orphans = db
+    .prepare(
+      `SELECT m.session_id AS id, MIN(m.id) AS first_id, MAX(m.created_at) AS last_at
+       FROM messages m LEFT JOIN chat_sessions s ON s.id = m.session_id
+       WHERE s.id IS NULL GROUP BY m.session_id`
+    )
+    .all() as { id: string; first_id: number; last_at: string }[];
+  for (const row of orphans) {
+    const first = db.prepare('SELECT content FROM messages WHERE id = ?').get(row.first_id) as { content: string } | undefined;
+    const title = (first?.content || '대화').replace(/\s+/g, ' ').trim().slice(0, 40) || '대화';
+    db.prepare('INSERT OR IGNORE INTO chat_sessions(id, title, created_at, updated_at) VALUES(?,?,?,?)').run(
+      row.id,
+      title,
+      row.last_at || now,
+      row.last_at || now
+    );
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* Settings                                                            */
 /* ------------------------------------------------------------------ */
 

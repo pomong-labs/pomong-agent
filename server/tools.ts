@@ -8,6 +8,7 @@ import * as jobs from './jobs';
 import * as watchers from './watchers';
 import * as memory from './memory';
 import * as loginRequests from './login-requests';
+import * as vaultUnlock from './vault-unlock';
 import { findServiceInText } from './services';
 import * as attachments from './attachments';
 import { webSearch, formatSearch } from './web-search';
@@ -586,12 +587,53 @@ export interface ToolResult {
     vaultEmpty?: boolean;
     /** 이번 실행에서 채팅 로그인 카드를 만들었다 */
     loginCardCreated?: boolean;
+    /** v0.5.4: 금고 PIN 입력 카드를 채팅에 띄웠다 */
+    vaultLockedCardCreated?: boolean;
   };
 }
 
 export interface ToolContext {
   /** 채팅 세션 id (로그인 카드를 그 세션 화면에 붙인다) */
   session?: string;
+}
+
+/**
+ * 금고가 잠겨 있을 때의 공통 응답 (v0.5.4)
+ *
+ * 말로만 "금고 탭에서 PIN을 푸세요"라고 하면 사용자가 다른 화면으로 가야 했다.
+ * 이제 채팅에 PIN 입력 카드를 띄우고, PIN이 맞으면 서버가 잠금을 풀고
+ * 이어서 AI가 하던 로그인/입력을 계속한다.
+ */
+function lockedVaultResponse(
+  ctx: ToolContext,
+  input: { tool: string; vaultId?: string; field?: string; ref?: string; service?: string; loginUrl?: string; note?: string }
+): ToolResult {
+  if (!vault.vaultConfigured()) {
+    return {
+      content:
+        '금고가 아직 만들어지지 않았습니다. 사용자에게 "금고를 먼저 만들어 주세요"라고 말로만 안내하지 말고, vault_request_login으로 채팅 로그인 카드를 띄우세요. 카드에서 아이디·비밀번호와 새 PIN을 함께 받으면 금고가 만들어지고 바로 로그인합니다.',
+    };
+  }
+  const intent = JSON.stringify({
+    tool: input.tool,
+    vaultId: input.vaultId ?? null,
+    field: input.field ?? null,
+    ref: input.ref ?? null,
+  });
+  const card = vaultUnlock.create({
+    sessionId: ctx.session || 'default',
+    service: input.service ?? null,
+    loginUrl: input.loginUrl ?? null,
+    vaultId: input.vaultId ?? null,
+    intent,
+    note: input.note ?? '금고가 잠겨 있어 자동 입력을 시작하지 못했습니다.',
+  });
+  return {
+    content:
+      `채팅 화면에 금고 PIN 입력 카드를 띄웠습니다(id: ${card.id}). 지금 멈추고 사용자에게 "아래 카드에 금고 PIN을 입력해 주시면 바로 이어서 로그인할게요!"라고 안내하며 답변을 마치세요. ` +
+      '사용자가 PIN을 넣으면 서버가 잠금을 풀고 자동으로 후속 작업을 이어갑니다. PIN을 직접 물어보거나 추측하지 마세요.',
+    flags: { vaultLockedCardCreated: true },
+  };
 }
 
 function taskLine(row: TaskRow): string {
@@ -642,7 +684,10 @@ export async function runTool(name: string, args: Record<string, unknown>, ctx: 
           updatedAt: i.updatedAt,
         }));
       } catch {
-        return { content: '금고가 잠겨 있어 목록을 볼 수 없습니다. 금고 탭에서 PIN으로 잠금을 해제한 뒤 다시 요청해 주세요.' };
+        return lockedVaultResponse(ctx, {
+          tool: 'vault_list',
+          note: '금고 목록을 보려면 PIN이 필요합니다.',
+        });
       }
       if (!items.length) return { content: '금고에 저장된 항목이 없습니다.' };
       const label = (t: string) => (t === 'apikey' ? 'API 키' : t === 'login' ? '로그인' : '메모');
@@ -699,6 +744,16 @@ export async function runTool(name: string, args: Record<string, unknown>, ctx: 
       }
     }
     case 'browser_type': {
+      // v0.5.4: `[금고...]` 같은 자리표시자를 타이핑하려 하면 즉시 막고 올바른 도구를 알려 준다.
+      const typedText = String(args.text || '');
+      if (/[\[【]\s*(금고|vault|저장된|보관된|saved)/i.test(typedText) || /^\s*[\[【][^\]】]*[\]】]\s*$/.test(typedText)) {
+        return {
+          content:
+            '[차단] 대괄호로 감싼 임시 문구(예: [금고의 비밀번호])는 입력할 수 없습니다. 실제 값은 네가 알 필요도, 타이핑할 필요도 없습니다. ' +
+            '아이디·비밀번호를 한 번에 넣으려면 browser_login_with_vault(vault_id), 한 칸만 채우려면 browser_fill_vault(vault_id, field, ref)를 쓰세요. ' +
+            'vault_id를 모르면 vault_find_for_site(site_or_service)로 먼저 찾으세요.',
+        };
+      }
       try {
         const result = await browser.typeInto({
           ref: args.ref ? String(args.ref) : undefined,
@@ -833,7 +888,9 @@ export async function runTool(name: string, args: Record<string, unknown>, ctx: 
         // v0.5.3: 카드 도구를 빼먹고 "직접 하세요"로 끝내는 일을 막는다(첫 줄에 필수 행동).
         const service = findServiceInText(term);
         const catalog = service
-          ? `\n\n[서비스 카탈로그] ${service.name} · login_url=${service.loginUrl}${service.note ? ` · ${service.note}` : ''}`
+          ? `\n\n[서비스 카탈로그] ${service.name} · login_url=${service.loginUrl}${service.note ? ` · ${service.note}` : ''}${
+              service.loginNote ? `\n[로그인 화면 특이사항] ${service.loginNote}` : ''
+            }`
           : '\n\n[서비스 카탈로그] 일치하는 서비스를 찾지 못했습니다. login_url은 사용자가 말한 사이트의 실제 로그인 주소를 쓰세요.';
         return {
           content:
@@ -889,10 +946,13 @@ export async function runTool(name: string, args: Record<string, unknown>, ctx: 
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (message.includes('잠겨')) {
-          return {
-            content:
-              '금고가 잠겨 있어 자동 입력을 할 수 없습니다. 사용자에게 금고 탭에서 PIN으로 잠금을 해제해 달라고 안내한 뒤 다시 시도하세요.',
-          };
+          return lockedVaultResponse(ctx, {
+            tool: 'browser_fill_vault',
+            vaultId,
+            field,
+            ref,
+            note: '금고가 잠겨 있어 자동 입력을 시작하지 못했습니다.',
+          });
         }
         return { content: `자동 입력에 실패했습니다: ${message}` };
       }
@@ -913,18 +973,24 @@ export async function runTool(name: string, args: Record<string, unknown>, ctx: 
         });
         const done = `아이디 ${result.filledUsername ? '입력 완료' : '칸을 찾지 못해 건너뜀'} · 비밀번호 입력 완료 · ${
           result.submitted === 'click' ? '로그인 버튼 클릭' : result.submitted === 'enter' ? 'Enter로 전송' : '전송하지 않음'
-        } (값은 기록하지 않음).`;
+        }${result.steps === 'two_step' ? ' · 2단계 로그인(아이디 → 다음 → 비밀번호) 자동 진행' : ''} (값은 기록하지 않음).`;
+        const noticeLine = result.notice ? `\n\n※ 화면에 이렇게 적혀 있습니다: "${result.notice}"` : '';
         const next = result.stillOnLogin
-          ? '\n\n※ 아직 로그인 화면으로 보입니다. 아이디·비밀번호가 틀렸거나 인증번호(OTP)·캡차·2단계 인증일 수 있습니다. 화면에 인증번호·캡차가 있으면 browser_handover로 사용자에게 넘기고, 그냥 로그인 실패 문구라면 사용자에게 금고의 계정 정보를 확인해 달라고 알려 주세요.'
+          ? result.blocked
+            ? `\n\n※ 자동으로 더 진행할 수 없습니다(사유: ${browser.LOGIN_BLOCK_LABELS[result.blocked]}). 사용자에게 화면에 적힌 안내(${result.notice || '위 화면'})를 그대로 알려 주고, browser_handover(reason: '${
+                result.blocked === 'otp' ? 'otp' : result.blocked === 'captcha' || result.blocked === 'bot_check' ? 'captcha' : 'login'
+              }')로 넘기세요. 같은 도구를 다시 부르지 마세요.`
+            : '\n\n※ 아직 로그인 화면으로 보입니다. 아이디·비밀번호가 틀렸거나 인증번호(OTP)·캡차·2단계 인증일 수 있습니다. 화면에 인증번호·캡차가 있으면 browser_handover로 사용자에게 넘기고, 그냥 로그인 실패 문구라면 사용자에게 금고의 계정 정보를 확인해 달라고 알려 주세요.'
           : '\n\n※ 로그인 화면을 벗어났습니다. 이어서 하려던 일을 계속하세요.';
-        return { content: `${done}${next}\n\n${result.snapshot}`, meta: 'browser' };
+        return { content: `${done}${noticeLine}${next}\n\n${result.snapshot}`, meta: 'browser' };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (message.includes('잠겨')) {
-          return {
-            content:
-              '금고가 잠겨 있어 자동 로그인을 할 수 없습니다. 사용자에게 금고 탭에서 PIN으로 잠금을 해제해 달라고 안내한 뒤 다시 시도하세요.',
-          };
+          return lockedVaultResponse(ctx, {
+            tool: 'browser_login_with_vault',
+            vaultId,
+            note: '금고가 잠겨 있어 자동 로그인을 시작하지 못했습니다.',
+          });
         }
         return { content: `자동 로그인에 실패했습니다: ${message}` };
       }

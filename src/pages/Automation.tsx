@@ -135,6 +135,9 @@ export default function Automation() {
   const [watchEditor, setWatchEditor] = useState<{ mode: 'create' | 'edit'; watcher?: Watcher } | null>(null);
   const [openEvents, setOpenEvents] = useState<string | null>(null);
   const [events, setEvents] = useState<Record<string, WatchEvent[]>>({});
+  // v0.5.4: 자동화별 최근 실행 기록(성공/실패) 보기
+  const [openRuns, setOpenRuns] = useState<string | null>(null);
+  const [runsById, setRunsById] = useState<Record<string, JobRun[]>>({});
   const [toast, setToast] = useState<string>('');
 
   const load = useCallback(async () => {
@@ -175,6 +178,21 @@ export default function Automation() {
       setToast(err instanceof Error ? err.message : '실행하지 못했어요.');
     } finally {
       setBusyId(null);
+    }
+  };
+
+  /** 자동화 카드에서 '최근 실행' 펼치기 (POST /api/automations/:id/run-now 와 같은 id 체계) */
+  const loadAutomationRuns = async (job: AutomationJob) => {
+    if (openRuns === job.id) {
+      setOpenRuns(null);
+      return;
+    }
+    setOpenRuns(job.id);
+    try {
+      const res = await api.get<{ runs: JobRun[] }>(`/api/automations/${job.id}/runs`);
+      setRunsById((prev) => ({ ...prev, [job.id]: res.runs || [] }));
+    } catch {
+      setRunsById((prev) => ({ ...prev, [job.id]: [] }));
     }
   };
 
@@ -242,6 +260,7 @@ export default function Automation() {
             <p className="mt-1 text-[13.5px] text-pomong-sub lg:text-[16px]">
               예약 <b className="text-[#7C63F6]">{jobs.filter((j) => j.enabled).length}</b>개 · 워치{' '}
               <b className="text-[#7C63F6]">{watchers.filter((w) => w.enabled).length}</b>개 · 다음은 {nextSummary}
+              <span className="mt-1 block text-[12px] text-[#B4B1C2]">카드의 [지금 실행]으로 바로 시험해 보고, [최근 실행 보기]로 성공·실패 기록을 확인하세요.</span>
             </p>
           </div>
           <MascotFace character={profile.character} state={runningJobs.length ? 'working' : 'idle'} size={56} className="lg:hidden" />
@@ -297,6 +316,9 @@ export default function Automation() {
               onToggle={toggleJob}
               onEdit={(job) => setEditor({ mode: 'edit', job })}
               onRemove={removeJob}
+              onShowRuns={loadAutomationRuns}
+              openRuns={openRuns}
+              runsById={runsById}
             />
             <JobSection
               title="실행 대기"
@@ -309,6 +331,9 @@ export default function Automation() {
               onToggle={toggleJob}
               onEdit={(job) => setEditor({ mode: 'edit', job })}
               onRemove={removeJob}
+              onShowRuns={loadAutomationRuns}
+              openRuns={openRuns}
+              runsById={runsById}
             />
             <JobSection
               title="멈춤"
@@ -321,6 +346,9 @@ export default function Automation() {
               onToggle={toggleJob}
               onEdit={(job) => setEditor({ mode: 'edit', job })}
               onRemove={removeJob}
+              onShowRuns={loadAutomationRuns}
+              openRuns={openRuns}
+              runsById={runsById}
             />
           </div>
         ) : null}
@@ -495,6 +523,9 @@ function JobSection({
   onToggle,
   onEdit,
   onRemove,
+  onShowRuns,
+  openRuns,
+  runsById,
 }: {
   title: string;
   tint: string;
@@ -506,6 +537,9 @@ function JobSection({
   onToggle: (job: AutomationJob) => void;
   onEdit: (job: AutomationJob) => void;
   onRemove: (job: AutomationJob) => void;
+  onShowRuns: (job: AutomationJob) => void;
+  openRuns: string | null;
+  runsById: Record<string, JobRun[]>;
 }) {
   if (!jobs.length && !empty) return null;
   return (
@@ -558,6 +592,12 @@ function JobSection({
                 >
                   {job.running ? <RefreshCw size={12} className="animate-spin" /> : <Play size={12} />} 지금 실행
                 </button>
+                <button
+                  className="rounded-xl bg-[#FAF9FD] px-2.5 py-1.5 text-[12px] font-semibold text-[#6B677A]"
+                  onClick={() => onShowRuns(job)}
+                >
+                  최근 실행 {openRuns === job.id ? '접기' : '보기'}
+                </button>
                 <button className="rounded-xl bg-[#FAF9FD] px-2.5 py-1.5 text-[12px] font-semibold text-[#6B677A]" onClick={() => onEdit(job)}>
                   편집
                 </button>
@@ -569,6 +609,33 @@ function JobSection({
                 <p className="mt-2 whitespace-pre-wrap rounded-[10px] bg-[#FAF9FD] px-2.5 py-2 text-[11.5px] leading-[1.5] text-[#6B677A]">
                   {(job.lastRun.result || job.lastRun.error || '').slice(0, 220)}
                 </p>
+              ) : null}
+              {openRuns === job.id ? (
+                <div className="mt-2 space-y-1.5 border-t border-[#F4F2FA] pt-2">
+                  <p className="text-[11px] font-semibold text-[#A8A5B8]">최근 실행 기록</p>
+                  {(runsById[job.id] || []).length === 0 ? (
+                    <p className="text-[12px] text-[#A8A5B8]">아직 실행 기록이 없어요. 위의 [지금 실행]으로 한 번 시험해 보세요.</p>
+                  ) : (
+                    (runsById[job.id] || []).slice(0, 6).map((run) => {
+                      const meta = RUN_STATUS[run.status];
+                      return (
+                        <div key={run.id} className="rounded-[10px] bg-[#FAF9FD] px-2.5 py-2">
+                          <p className="flex items-center gap-1.5 text-[11px] font-semibold text-[#8A8A9A]">
+                            <span className="rounded-full px-1.5 py-[1px] text-[10px] font-bold" style={{ background: meta.bg, color: meta.color }}>
+                              {meta.label}
+                            </span>
+                            {clockLabel(run.startedAt)} · {run.trigger === 'manual' ? '직접 실행' : '예약'} · {run.steps}단계
+                          </p>
+                          {run.result || run.error ? (
+                            <p className="mt-0.5 line-clamp-3 whitespace-pre-wrap text-[11.5px] leading-[1.5] text-[#5B5866]">
+                              {run.result || run.error}
+                            </p>
+                          ) : null}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
               ) : null}
             </article>
           );

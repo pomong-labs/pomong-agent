@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bell, BellOff, Check, ExternalLink, Globe, LogOut, Send, ShieldCheck, Sparkles, Trash2 } from 'lucide-react';
+import { Bell, BellOff, Check, Download, ExternalLink, Globe, LogOut, Send, ShieldCheck, Sparkles, Trash2 } from 'lucide-react';
 import BackButton from '../components/BackButton';
 import MascotFace from '../components/MascotFace';
 import { api, type ProviderId, type PushStatus, type SettingsResponse } from '../lib/api';
@@ -495,13 +495,29 @@ export default function SettingsPage() {
 
         <PolicySection />
 
+        {/* 데이터 백업 (v0.5.4) */}
+        <section className="mt-4 rounded-[24px] bg-white p-5 shadow-card ring-1 ring-[#F6F4FB] lg:p-6">
+          <h2 className="text-[16px] font-bold text-[#1F1D2B]">데이터 백업</h2>
+          <p className="mt-2 text-[12.5px] leading-[1.6] text-[#8A8A9A]">
+            기억함·대화·대화방·자동화·설정·금고 메타를 JSON 파일 하나로 내려받아요. 더 좋은 사양의 서버로 옮길 때 그대로 쓸 수 있어요.
+            금고 비밀번호와 API 키 평문은 파일에 들어가지 않아요.
+          </p>
+          <a
+            href="/api/backup/export"
+            download
+            className="pa-btn-ghost mt-3 inline-flex items-center gap-1.5 px-3.5 py-2.5 text-[13px]"
+          >
+            <Download size={15} /> 데이터 백업 내보내기 (JSON)
+          </a>
+        </section>
+
         {/* security / about */}
         <section className="mt-4 rounded-[24px] bg-white p-5 shadow-card ring-1 ring-[#F6F4FB] lg:p-6">
           <h2 className="text-[16px] font-bold text-[#1F1D2B]">정보</h2>
           <ul className="mt-3 divide-y divide-[#F6F4FB] text-[13.5px]">
             <li className="flex items-center justify-between py-3">
               <span className="text-pomong-sub">버전</span>
-              <span className="font-semibold text-[#3B3947]">v{data?.version || '0.5.3'}</span>
+              <span className="font-semibold text-[#3B3947]">v{data?.version || '0.5.4'}</span>
             </li>
             <li className="flex items-center justify-between py-3">
               <span className="text-pomong-sub">데이터 보관</span>
@@ -520,7 +536,7 @@ export default function SettingsPage() {
         </section>
 
         <p className="mt-6 flex items-center justify-center gap-1.5 text-[12px] text-[#B4B1C2]">
-          <Sparkles size={12} /> Pomong Agent v{data?.version || '0.5.3'} · Pomong Labs
+          <Sparkles size={12} /> Pomong Agent v{data?.version || '0.5.4'} · Pomong Labs
         </p>
       </div>
     </div>

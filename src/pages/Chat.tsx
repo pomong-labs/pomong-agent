@@ -5,19 +5,28 @@ import {
   CheckCheck,
   CheckCircle2,
   ChevronDown,
+  ChevronRight,
   CircleDashed,
   Clock3,
+  Copy,
   Download,
   FileText,
   Globe,
   Image as ImageIcon,
   KeyRound,
   Loader2,
+  Lock,
+  MessageSquare,
   Mic,
   Paperclip,
+  Pencil,
+  Plus,
+  Search,
   Send,
   ShieldCheck,
   Sparkles,
+  Square,
+  Trash2,
   X,
   XCircle,
 } from 'lucide-react';
@@ -25,7 +34,7 @@ import AppHeader from '../components/AppHeader';
 import Mascot, { type MascotName } from '../components/Mascot';
 import ModelBar from '../components/ModelBar';
 import { StatsCard, TasksCard } from '../components/Cards';
-import { type ChatAttachment, type ChatMessage, type LoginRequest, type TaskRun } from '../lib/api';
+import { api, type ChatAttachment, type ChatMessage, type LoginRequest, type ChatSession, type TaskRun, type VaultUnlockRequest } from '../lib/api';
 import { formatClock } from '../lib/format';
 import { useAppStore } from '../lib/store';
 
@@ -86,9 +95,19 @@ export default function Chat() {
     liveTask,
     taskRuns,
     loginRequests,
+    unlockRequests,
     vault,
     submitLoginCard,
     dismissLoginCard,
+    submitUnlockCard,
+    dismissUnlockCard,
+    sessions,
+    activeSession,
+    switchSession,
+    newSession,
+    renameSession,
+    deleteSession,
+    stop,
   } = useAppStore();
   const navigate = useNavigate();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -99,6 +118,9 @@ export default function Chat() {
   const [uploading, setUploading] = useState(0);
   const [attachError, setAttachError] = useState('');
   const [preview, setPreview] = useState<{ url: string; name: string } | null>(null);
+  const [drawer, setDrawer] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [highlight, setHighlight] = useState<number | null>(null);
 
   const MAX_FILES = 6;
   const MAX_BYTES = 15 * 1024 * 1024;
@@ -117,7 +139,7 @@ export default function Chat() {
       }
       setUploading((n) => n + 1);
       try {
-        const params = new URLSearchParams({ name: file.name, session: 'default' });
+        const params = new URLSearchParams({ name: file.name, session: activeSession });
         const res = await fetch(`/api/chat/upload?${params.toString()}`, {
           method: 'POST',
           credentials: 'same-origin',
@@ -137,7 +159,7 @@ export default function Chat() {
         setUploading((n) => n - 1);
       }
     }
-  }, [pending.length]);
+  }, [pending.length, activeSession]);
 
   const removePending = (id: string) => setPending((prev) => prev.filter((p) => p.id !== id));
 
@@ -205,7 +227,12 @@ export default function Chat() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <AppHeader onClear={onClear} onMore={() => navigate('/more')} />
+      <AppHeader
+        onMenu={() => setDrawer(true)}
+        onSearch={() => setSearchOpen(true)}
+        onClear={onClear}
+        onMore={() => navigate('/more')}
+      />
 
       {/* messages */}
       <div ref={scrollRef} className="pa-scroll min-h-0 flex-1 overflow-y-auto px-4 py-4 lg:px-10 lg:py-8">
@@ -221,44 +248,66 @@ export default function Chat() {
 
           {messages.length === 0 ? <EmptyState agentName={profile.agentName} character={profile.character} onPick={(t) => void send(t)} /> : null}
 
-          {messages.map((m) =>
-            m.role === 'user' ? (
-              <div key={m.id} className="flex flex-col items-end gap-1.5 animate-fade-up">
-                <div className="flex max-w-[85%] flex-col items-end gap-2">
-                  {m.attachments?.length ? (
-                    <MessageAttachments items={m.attachments} onPreview={setPreview} />
-                  ) : null}
-                  {m.content ? (
-                    <div
-                      className="rounded-[22px] rounded-br-lg px-4 py-3 text-[15px] leading-relaxed text-[#2A2A35] shadow-[0_2px_10px_rgba(120,100,200,0.05)] sm:text-[16px]"
-                      style={{ background: 'linear-gradient(135deg,#EFE8FF,#E7DFFC)' }}
-                    >
-                      {m.content}
-                    </div>
-                  ) : null}
+          {messages.map((m) => (
+            <div
+              key={m.id}
+              id={`msg-${m.id}`}
+              className={`scroll-mt-24 transition ${
+                highlight === m.id ? '-m-1 rounded-[26px] bg-[#FBF8FF] p-1 ring-2 ring-[#C9B8FF]' : ''
+              }`}
+            >
+              {m.role === 'user' ? (
+                <div className="flex flex-col items-end gap-1.5 animate-fade-up">
+                  <div className="flex max-w-[85%] flex-col items-end gap-2">
+                    {m.attachments?.length ? (
+                      <MessageAttachments items={m.attachments} onPreview={setPreview} />
+                    ) : null}
+                    {m.content ? (
+                      <div
+                        className="rounded-[22px] rounded-br-lg px-4 py-3 text-[15px] leading-relaxed text-[#2A2A35] shadow-[0_2px_10px_rgba(120,100,200,0.05)] sm:text-[16px]"
+                        style={{ background: 'linear-gradient(135deg,#EFE8FF,#E7DFFC)' }}
+                      >
+                        {m.content}
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="flex items-center gap-1.5 pr-1 text-[12px] text-[#A8A5B8]">
+                    {formatClock(m.createdAt)}
+                    <CheckCheck size={13} className="text-[#B9A8FF]" />
+                  </div>
                 </div>
-                <div className="flex items-center gap-1.5 pr-1 text-[12px] text-[#A8A5B8]">
-                  {formatClock(m.createdAt)}
-                  <CheckCheck size={13} className="text-[#B9A8FF]" />
-                </div>
-              </div>
-            ) : m.meta?.type === 'notice' ? (
-              <NoticeBubble key={m.id} message={m} character={profile.character} />
-            ) : (
-              <AssistantBubble
-                key={m.id}
-                message={m}
-                character={profile.character}
-                agentName={profile.agentName}
-                taskRun={shownRuns.find((r) => r.messageId === m.id) || null}
-                loginRequests={requestsOf(m.id)}
-                vault={vault}
-                onLoginSubmit={submitLoginCard}
-                onLoginDismiss={dismissLoginCard}
-                onPreview={setPreview}
+              ) : m.meta?.type === 'notice' ? (
+                <NoticeBubble message={m} character={profile.character} />
+              ) : (
+                <AssistantBubble
+                  message={m}
+                  character={profile.character}
+                  agentName={profile.agentName}
+                  taskRun={shownRuns.find((r) => r.messageId === m.id) || null}
+                  loginRequests={requestsOf(m.id)}
+                  unlockRequests={unlockRequests.filter((r) => r.messageId === m.id)}
+                  vault={vault}
+                  onLoginSubmit={submitLoginCard}
+                  onLoginDismiss={dismissLoginCard}
+                  onUnlockSubmit={submitUnlockCard}
+                  onUnlockDismiss={dismissUnlockCard}
+                  onPreview={setPreview}
+                />
+              )}
+            </div>
+          ))}
+
+          {/* 아직 답변 말풍선이 붙지 않은 금고 PIN 카드(이번 턴 진행 중) */}
+          {unlockRequests
+            .filter((r) => !r.messageId && r.status === 'pending')
+            .map((request) => (
+              <VaultPinCard
+                key={request.id}
+                request={request}
+                onSubmit={submitUnlockCard}
+                onDismiss={dismissUnlockCard}
               />
-            )
-          )}
+            ))}
 
           {/* 아직 답변 말풍선이 붙지 않은 로그인 카드(이번 턴 진행 중) */}
           {floatingRequests.map((request) => (
@@ -343,15 +392,27 @@ export default function Chat() {
               >
                 <Mic size={18} />
               </button>
-              <button
-                className="mb-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-white shadow-float transition active:scale-95 disabled:opacity-40"
-                style={{ background: 'linear-gradient(135deg,#A88BFF,#8B72F8)' }}
-                onClick={submit}
-                disabled={sending || !draft.trim()}
-                aria-label="보내기"
-              >
-                <Send size={18} />
-              </button>
+              {sending ? (
+                <button
+                  className="mb-0.5 flex h-11 shrink-0 items-center justify-center gap-1.5 rounded-full bg-[#E5484D] px-3.5 text-[13px] font-bold text-white shadow-float transition active:scale-95"
+                  onClick={() => void stop()}
+                  aria-label="AI 답장 중지"
+                  title="AI 답장 중지"
+                >
+                  <Square size={12} fill="currentColor" strokeWidth={0} />
+                  중지
+                </button>
+              ) : (
+                <button
+                  className="mb-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-white shadow-float transition active:scale-95 disabled:opacity-40"
+                  style={{ background: 'linear-gradient(135deg,#A88BFF,#8B72F8)' }}
+                  onClick={submit}
+                  disabled={!draft.trim() && !pending.length}
+                  aria-label="보내기"
+                >
+                  <Send size={18} />
+                </button>
+              )}
             </div>
           </div>
           {!keyboardOpen ? (
@@ -361,6 +422,23 @@ export default function Chat() {
           ) : null}
         </div>
       </div>
+
+      <RoomDrawer open={drawer} onClose={() => setDrawer(false)} />
+
+      <MessageSearch
+        open={searchOpen}
+        sessionId={activeSession}
+        onClose={() => setSearchOpen(false)}
+        onPick={async (sessionId, messageId) => {
+          setSearchOpen(false);
+          if (sessionId !== activeSession) await switchSession(sessionId);
+          setHighlight(messageId);
+          window.setTimeout(() => {
+            document.getElementById(`msg-${messageId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }, sessionId !== activeSession ? 420 : 60);
+          window.setTimeout(() => setHighlight(null), 2600);
+        }}
+      />
 
       {/* 사진 크게 보기 */}
       {preview ? (
@@ -410,9 +488,12 @@ function AssistantBubble({
   agentName,
   taskRun,
   loginRequests = [],
+  unlockRequests = [],
   vault,
   onLoginSubmit,
   onLoginDismiss,
+  onUnlockSubmit,
+  onUnlockDismiss,
   onPreview,
 }: {
   message: ChatMessage;
@@ -420,12 +501,34 @@ function AssistantBubble({
   agentName: string;
   taskRun?: TaskRun | null;
   loginRequests?: LoginRequest[];
+  unlockRequests?: VaultUnlockRequest[];
   vault: { configured: boolean; unlocked: boolean };
   onLoginSubmit: (id: string, input: { username: string; password: string; masterPin?: string }) => Promise<{ ok: boolean; message?: string }>;
   onLoginDismiss: (id: string) => Promise<void>;
+  onUnlockSubmit: (id: string, pin: string) => Promise<{ ok: boolean; message?: string }>;
+  onUnlockDismiss: (id: string) => Promise<void>;
   onPreview: (p: { url: string; name: string }) => void;
 }) {
   const { models } = useAppStore();
+  // v0.5.4: 답변 복사 (한 번 누르면 원문 그대로 클립보드로)
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(message.content);
+    } catch {
+      // 클립보드 API가 막힌 환경(구형 iOS) 폴백
+      const area = document.createElement('textarea');
+      area.value = message.content;
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.select();
+      document.execCommand('copy');
+      document.body.removeChild(area);
+    }
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1600);
+  };
   const answeredModel = message.model ? message.model.split(':').slice(-1)[0] : '';
   const answeredLabel = answeredModel ? models?.labels?.[answeredModel] || answeredModel : '';
   return (
@@ -454,6 +557,16 @@ function AssistantBubble({
             onDismiss={onLoginDismiss}
           />
         ))}
+        {unlockRequests
+          .filter((request) => request.status === 'pending')
+          .map((request) => (
+            <VaultPinCard
+              key={request.id}
+              request={request}
+              onSubmit={onUnlockSubmit}
+              onDismiss={onUnlockDismiss}
+            />
+          ))}
         <div className="mt-2.5 flex items-center gap-1 text-[11.5px] text-[#C0BCCD]">
           {formatClock(message.createdAt)}
           {answeredLabel ? (
@@ -466,6 +579,15 @@ function AssistantBubble({
               도구 {message.meta.tools.length}회
             </span>
           ) : null}
+          <button
+            className="ml-auto flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-medium text-[#B4B1C2] transition hover:bg-[#F7F5FF] hover:text-[#7C63F6]"
+            onClick={() => void copy()}
+            aria-label="답변 복사"
+            title="답변 복사"
+          >
+            {copied ? <Check size={11} /> : <Copy size={11} />}
+            {copied ? '복사됨' : '복사'}
+          </button>
           <span className="sr-only">{agentName}</span>
         </div>
         </div>
@@ -796,6 +918,387 @@ function EmptyState({ agentName, character, onPick }: { agentName: string; chara
         ))}
       </div>
       <span className="sr-only">{character}</span>
+    </div>
+  );
+}
+
+
+/* ------------------------------------------------------------------ */
+/* v0.5.4: 금고 PIN 입력 카드                                          */
+/* PIN은 입력 즉시 서버로만 보내고, 화면·기록 어디에도 남기지 않는다.      */
+/* ------------------------------------------------------------------ */
+
+function VaultPinCard({
+  request,
+  onSubmit,
+  onDismiss,
+}: {
+  request: VaultUnlockRequest;
+  onSubmit: (id: string, pin: string) => Promise<{ ok: boolean; message?: string }>;
+  onDismiss: (id: string) => Promise<void>;
+}) {
+  const [pin, setPin] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const done = request.status === 'unlocked';
+
+  const submit = async () => {
+    if (busy) return;
+    if (!/^\d{4,12}$/.test(pin.trim())) {
+      setError('PIN은 4~12자리 숫자입니다.');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    const res = await onSubmit(request.id, pin.trim());
+    setBusy(false);
+    setPin('');
+    if (!res.ok) setError(res.message || 'PIN을 확인하지 못했어요.');
+  };
+
+  if (done) {
+    return (
+      <div className="mt-2.5 flex items-center gap-2.5 rounded-[16px] bg-[#EAFBF1] px-3.5 py-2.5 ring-1 ring-[#D6F3E3] animate-fade-up">
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white text-[#0F9668]">
+          <Check size={15} strokeWidth={3} />
+        </span>
+        <p className="min-w-0 flex-1 text-[12.5px] leading-relaxed text-[#0B7B57]">
+          금고 잠금을 풀었어요. 이어서 작업하는 중…
+        </p>
+        <Loader2 size={14} className="shrink-0 animate-spin text-[#0F9668]" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2.5 overflow-hidden rounded-[18px] bg-[#FFFBF3] ring-1 ring-[#F6E3BE] animate-fade-up">
+      <div className="flex items-center gap-2.5 border-b border-[#F6E9CF] px-3.5 py-2.5">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white text-[#C08A16] shadow-sm">
+          <Lock size={16} />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[13.5px] font-bold text-[#8A6412]">금고 잠금 해제</span>
+          <span className="block truncate text-[11px] text-[#A98B52]">
+            {request.service ? `${request.service} · ` : ''}PIN을 넣으면 이어서 로그인할게요
+          </span>
+        </span>
+        <button
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[#B4A184] transition hover:bg-white"
+          onClick={() => void onDismiss(request.id)}
+          aria-label="카드 닫기"
+        >
+          <X size={15} />
+        </button>
+      </div>
+      <div className="space-y-2 px-3.5 py-3">
+        <p className="text-[11.5px] leading-relaxed text-[#9A7C45]">
+          {request.note || '금고가 잠겨 있어 자동 로그인을 시작하지 못했어요.'} PIN은 암호화 검증에만 쓰이고
+          어디에도 저장되지 않아요.
+        </p>
+        <input
+          className="w-full rounded-xl border border-[#EFE1C4] bg-white px-3 py-2.5 text-center text-[17px] tracking-[0.3em] text-[#2A2A35] outline-none focus:border-[#E5C77E]"
+          type="password"
+          inputMode="numeric"
+          autoComplete="off"
+          value={pin}
+          onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 12))}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void submit();
+          }}
+          placeholder="••••"
+          aria-label="금고 PIN"
+        />
+        {error ? <p className="text-[11.5px] font-medium text-[#E5484D]">{error}</p> : null}
+        <button
+          className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#E9B949] py-2.5 text-[13.5px] font-bold text-[#4A3608] transition active:scale-[0.99] disabled:opacity-50"
+          onClick={() => void submit()}
+          disabled={busy || pin.length < 4}
+        >
+          {busy ? <Loader2 size={15} className="animate-spin" /> : <Lock size={15} />}
+          {busy ? '확인하는 중…' : 'PIN 넣고 이어서 로그인'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* v0.5.4: 대화방 드로어 (좌측 햄버거)                                  */
+/* ------------------------------------------------------------------ */
+
+function RoomDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { sessions, activeSession, switchSession, newSession, renameSession, deleteSession, clearChat } = useAppStore();
+  const [editing, setEditing] = useState<string | null>(null);
+  const [title, setTitle] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  if (!open) return null;
+
+  const startRename = (room: ChatSession) => {
+    setEditing(room.id);
+    setTitle(room.title);
+  };
+
+  const saveRename = async (id: string) => {
+    if (!title.trim()) {
+      setEditing(null);
+      return;
+    }
+    await renameSession(id, title.trim());
+    setEditing(null);
+  };
+
+  const remove = async (room: ChatSession) => {
+    const message = room.isDefault
+      ? `'${room.title}' 방의 대화를 모두 지울까요? (방은 남습니다)`
+      : `'${room.title}' 방과 그 대화를 지울까요?`;
+    if (!window.confirm(message)) return;
+    await deleteSession(room.id);
+  };
+
+  return (
+    <div className="fixed inset-0 z-40 flex" role="dialog" aria-label="대화방 목록">
+      <div className="absolute inset-0 bg-[#1F1D2B]/35 backdrop-blur-sm" onClick={onClose} />
+      <aside className="relative flex h-full w-[86%] max-w-[330px] flex-col bg-[#FCFCFE] shadow-2xl animate-slide-right">
+        <div className="flex items-center justify-between border-b border-[#F1EFF8] px-4 py-3.5">
+          <span className="flex items-center gap-2 text-[15px] font-bold text-[#1F1D2B]">
+            <MessageSquare size={17} className="text-[#7C63F6]" /> 대화방
+          </span>
+          <button className="rounded-xl p-1.5 text-[#A8A5B8]" onClick={onClose} aria-label="닫기">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="px-3 pt-3">
+          <button
+            className="flex w-full items-center justify-center gap-1.5 rounded-[14px] py-2.5 text-[13.5px] font-bold text-white transition active:scale-[0.99] disabled:opacity-60"
+            style={{ background: 'linear-gradient(135deg,#A88BFF,#8B72F8)' }}
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              const id = await newSession();
+              setBusy(false);
+              if (id) onClose();
+            }}
+          >
+            <Plus size={16} /> 새 대화
+          </button>
+        </div>
+
+        <div className="pa-scroll mt-3 min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+          {sessions.length === 0 ? (
+            <p className="px-3 py-6 text-center text-[12.5px] text-[#A8A5B8]">대화방이 없어요.</p>
+          ) : null}
+          {sessions.map((room) => {
+            const active = room.id === activeSession;
+            return (
+              <div
+                key={room.id}
+                className={`group mb-1 rounded-[14px] px-2.5 py-2 transition ${
+                  active ? 'bg-[#F3EEFF] ring-1 ring-[#E4DBFF]' : 'hover:bg-[#F8F7FC]'
+                }`}
+              >
+                {editing === room.id ? (
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      className="pa-input h-8 flex-1 py-1 text-[13px]"
+                      value={title}
+                      autoFocus
+                      onChange={(e) => setTitle(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') void saveRename(room.id);
+                        if (e.key === 'Escape') setEditing(null);
+                      }}
+                    />
+                    <button
+                      className="rounded-lg bg-[#7C63F6] px-2 py-1 text-[11.5px] font-bold text-white"
+                      onClick={() => void saveRename(room.id)}
+                    >
+                      저장
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-start gap-1.5">
+                    <button
+                      className="min-w-0 flex-1 text-left"
+                      onClick={async () => {
+                        await switchSession(room.id);
+                        onClose();
+                      }}
+                    >
+                      <span className={`block truncate text-[13.5px] font-semibold ${active ? 'text-[#5B4BC4]' : 'text-[#3B3947]'}`}>
+                        {room.title}
+                      </span>
+                      <span className="mt-0.5 block truncate text-[11px] text-[#A8A5B8]">
+                        {room.messageCount ? `${room.messageCount}개 · ${room.preview}` : '아직 대화가 없어요'}
+                      </span>
+                    </button>
+                    <button
+                      className="rounded-lg p-1 text-[#C9C5D6] hover:text-[#7C63F6]"
+                      onClick={() => startRename(room)}
+                      aria-label="이름 바꾸기"
+                    >
+                      <Pencil size={13} />
+                    </button>
+                    <button
+                      className="rounded-lg p-1 text-[#D9D5E4] hover:text-[#E5484D]"
+                      onClick={() => void remove(room)}
+                      aria-label="방 지우기"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="border-t border-[#F1EFF8] px-3 py-3">
+          <button
+            className="flex w-full items-center justify-center gap-1.5 rounded-[12px] bg-[#FAF9FD] py-2.5 text-[12.5px] font-semibold text-[#6B677A]"
+            onClick={async () => {
+              if (!window.confirm('지금 대화의 메시지를 모두 지울까요?')) return;
+              await clearChat();
+              onClose();
+            }}
+          >
+            <RotateCcwIcon /> 이 대화 비우기
+          </button>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function RotateCcwIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+      <path d="M3 3v5h5" />
+    </svg>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* v0.5.4: 채팅 메시지 검색                                            */
+/* ------------------------------------------------------------------ */
+
+function MessageSearch({
+  open,
+  sessionId,
+  onClose,
+  onPick,
+}: {
+  open: boolean;
+  sessionId: string;
+  onClose: () => void;
+  onPick: (sessionId: string, messageId: number) => void | Promise<void>;
+}) {
+  const [q, setQ] = useState('');
+  const [allRooms, setAllRooms] = useState(false);
+  const [results, setResults] = useState<{ id: number; sessionId: string; sessionTitle: string; role: string; snippet: string; createdAt: string }[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      setQ('');
+      setResults([]);
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const term = q.trim();
+    if (!term) {
+      setResults([]);
+      return;
+    }
+    let alive = true;
+    setBusy(true);
+    const timer = window.setTimeout(() => {
+      const params = new URLSearchParams({ q: term });
+      if (!allRooms) params.set('session', sessionId);
+      api
+        .get<{ results: typeof results }>(`/api/chat/search?${params.toString()}`)
+        .then((r) => {
+          if (alive) setResults(r.results || []);
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          if (alive) setBusy(false);
+        });
+    }, 220);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, [q, open, allRooms, sessionId]);
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-start justify-center bg-[#1F1D2B]/30 px-3 pt-[8vh] backdrop-blur-sm" onClick={onClose}>
+      <div
+        className="w-full max-w-[560px] overflow-hidden rounded-[22px] bg-white shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-2 border-b border-[#F1EFF8] px-3.5 py-3">
+          <Search size={17} className="shrink-0 text-[#B7B4C6]" />
+          <input
+            className="min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-[#B7B4C6]"
+            placeholder="대화 내용 검색"
+            value={q}
+            autoFocus
+            onChange={(e) => setQ(e.target.value)}
+          />
+          <button className="rounded-lg p-1 text-[#A8A5B8]" onClick={onClose} aria-label="닫기">
+            <X size={17} />
+          </button>
+        </div>
+        <div className="flex items-center gap-1.5 px-3.5 py-2">
+          <button
+            className={`rounded-full px-2.5 py-1 text-[11.5px] font-semibold ${!allRooms ? 'bg-[#F3EEFF] text-[#7C63F6]' : 'bg-[#FAF9FD] text-[#8A8A9A]'}`}
+            onClick={() => setAllRooms(false)}
+          >
+            이 대화방
+          </button>
+          <button
+            className={`rounded-full px-2.5 py-1 text-[11.5px] font-semibold ${allRooms ? 'bg-[#F3EEFF] text-[#7C63F6]' : 'bg-[#FAF9FD] text-[#8A8A9A]'}`}
+            onClick={() => setAllRooms(true)}
+          >
+            모든 대화방
+          </button>
+          {busy ? <Loader2 size={13} className="ml-auto animate-spin text-[#B9A8FF]" /> : null}
+        </div>
+        <div className="pa-scroll max-h-[52vh] overflow-y-auto px-2 pb-3">
+          {q.trim() && !results.length && !busy ? (
+            <p className="px-3 py-6 text-center text-[12.5px] text-[#A8A5B8]">검색 결과가 없어요.</p>
+          ) : null}
+          {results.map((item) => (
+            <button
+              key={`${item.sessionId}-${item.id}`}
+              className="mb-1 flex w-full items-start gap-2.5 rounded-[14px] px-2.5 py-2.5 text-left transition hover:bg-[#F8F7FC]"
+              onClick={() => void onPick(item.sessionId, item.id)}
+            >
+              <span
+                className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${
+                  item.role === 'user' ? 'bg-[#F3EEFF] text-[#7C63F6]' : 'bg-[#FFF0F5] text-[#E2568B]'
+                }`}
+              >
+                {item.role === 'user' ? <MessageSquare size={13} /> : <Sparkles size={13} />}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[11.5px] font-semibold text-[#A8A5B8]">
+                  {item.sessionTitle} · {formatClock(item.createdAt)}
+                </span>
+                <span className="mt-0.5 block line-clamp-2 text-[13px] leading-[1.5] text-[#3B3947]">{item.snippet}</span>
+              </span>
+              <ChevronRight size={14} className="mt-2 shrink-0 text-[#C9C5D6]" />
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
