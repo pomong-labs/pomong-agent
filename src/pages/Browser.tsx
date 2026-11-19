@@ -8,21 +8,20 @@ import {
   Globe,
   Loader2,
   Lock,
+  Maximize2,
+  Minimize2,
   MoreVertical,
   MousePointerClick,
   Play,
   RotateCw,
   Sparkles,
-  Star,
   X,
 } from 'lucide-react';
 import Mascot, { type MascotName } from '../components/Mascot';
+import NoVncViewer, { type RFBInstance } from '../components/NoVncViewer';
 import { api, type BrowserAction, type BrowserSession } from '../lib/api';
 import { relativeTime, timeLabel, useAppEvents } from '../lib/events';
 import { useAppStore } from '../lib/store';
-
-const VIEW_W = 1280;
-const VIEW_H = 800;
 
 /** 모바일 상태 pill에 들어갈 짧은 사유 표기 */
 const REASON_SHORT: Record<string, string> = {
@@ -34,31 +33,35 @@ const REASON_SHORT: Record<string, string> = {
   manual: '수동',
 };
 
+/** X11 키심 (특수키) */
+const KEY = {
+  Enter: 0xff0d,
+  Backspace: 0xff08,
+  Tab: 0xff09,
+  Escape: 0xff1b,
+  ArrowUp: 0xff52,
+  ArrowDown: 0xff54,
+  ArrowLeft: 0xff51,
+  ArrowRight: 0xff53,
+};
+
 export default function Browser() {
   const { profile } = useAppStore();
   const navigate = useNavigate();
   const [session, setSession] = useState<BrowserSession | null>(null);
   const [status, setStatus] = useState<{ enabled: boolean; connected: boolean } | null>(null);
   const [error, setError] = useState('');
-  const [frameUrl, setFrameUrl] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [actions, setActions] = useState<BrowserAction[]>([]);
   const [showLog, setShowLog] = useState(false);
   const [address, setAddress] = useState('');
   const [editingAddress, setEditingAddress] = useState(false);
-  const [typed, setTyped] = useState('');
   const [hint, setHint] = useState('');
-  const [zoom, setZoom] = useState(1);
-  const [rightMode, setRightMode] = useState(false);
-  const [cursor, setCursor] = useState<{ x: number; y: number; key: number } | null>(null);
-  const frameRef = useRef<string | null>(null);
-  const etagRef = useRef<string | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const frameBoxRef = useRef<HTMLDivElement>(null);
-  const dragRef = useRef<{ startX: number; startY: number; lastY: number; moved: boolean; at: number } | null>(null);
-  const wakeRef = useRef<(() => void) | null>(null);
-  const wheelRef = useRef<{ timer: number; dy: number }>({ timer: 0, dy: 0 });
+  const [vncStatus, setVncStatus] = useState<'connecting' | 'connected' | 'closed' | 'error'>('connecting');
+  const [viewerFull, setViewerFull] = useState(false);
+  const rfbRef = useRef<RFBInstance | null>(null);
+  const imeRef = useRef<HTMLInputElement>(null);
 
   const loadStatus = useCallback(async () => {
     try {
@@ -84,6 +87,12 @@ export default function Browser() {
     if (event.type === 'handover' || event.type === 'browser') void loadStatus();
   });
 
+  /** 핸드오버가 열리면 화면을 한눈에 꽉 차게(전체화면) 보여 준다. */
+  const controlOwner = session?.controlOwner || 'agent';
+  useEffect(() => {
+    if (controlOwner === 'user') setViewerFull(true);
+  }, [controlOwner]);
+
   const loadActions = useCallback(async (id: string) => {
     const res = await api.get<{ actions: BrowserAction[] }>(`/api/browser/sessions/${id}/actions`).catch(() => ({ actions: [] }));
     setActions(res.actions);
@@ -96,83 +105,6 @@ export default function Browser() {
     }
     if (showLog) void loadActions(session.id);
   }, [session, showLog, loadActions]);
-
-  /* 화면 스트림: 0.7초마다 최신 프레임을 받아 교체한다(같은 화면이면 204). */
-  const streamId = session?.id;
-  const streamAlive = session?.alive;
-
-  useEffect(() => {
-    if (!streamId || !streamAlive) {
-      if (frameRef.current) {
-        URL.revokeObjectURL(frameRef.current);
-        frameRef.current = null;
-        setFrameUrl(null);
-      }
-      return;
-    }
-    let stopped = false;
-    let failures = 0;
-
-    const tick = async () => {
-      while (!stopped) {
-        try {
-          const res = await fetch(`/api/browser/sessions/${streamId}/frame?t=${Date.now()}`, {
-            credentials: 'same-origin',
-            headers: etagRef.current ? { 'If-None-Match': etagRef.current } : undefined,
-          });
-          if (res.status === 304) {
-            failures = 0;
-          } else if (res.ok) {
-            etagRef.current = res.headers.get('ETag');
-            const blob = await res.blob();
-            const next = URL.createObjectURL(blob);
-            if (frameRef.current) URL.revokeObjectURL(frameRef.current);
-            frameRef.current = next;
-            setFrameUrl(next);
-            failures = 0;
-            setError('');
-          } else {
-            failures += 1;
-            if (failures === 3) {
-              const data = (await res.json().catch(() => null)) as { message?: string } | null;
-              setError(data?.message || '화면을 불러오지 못했어요. 브라우저 워커가 켜져 있는지 확인해 주세요.');
-            }
-          }
-        } catch {
-          failures += 1;
-        }
-        // 입력 직후에는 0.7초를 기다리지 않고 곧바로(120ms) 새 화면을 한 번 더 당긴다.
-        await new Promise<void>((resolve) => {
-          let done = false;
-          const finish = () => {
-            if (done) return;
-            done = true;
-            wakeRef.current = null;
-            window.clearTimeout(timer);
-            resolve();
-          };
-          const timer = window.setTimeout(finish, failures > 2 ? 3000 : 700);
-          wakeRef.current = finish;
-        });
-      }
-    };
-    void tick();
-
-    return () => {
-      stopped = true;
-      wakeRef.current = null;
-      if (frameRef.current) {
-        URL.revokeObjectURL(frameRef.current);
-        frameRef.current = null;
-      }
-      setFrameUrl(null);
-    };
-  }, [streamId, streamAlive]);
-
-  /** 입력 직후 즉시 한 프레임 더 */
-  const bumpFrame = () => {
-    window.setTimeout(() => wakeRef.current?.(), 120);
-  };
 
   const startSession = async () => {
     setStarting(true);
@@ -195,8 +127,6 @@ export default function Browser() {
       setHint('');
     } catch (err) {
       setHint(err instanceof Error ? err.message : '입력을 전달하지 못했어요.');
-    } finally {
-      bumpFrame();
     }
   };
 
@@ -206,6 +136,7 @@ export default function Browser() {
     try {
       await api.post(`/api/browser/sessions/${session.id}/handover`, { reason: session.handoverReason || 'manual', detail: '내가 직접 조작할게요' });
       await loadStatus();
+      setViewerFull(true);
     } catch (err) {
       setHint(err instanceof Error ? err.message : '제어권을 받지 못했어요.');
     } finally {
@@ -219,7 +150,7 @@ export default function Browser() {
     try {
       await api.post(`/api/browser/sessions/${session.id}/resume`);
       await loadStatus();
-      inputRef.current?.blur();
+      setViewerFull(false);
     } catch (err) {
       setHint(err instanceof Error ? err.message : '넘기지 못했어요.');
     } finally {
@@ -231,126 +162,78 @@ export default function Browser() {
     if (!session) return;
     await api.del(`/api/browser/sessions/${session.id}`).catch(() => undefined);
     setSession(null);
+    setViewerFull(false);
     await loadStatus();
   };
 
-  /** 화면 위 좌표 → 실제 페이지 좌표(1280×800). 확대·스크롤과 무관하게 그린 영역의 rect로 역산한다. */
-  const toPagePoint = (event: { clientX: number; clientY: number }) => {
-    const box = frameBoxRef.current;
-    if (!box) return { x: 0, y: 0 };
-    const rect = box.getBoundingClientRect();
-    return {
-      x: Math.round(Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)) * VIEW_W),
-      y: Math.round(Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height)) * VIEW_H),
-    };
-  };
-
-  const showCursor = (point: { x: number; y: number }) => {
-    const key = Date.now();
-    setCursor({ ...point, key });
-    window.setTimeout(() => setCursor((prev) => (prev && prev.key === key ? null : prev)), 700);
-  };
-
-  const onFrameClick = (event: React.MouseEvent<HTMLDivElement>) => {
-    if (!session) return;
-    const point = toPagePoint(event);
-    showCursor(point);
-    if (session.controlOwner !== 'user') {
-      setHint('AI가 조작 중이에요. 「제어권: 나」를 누르면 직접 누를 수 있어요.');
-      return;
+  /** 한글·이모지 입력: 조합이 끝난 글자를 유니코드 키심으로 한 글자씩 보낸다. */
+  const sendText = (text: string) => {
+    const rfb = rfbRef.current;
+    if (!rfb || !text) return;
+    for (const ch of Array.from(text)) {
+      const cp = ch.codePointAt(0) || 0;
+      const keysym = cp < 0x80 ? cp : 0x01000000 + cp;
+      rfb.sendKey(keysym, undefined, true);
+      rfb.sendKey(keysym, undefined, false);
     }
-    void sendInput({ type: 'click', ...point });
   };
 
-  const onFrameContextMenu = (event: React.MouseEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    if (!session || session.controlOwner !== 'user') return;
-    const point = toPagePoint(event);
-    showCursor(point);
-    void sendInput({ type: 'rightclick', ...point });
+  const sendKey = (name: keyof typeof KEY) => {
+    rfbRef.current?.sendKey(KEY[name], name, true);
+    rfbRef.current?.sendKey(KEY[name], name, false);
   };
 
-  /** 터치·마우스 드래그: 조금이라도 움직이면 스크롤, 그대로면 탭(클릭) */
-  const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (!session) return;
-    dragRef.current = { startX: event.clientX, startY: event.clientY, lastY: event.clientY, moved: false, at: Date.now() };
+  const onImeChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const native = event.nativeEvent as InputEvent;
+    if (native.isComposing) return;
+    const value = event.target.value;
+    if (!value) return;
+    sendText(value);
+    event.target.value = '';
   };
 
-  const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
-    const drag = dragRef.current;
-    if (!drag) return;
-    const dyPx = event.clientY - drag.lastY;
-    if (!drag.moved && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) > 8) {
-      drag.moved = true;
-    }
-    if (!drag.moved) return;
-    drag.lastY = event.clientY;
-    const box = frameBoxRef.current;
-    const rect = box?.getBoundingClientRect();
-    const ratio = rect && rect.height > 0 ? VIEW_H / rect.height : 1;
-    void sendInput({ type: 'scroll', dy: Math.round(dyPx * ratio) });
-  };
-
-  const onPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
-    const drag = dragRef.current;
-    dragRef.current = null;
-    if (!drag || !session) return;
-    if (drag.moved) return;
-    if (Date.now() - drag.at > 700) return;
-    const point = toPagePoint(event);
-    showCursor(point);
-    if (session.controlOwner !== 'user') {
-      setHint('AI가 조작 중이에요. 「제어권: 나」를 누르면 직접 누를 수 있어요.');
-      return;
-    }
-    void sendInput({ type: rightMode ? 'rightclick' : 'click', ...point });
-  };
-
-  const onWheel = (event: React.WheelEvent<HTMLDivElement>) => {
-    if (!session) return;
-    const box = frameBoxRef.current;
-    const rect = box?.getBoundingClientRect();
-    const ratio = rect && rect.height > 0 ? VIEW_H / rect.height : 1;
-    wheelRef.current.dy += event.deltaY * ratio;
-    if (wheelRef.current.timer) return;
-    wheelRef.current.timer = window.setTimeout(() => {
-      const dy = Math.round(wheelRef.current.dy);
-      wheelRef.current = { timer: 0, dy: 0 };
-      if (dy) void sendInput({ type: 'scroll', dy });
-    }, 90);
-  };
-
-  const onTypeKey = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (session?.controlOwner !== 'user') return;
-    // 한글 조합 중(IME)에는 키를 하나씩 보내지 않는다 — 조합이 끝난 글자를 「입력」 버튼으로 통째로 보낸다.
+  const onImeKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.nativeEvent.isComposing || event.key === 'Process') return;
     if (event.key === 'Enter') {
       event.preventDefault();
-      void sendInput({ type: 'key', key: 'Enter' });
+      sendKey('Enter');
       return;
     }
-    if (event.key === 'Backspace') {
+    if (event.key === 'Backspace' && !(event.target as HTMLInputElement).value) {
       event.preventDefault();
-      void sendInput({ type: 'key', key: 'Backspace' });
-      return;
-    }
-    if (event.key === 'Tab') {
-      event.preventDefault();
-      void sendInput({ type: 'key', key: 'Tab' });
-      return;
+      sendKey('Backspace');
     }
   };
 
-  /** 입력창의 글자(붙여넣기 포함)를 통째로 페이지에 넣는다 */
-  const sendTyped = () => {
-    const text = typed;
-    if (!text) return;
-    setTyped('');
-    void sendInput({ type: 'text', text });
-  };
-
-  const userControl = session?.controlOwner === 'user';
+  const userControl = controlOwner === 'user';
   const remaining = session?.leaseExpiresAt ? Math.max(0, Math.round((new Date(session.leaseExpiresAt).getTime() - Date.now()) / 60000)) : 0;
+  const vncLive = vncStatus === 'connected';
+
+  /** 화면 + 하단 입력 바 (일반 카드와 전체화면에서 같은 것을 쓴다) */
+  const viewer = session ? (
+    <div className="relative h-full w-full bg-[#0B0B12]">
+      <NoVncViewer
+        sessionId={session.id}
+        interactive={userControl}
+        fill={viewerFull}
+        onStatus={setVncStatus}
+        onError={(message) => setHint(message)}
+        onReady={(rfb) => {
+          rfbRef.current = rfb;
+          if (rfb && userControl) rfb.focus();
+        }}
+      />
+      {!userControl ? (
+        <button
+          className="absolute bottom-3 right-3 flex items-center gap-1.5 rounded-full bg-white/95 px-3.5 py-2 text-[12.5px] font-bold text-[#7C63F6] shadow-float"
+          onClick={takeControl}
+          disabled={busy}
+        >
+          <MousePointerClick size={14} /> 내가 조작
+        </button>
+      ) : null}
+    </div>
+  ) : null;
 
   return (
     <div className="pa-scroll flex h-full min-h-0 flex-col overflow-y-auto px-4 pb-28 pt-4 lg:px-10 lg:pt-7 lg:pb-8">
@@ -384,7 +267,8 @@ export default function Browser() {
           <div>
             <h1 className="text-[30px] font-bold tracking-[-0.02em]">자율 브라우저</h1>
             <p className="mt-1 text-[14.5px] text-pomong-sub">
-              AI가 직접 눌러 보고, 로그인·결제는 내가 이어받아요 · {status?.connected ? '브라우저 연결됨' : '브라우저 대기'}
+              AI가 직접 눌러 보고, 로그인·결제는 실시간 화면에서 내가 이어받아요 ·{' '}
+              {vncLive ? '실시간 화면 연결됨' : status?.connected ? '화면 연결 중' : '브라우저 대기'}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -410,7 +294,7 @@ export default function Browser() {
                 <h2 className="text-[16px] font-bold text-[#1F1D2B]">아직 브라우저 화면이 없어요</h2>
                 <p className="mt-1 text-[13px] leading-[1.6] text-[#6B677A]">
                   채팅에서 “이 사이트 열어서 확인해줘”라고 하거나, 아래 버튼으로 직접 세션을 열 수 있어요.
-                  로그인·결제 화면은 자동으로 내게 넘어와요.
+                  로그인·캡차 화면은 실시간 화면으로 자동으로 내게 넘어와요.
                 </p>
               </div>
             </div>
@@ -435,7 +319,7 @@ export default function Browser() {
                 </span>
                 <div className="min-w-0 flex-1">
                   <h2 className="text-[17px] font-bold text-[#D2694A]">{session.handoverLabel || '화면을 넘겨받았어요'}!</h2>
-                  <p className="text-[12.5px] text-[#A9745B]">{session.controlDetail || '직접 입력 후 완료를 눌러주세요'} · 남은 시간 {remaining}분</p>
+                  <p className="text-[12.5px] text-[#A9745B]">{session.controlDetail || '실시간 화면에서 직접 입력한 뒤 완료를 눌러주세요'} · 남은 시간 {remaining}분</p>
                 </div>
                 <button
                   className="flex items-center gap-1.5 rounded-full bg-[#D9F7EA] px-4 py-2 text-[13px] font-bold text-[#0F9668] shadow-sm disabled:opacity-60"
@@ -486,30 +370,20 @@ export default function Browser() {
                     <span className="truncate">{session.url || 'about:blank'}</span>
                   </button>
                 )}
-                <button className="hidden rounded-lg p-2 text-[#B4B1C2] sm:block" aria-label="즐겨찾기">
-                  <Star size={16} />
-                </button>
-                {/* 확대/축소 */}
-                <div className="ml-1 hidden items-center gap-0.5 rounded-full bg-[#F7F5FF] p-0.5 sm:flex">
-                  {[1, 1.5, 2].map((value) => (
-                    <button
-                      key={value}
-                      onClick={() => setZoom(value)}
-                      className={`rounded-full px-2 py-1 text-[11.5px] font-bold transition ${
-                        zoom === value ? 'bg-white text-[#7C63F6] shadow-sm' : 'text-[#9B98AB]'
-                      }`}
-                    >
-                      {value}x
-                    </button>
-                  ))}
-                </div>
-                <button
-                  className={`rounded-lg p-2 ${rightMode ? 'bg-[#FFF1F6] text-[#E2568B]' : 'text-[#6B677A] hover:bg-[#F7F5FF]'}`}
-                  onClick={() => setRightMode((v) => !v)}
-                  aria-label="우클릭 모드"
-                  title="우클릭 모드(다음 탭을 오른쪽 버튼으로)"
+                <span
+                  className={`hidden shrink-0 rounded-full px-2 py-1 text-[11px] font-bold sm:block ${
+                    vncLive ? 'bg-[#EAFBF1] text-[#0F9668]' : 'bg-[#FFF8E7] text-[#9A7412]'
+                  }`}
                 >
-                  <MousePointerClick size={16} />
+                  {vncLive ? '실시간' : vncStatus === 'connecting' ? '연결 중' : '재연결'}
+                </span>
+                <button
+                  className="rounded-lg p-2 text-[#6B677A] hover:bg-[#F7F5FF]"
+                  onClick={() => setViewerFull(true)}
+                  aria-label="전체화면"
+                  title="전체화면으로 보기"
+                >
+                  <Maximize2 size={16} />
                 </button>
                 <button className="rounded-lg p-2 text-[#6B677A] hover:bg-[#F7F5FF]" onClick={() => setShowLog((v) => !v)} aria-label="메뉴">
                   <MoreVertical size={17} />
@@ -519,124 +393,59 @@ export default function Browser() {
                 </button>
               </div>
 
-              {/* 화면: 손가락 스와이프·휠로 스크롤, 1x/1.5x/2x 확대 */}
-              <div className="relative bg-[#F7F8FB]">
-                <div className="max-h-[62vh] overflow-auto overscroll-contain bg-[#EEF0F6] px-1 py-1 touch-pan-y">
-                  <div
-                    ref={frameBoxRef}
-                    className="relative mx-auto w-full"
-                    style={{ width: `${zoom * 100}%`, aspectRatio: `${VIEW_W} / ${VIEW_H}`, cursor: rightMode ? 'context-menu' : 'pointer' }}
-                    onClick={onFrameClick}
-                    onContextMenu={onFrameContextMenu}
-                    onPointerDown={onPointerDown}
-                    onPointerMove={onPointerMove}
-                    onPointerUp={onPointerUp}
-                    onPointerCancel={() => (dragRef.current = null)}
-                    onWheel={onWheel}
-                  >
-                    {frameUrl ? (
-                      <img src={frameUrl} alt="브라우저 화면" className="h-full w-full select-none object-contain" draggable={false} />
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center text-[13px] text-[#A8A5B8]">
-                        <Loader2 size={18} className="mr-2 animate-spin" /> 화면을 불러오는 중…
-                      </div>
-                    )}
-                    {cursor ? (
-                      <span
-                        key={cursor.key}
-                        className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2"
-                        style={{ left: `${(cursor.x / VIEW_W) * 100}%`, top: `${(cursor.y / VIEW_H) * 100}%` }}
-                      >
-                        <span className="absolute -left-4 -top-4 h-8 w-8 animate-ping rounded-full bg-[#7C63F6]/40" />
-                        <span className="absolute -left-2 -top-2 h-4 w-4 rounded-full border-2 border-white bg-[#7C63F6] shadow" />
-                      </span>
-                    ) : null}
-                    {!userControl ? (
-                      <span className="pointer-events-none absolute left-2 top-2 rounded-full bg-[#1F1D2B]/60 px-2.5 py-1 text-[11px] font-semibold text-white">
-                        AI 조작 중 · 보기 전용
-                      </span>
-                    ) : (
-                      <span className="pointer-events-none absolute left-2 top-2 rounded-full bg-[#E2568B]/90 px-2.5 py-1 text-[11px] font-semibold text-white">
-                        직접 조작 중 · 남은 {remaining}분
-                      </span>
-                    )}
-                    {rightMode ? (
-                      <span className="pointer-events-none absolute right-2 top-2 rounded-full bg-[#E2568B]/90 px-2.5 py-1 text-[11px] font-semibold text-white">
-                        우클릭 모드
-                      </span>
-                    ) : null}
-                  </div>
-                </div>
-
+              {/* 실시간 화면(noVNC) — 전체화면일 때는 그쪽에만 그린다(중복 연결 방지) */}
+              <div className="relative aspect-[1280/800] max-h-[62vh] w-full bg-[#0B0B12]">
+                {viewerFull ? <div className="h-full w-full" /> : viewer}
                 {!userControl ? (
-                  <button
-                    className="absolute bottom-3 right-3 flex items-center gap-1.5 rounded-full bg-white/95 px-3.5 py-2 text-[12.5px] font-bold text-[#7C63F6] shadow-float"
-                    onClick={takeControl}
-                    disabled={busy}
-                  >
-                    <MousePointerClick size={14} /> 내가 조작
-                  </button>
-                ) : null}
-
-                {/* 모바일 확대·우클릭·스크롤 도구 */}
-                <div className="flex items-center gap-1.5 border-t border-[#F4F2FA] bg-white px-2 py-1.5 sm:hidden">
-                  {[1, 1.5, 2].map((value) => (
-                    <button
-                      key={value}
-                      onClick={() => setZoom(value)}
-                      className={`rounded-full px-2.5 py-1 text-[11.5px] font-bold ${
-                        zoom === value ? 'bg-[#F1ECFF] text-[#7C63F6]' : 'bg-[#FAF9FD] text-[#9B98AB]'
-                      }`}
-                    >
-                      {value}x
-                    </button>
-                  ))}
-                  <button
-                    className={`ml-auto rounded-full px-2.5 py-1 text-[11.5px] font-bold ${rightMode ? 'bg-[#FFE9EF] text-[#E2568B]' : 'bg-[#FAF9FD] text-[#9B98AB]'}`}
-                    onClick={() => setRightMode((v) => !v)}
-                  >
-                    우클릭 {rightMode ? 'ON' : 'OFF'}
-                  </button>
-                  <button className="rounded-full bg-[#FAF9FD] px-2.5 py-1 text-[11.5px] font-bold text-[#9B98AB]" onClick={() => void sendInput({ type: 'scroll', dy: -400 })}>
-                    ↑
-                  </button>
-                  <button className="rounded-full bg-[#FAF9FD] px-2.5 py-1 text-[11.5px] font-bold text-[#9B98AB]" onClick={() => void sendInput({ type: 'scroll', dy: 400 })}>
-                    ↓
-                  </button>
-                </div>
+                  <span className="pointer-events-none absolute left-2 top-2 rounded-full bg-[#1F1D2B]/70 px-2.5 py-1 text-[11px] font-semibold text-white">
+                    AI 조작 중 · 실시간 화면
+                  </span>
+                ) : (
+                  <span className="pointer-events-none absolute left-2 top-2 rounded-full bg-[#E2568B]/90 px-2.5 py-1 text-[11px] font-semibold text-white">
+                    직접 조작 중 · 남은 {remaining}분
+                  </span>
+                )}
               </div>
 
-              {/* 입력 바(사용자가 조작할 때만) */}
-              {userControl ? (
-                <div className="flex items-center gap-2 border-t border-[#F4F2FA] bg-[#FCFCFE] px-2.5 py-2">
-                  <input
-                    ref={inputRef}
-                    className="min-w-0 flex-1 rounded-full bg-white px-3 py-2 text-[13px] ring-1 ring-[#EFEDF6] focus:outline-none focus:ring-[#C9B8FF]"
-                    placeholder="입력창을 누르고 글자를 쓴 뒤 「입력」 (한글·붙여넣기 OK)"
-                    value={typed}
-                    onChange={(e) => setTyped(e.target.value)}
-                    onKeyDown={onTypeKey}
-                  />
-                  <button
-                    className="shrink-0 rounded-full bg-[#7C63F6] px-3 py-2 text-[12px] font-bold text-white disabled:opacity-40"
-                    onClick={sendTyped}
-                    disabled={!typed}
-                  >
-                    입력
-                  </button>
-                  <button className="shrink-0 rounded-full bg-[#F3EEFF] px-3 py-2 text-[12px] font-bold text-[#7C63F6]" onClick={() => void sendInput({ type: 'key', key: 'Enter' })}>
-                    Enter
-                  </button>
-                  <button className="shrink-0 rounded-full bg-[#F3EEFF] px-3 py-2 text-[12px] font-bold text-[#7C63F6]" onClick={() => void sendInput({ type: 'scroll', dy: 400 })}>
-                    ↓
-                  </button>
-                </div>
-              ) : null}
+              {/* 화면 도구: 확대·스크롤·전체화면 */}
+              <div className="flex items-center gap-1.5 border-t border-[#F4F2FA] bg-white px-2 py-1.5">
+                <button className="rounded-full bg-[#FAF9FD] px-2.5 py-1 text-[11.5px] font-bold text-[#9B98AB]" onClick={() => void sendInput({ type: 'scroll', dy: -400 })}>
+                  ↑
+                </button>
+                <button className="rounded-full bg-[#FAF9FD] px-2.5 py-1 text-[11.5px] font-bold text-[#9B98AB]" onClick={() => void sendInput({ type: 'scroll', dy: 400 })}>
+                  ↓
+                </button>
+                <button className="rounded-full bg-[#FAF9FD] px-2.5 py-1 text-[11.5px] font-bold text-[#9B98AB]" onClick={() => sendKey('Tab')}>
+                  Tab
+                </button>
+                <button className="rounded-full bg-[#FAF9FD] px-2.5 py-1 text-[11.5px] font-bold text-[#9B98AB]" onClick={() => sendKey('Backspace')}>
+                  ⌫
+                </button>
+                <button className="ml-auto flex items-center gap-1 rounded-full bg-[#F3EEFF] px-3 py-1 text-[11.5px] font-bold text-[#7C63F6]" onClick={() => setViewerFull(true)}>
+                  <Maximize2 size={12} /> 전체화면
+                </button>
+              </div>
+
+              {/* 한글 입력 바 — 아이폰 한글 조합도 유니코드로 보낸다 */}
+              <div className="flex items-center gap-2 border-t border-[#F4F2FA] bg-[#FCFCFE] px-2.5 py-2">
+                <input
+                  ref={imeRef}
+                  className="min-w-0 flex-1 rounded-full bg-white px-3 py-2 text-[16px] ring-1 ring-[#EFEDF6] focus:outline-none focus:ring-[#C9B8FF]"
+                  placeholder="여기에 입력하면 화면으로 바로 들어가요 (한글 OK)"
+                  onChange={onImeChange}
+                  onKeyDown={onImeKeyDown}
+                  inputMode="text"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                />
+                <button className="shrink-0 rounded-full bg-[#7C63F6] px-3 py-2 text-[12px] font-bold text-white" onClick={() => sendKey('Enter')}>
+                  Enter
+                </button>
+              </div>
             </div>
 
-            {hint ? (
-              <p className="rounded-[14px] bg-[#FFF8E7] px-3 py-2 text-[12px] text-[#9A7412]">{hint}</p>
-            ) : null}
+            {hint ? <p className="rounded-[14px] bg-[#FFF8E7] px-3 py-2 text-[12px] text-[#9A7412]">{hint}</p> : null}
 
             {/* 액션 로그 */}
             {showLog ? (
@@ -665,13 +474,13 @@ export default function Browser() {
               </div>
             ) : null}
 
-            {/* 모바일: 포몽이 안내 + CTA */}
+            {/* 모바일: 포몽이 안내 */}
             {userControl ? (
               <div className="flex items-center gap-3 rounded-[20px] bg-white px-4 py-3 shadow-card ring-1 ring-[#F6F4FB]">
                 <Mascot name={profile.character as MascotName} hero size={40} />
                 <div className="min-w-0 flex-1">
-                  <p className="text-[13.5px] font-bold text-[#3A2F7A]">입력 후 아래 버튼을 눌러주세요</p>
-                  <p className="text-[11.5px] text-[#8A8A9A]">입력이 완료되면 AI가 이어서 작업을 진행해요.</p>
+                  <p className="text-[13.5px] font-bold text-[#3A2F7A]">실시간 화면에서 직접 입력해 주세요</p>
+                  <p className="text-[11.5px] text-[#8A8A9A]">인증이 끝나면 AI가 이어서 작업을 진행해요.</p>
                 </div>
                 <Sparkles size={16} className="text-[#C9B8FF]" />
               </div>
@@ -686,8 +495,69 @@ export default function Browser() {
         ) : null}
       </div>
 
+      {/* ---------- 전체화면(핸드오버) ---------- */}
+      {session && viewerFull ? (
+        <div className="fixed inset-0 z-50 flex flex-col bg-[#0B0B12]">
+          <div className="flex shrink-0 items-center gap-2 border-b border-white/10 bg-[#12121C] px-3 py-2 text-white">
+            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-white/10">
+              <Globe size={16} />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[13px] font-bold">
+                {userControl ? session.handoverLabel || '화면을 넘겨받았어요' : 'Pomong Browser · 실시간 화면'}
+              </p>
+              <p className="truncate text-[11px] text-white/60">
+                {userControl ? `직접 입력한 뒤 「인증 완료」를 눌러 주세요 · 남은 ${remaining}분` : 'AI가 조작 중입니다 · 「내가 조작」을 누르면 직접 할 수 있어요'}
+              </p>
+            </div>
+            {userControl ? (
+              <button
+                className="flex shrink-0 items-center gap-1 rounded-full bg-[#D9F7EA] px-3 py-2 text-[12px] font-bold text-[#0F9668] disabled:opacity-60"
+                onClick={giveBack}
+                disabled={busy}
+              >
+                <CheckCircle2 size={14} /> 인증 완료
+              </button>
+            ) : (
+              <button
+                className="flex shrink-0 items-center gap-1 rounded-full bg-[#7C63F6] px-3 py-2 text-[12px] font-bold text-white"
+                onClick={takeControl}
+                disabled={busy}
+              >
+                <MousePointerClick size={14} /> 내가 조작
+              </button>
+            )}
+            <button
+              className="flex shrink-0 items-center gap-1 rounded-full bg-white/10 px-3 py-2 text-[12px] font-bold text-white"
+              onClick={() => setViewerFull(false)}
+            >
+              <Minimize2 size={14} /> 닫기
+            </button>
+          </div>
+          <div className="min-h-0 flex-1">{viewer}</div>
+          <div className="flex shrink-0 items-center gap-2 border-t border-white/10 bg-[#12121C] px-2.5 py-2">
+            <input
+              className="min-w-0 flex-1 rounded-full bg-white/10 px-3 py-2 text-[16px] text-white placeholder-white/40 focus:outline-none focus:ring-1 focus:ring-[#C9B8FF]"
+              placeholder="여기에 입력하면 화면으로 바로 들어가요 (한글 OK)"
+              onChange={onImeChange}
+              onKeyDown={onImeKeyDown}
+              inputMode="text"
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+            />
+            <button className="shrink-0 rounded-full bg-[#7C63F6] px-3 py-2 text-[12px] font-bold text-white" onClick={() => sendKey('Enter')}>
+              Enter
+            </button>
+            <button className="shrink-0 rounded-full bg-white/10 px-3 py-2 text-[12px] font-bold text-white" onClick={() => sendInput({ type: 'scroll', dy: 500 })}>
+              ↓
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {/* 모바일 고정 CTA (하단 탭 위) */}
-      {session && userControl ? (
+      {session && userControl && !viewerFull ? (
         <div className="fixed inset-x-0 bottom-[calc(var(--safe-bottom)+58px)] z-10 px-4 lg:hidden">
           <button
             className="flex w-full items-center justify-center gap-2 rounded-[18px] py-3.5 text-[15px] font-bold text-[#2F2A4A] shadow-float"

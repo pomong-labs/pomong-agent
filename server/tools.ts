@@ -7,6 +7,7 @@ import * as browser from './browser';
 import * as jobs from './jobs';
 import * as watchers from './watchers';
 import * as memory from './memory';
+import * as history from './history';
 import * as loginRequests from './login-requests';
 import * as vaultUnlock from './vault-unlock';
 import { findServiceInText } from './services';
@@ -271,6 +272,22 @@ export const TOOL_SPECS: ToolSpec[] = [
       type: 'object',
       properties: {
         query: { type: 'string', description: '지울 기억의 내용 일부 또는 id' },
+      },
+      required: ['query'],
+    },
+  },
+
+  /* --------------------- v0.6.0: 과거 대화 검색 --------------------- */
+  {
+    name: 'chat_history_search',
+    description:
+      '과거 대화 **전체**(지금 대화방 + 다른 대화방 모두)를 검색한다. 사용자가 예전에 말한 취향·조건, 지난번에 하던 작업, "저번에 그거 뭐였지" 같은 것을 확인할 때 쓴다. 대화가 아무리 쌓여도 필요한 말만 골라 방 이름·시각·발췌문을 돌려준다.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: '찾을 낱말 (예: "무신사 로그인", "생일", "배포 규칙")' },
+        session: { type: 'string', description: '특정 대화방 id만 보고 싶을 때 (보통은 비워 둔다)' },
+        limit: { type: 'number', description: '최대 결과 수 (기본 8, 최대 30)' },
       },
       required: ['query'],
     },
@@ -574,6 +591,12 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
     example: '내일 오후 3시 취사장 근무 기억해줘',
   },
   {
+    name: 'chat_history_search',
+    label: '과거 대화 검색',
+    summary: '대화가 아무리 쌓여도 예전에 한 말·하던 작업을 다른 방까지 찾아 기억해요.',
+    example: '저번에 내가 말한 배송지 기억나?',
+  },
+  {
     name: 'vault_find_for_site',
     label: '금고 자동 로그인',
     summary: '금고 계정으로 로그인 화면을 채워요. 비밀번호는 AI에게 전달되지 않아요.',
@@ -670,6 +693,14 @@ function taskLine(row: TaskRow): string {
 }
 
 export async function runTool(name: string, args: Record<string, unknown>, ctx: ToolContext = {}): Promise<ToolResult> {
+  // v0.6.0: 브라우저 조작은 한 번에 하나만 실행한다(에이전트·예약·사람 입력이 겹치지 않게).
+  if (name.startsWith('browser_')) {
+    return browser.withBrowserLock(name, () => runToolInner(name, args, ctx));
+  }
+  return runToolInner(name, args, ctx);
+}
+
+async function runToolInner(name: string, args: Record<string, unknown>, ctx: ToolContext = {}): Promise<ToolResult> {
   switch (name) {
     case 'tasks_list': {
       const status = String(args.status || 'open');
@@ -897,6 +928,20 @@ export async function runTool(name: string, args: Record<string, unknown>, ctx: 
       const items = query ? memory.searchMemories(query, 10) : memory.listMemories(undefined, 20);
       return { content: memory.formatMemoryList(items) };
     }
+    case 'chat_history_search': {
+      const query = String(args.query || '').trim();
+      if (!query) return { content: '무엇을 찾을지 알려 주세요. 예) "무신사 로그인", "생일", "배포 규칙"' };
+      try {
+        const limit = Number(args.limit) || 8;
+        const result = history.searchChatHistory(query, {
+          session: args.session ? String(args.session) : null,
+          limit,
+        });
+        return { content: history.formatHistory(result) };
+      } catch (err) {
+        return { content: `과거 대화를 찾지 못했습니다: ${err instanceof Error ? err.message : String(err)}` };
+      }
+    }
     case 'memory_delete': {
       const query = String(args.query || '').trim();
       if (!query) return { content: '어떤 기억을 지울지 알려 주세요.' };
@@ -996,17 +1041,33 @@ export async function runTool(name: string, args: Record<string, unknown>, ctx: 
           submit: args.submit === undefined ? true : Boolean(args.submit),
         });
         const done = `아이디 ${result.filledUsername ? '입력 완료' : '칸을 찾지 못해 건너뜀'} · 비밀번호 입력 완료 · ${
-          result.submitted === 'click' ? '로그인 버튼 클릭' : result.submitted === 'enter' ? 'Enter로 전송' : '전송하지 않음'
-        }${result.steps === 'two_step' ? ' · 2단계 로그인(아이디 → 다음 → 비밀번호) 자동 진행' : ''} (값은 기록하지 않음).`;
+          result.submitted === 'click'
+            ? '로그인 버튼 클릭'
+            : result.submitted === 'form'
+              ? '폼 전송'
+              : result.submitted === 'enter'
+                ? 'Enter로 전송'
+                : '전송하지 않음'
+        }${result.steps === 'two_step' ? ' · 2단계 로그인(아이디 → 다음 → 비밀번호) 자동 진행' : ''}${
+          result.submitReady ? '' : ' · 로그인 버튼이 잠겨 있었음'
+        } (값은 기록하지 않음).`;
         const noticeLine = result.notice ? `\n\n※ 화면에 이렇게 적혀 있습니다: "${result.notice}"` : '';
+        const diag = result.stillOnLogin
+          ? `\n\n[화면 구조] 입력칸 ${result.diagnostics.inputs.length}개 · 폼 ${result.diagnostics.formCount}개 · 버튼 ${result.diagnostics.buttons
+              .slice(0, 5)
+              .map((b) => `${b.text || '?'}${b.disabled ? '(잠김)' : ''}`)
+              .join(', ')}`
+          : '';
         const next = result.stillOnLogin
           ? result.blocked
-            ? `\n\n※ 자동으로 더 진행할 수 없습니다(사유: ${browser.LOGIN_BLOCK_LABELS[result.blocked]}). 사용자에게 화면에 적힌 안내(${result.notice || '위 화면'})를 그대로 알려 주고, browser_handover(reason: '${
-                result.blocked === 'otp' ? 'otp' : result.blocked === 'captcha' || result.blocked === 'bot_check' ? 'captcha' : 'login'
-              }')로 넘기세요. 같은 도구를 다시 부르지 마세요.`
+            ? `\n\n※ 자동으로 더 진행할 수 없습니다(사유: ${browser.LOGIN_BLOCK_LABELS[result.blocked]}). ${
+                result.handoverOpened
+                  ? '서버가 화면을 사용자에게 자동으로 넘겼습니다 — 사용자는 브라우저 탭의 전체화면 화면에서 인증을 마치면 됩니다. 사용자에게 "브라우저 화면에서 인증을 마쳐 주세요"라고 안내하고, 같은 도구를 다시 부르지 마세요.'
+                  : 'browser_handover(reason: ...)로 화면을 넘기고, 같은 도구를 다시 부르지 마세요.'
+              }`
             : '\n\n※ 아직 로그인 화면으로 보입니다. 아이디·비밀번호가 틀렸거나 인증번호(OTP)·캡차·2단계 인증일 수 있습니다. 화면에 인증번호·캡차가 있으면 browser_handover로 사용자에게 넘기고, 그냥 로그인 실패 문구라면 사용자에게 금고의 계정 정보를 확인해 달라고 알려 주세요.'
           : '\n\n※ 로그인 화면을 벗어났습니다. 이어서 하려던 일을 계속하세요.';
-        return { content: `${done}${noticeLine}${next}\n\n${result.snapshot}`, meta: 'browser' };
+        return { content: `${done}${noticeLine}${diag}${next}\n\n${result.snapshot}`, meta: 'browser' };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (message.includes('잠겨')) {

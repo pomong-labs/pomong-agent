@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 import * as cheerio from 'cheerio';
 import { addLog, db } from './db';
+import { runInLane } from './queue';
 
 /**
  * 워치(웹 변화 감시)
@@ -570,12 +571,16 @@ async function tick(): Promise<void> {
     const rows = db
       .prepare('SELECT * FROM watchers WHERE enabled = 1')
       .all() as WatcherRow[];
+    const due: WatcherRow[] = [];
     for (const row of rows) {
-      const due = row.next_check_at ? new Date(row.next_check_at).getTime() : 0;
-      if (due > now) continue;
-      // 한 번에 하나씩(1GB 서버 보호)
-      await checkWatcherNow(row.id, 'schedule');
+      const next = row.next_check_at ? new Date(row.next_check_at).getTime() : 0;
+      if (next > now) continue;
+      due.push(row);
     }
+    // v0.6.0: 워치는 '감시' 레인에서 따로 돌린다(대화·예약 작업과 서로 기다리지 않는다).
+    await Promise.allSettled(
+      due.map((row) => runInLane('watch', row.name, () => checkWatcherNow(row.id, 'schedule').catch(() => undefined)))
+    );
   } catch (err) {
     addLog('error', `워치 오류: ${err instanceof Error ? err.message : String(err)}`);
   } finally {

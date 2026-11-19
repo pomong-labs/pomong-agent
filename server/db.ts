@@ -396,6 +396,75 @@ CREATE INDEX IF NOT EXISTS idx_saved_files_created ON saved_files(created_at DES
 }
 
 /* ------------------------------------------------------------------ */
+/* v0.6.0 schema: 과거 대화 전체 검색(FTS5) · 서버 감시 알림              */
+/* messages 테이블은 그대로 두고 검색 인덱스만 더한다.                    */
+/* ------------------------------------------------------------------ */
+
+db.exec(`
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+  content,
+  session_id UNINDEXED,
+  message_id UNINDEXED,
+  role UNINDEXED,
+  created_at UNINDEXED,
+  tokenize = 'trigram'
+);
+
+CREATE TABLE IF NOT EXISTS monitor_alerts (
+  id            TEXT PRIMARY KEY,
+  kind          TEXT NOT NULL,
+  severity      TEXT NOT NULL DEFAULT 'warning',
+  title         TEXT NOT NULL,
+  detail        TEXT,
+  first_seen    TEXT NOT NULL,
+  last_seen     TEXT NOT NULL,
+  notified_at   TEXT,
+  cooldown_until TEXT,
+  notify_count  INTEGER NOT NULL DEFAULT 0,
+  resolved_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_monitor_alerts_kind ON monitor_alerts(kind, last_seen DESC);
+
+CREATE TABLE IF NOT EXISTS monitor_state (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+`);
+
+/**
+ * 새로 들어오는 메시지를 검색 인덱스에 자동으로 넣고 지운다.
+ * (앱이 만드는 모든 경로가 messages INSERT/ DELETE 를 거치므로 트리거가 가장 안전하다)
+ */
+db.exec(`
+CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages BEGIN
+  INSERT INTO messages_fts(rowid, content, session_id, message_id, role, created_at)
+  VALUES (new.id, new.content, new.session_id, new.id, new.role, new.created_at);
+END;
+
+CREATE TRIGGER IF NOT EXISTS messages_fts_ad AFTER DELETE ON messages BEGIN
+  DELETE FROM messages_fts WHERE rowid = old.id;
+END;
+`);
+
+// 기존 대화 백필(한 번만, 인덱스가 비어 있을 때)
+{
+  const indexed = (db.prepare('SELECT COUNT(*) AS n FROM messages_fts').get() as { n: number }).n;
+  const total = (db.prepare('SELECT COUNT(*) AS n FROM messages').get() as { n: number }).n;
+  if (total > indexed) {
+    try {
+      db.exec(`
+        INSERT INTO messages_fts(rowid, content, session_id, message_id, role, created_at)
+        SELECT m.id, m.content, m.session_id, m.id, m.role, m.created_at
+        FROM messages m
+        WHERE m.id NOT IN (SELECT rowid FROM messages_fts)
+      `);
+    } catch {
+      /* 백필 실패는 앱 동작을 막지 않는다 */
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* Settings                                                            */
 /* ------------------------------------------------------------------ */
 

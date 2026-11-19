@@ -76,7 +76,9 @@ export const SERVICES: ServiceEntry[] = [
     name: '네이버',
     category: 'social',
     match: ['naver', '네이버'],
-    loginUrl: 'https://nid.naver.com/nidlogin.login',
+    loginUrl: 'https://nid.naver.com/nidlogin.login?mode=form&url=https%3A%2F%2Fwww.naver.com',
+    loginNote:
+      '네이버는 아이디·비밀번호를 넣고 로그인을 누르면 **추가 보안 인증(캡차)** 화면이 자주 뜹니다. 그 화면은 사람이 풀어야 하므로 즉시 핸드오버하세요.',
     tint: '#EAF7EE',
     color: '#03C75A',
     emoji: '🟢',
@@ -98,12 +100,14 @@ export const SERVICES: ServiceEntry[] = [
     name: '무신사',
     category: 'shopping',
     match: ['musinsa', '무신사'],
-    loginUrl: 'https://member.one.musinsa.com/login',
+    // v0.6.0: /login 은 404이고, member.one.musinsa.com/login 도 entryToken 없이 열면 에러 화면이 뜹니다.
+    // 메인에서 "로그인"을 눌러 들어가야 실제 폼이 나옵니다(서버가 자동으로 그렇게 합니다).
+    loginUrl: 'https://www.musinsa.com/',
     tint: '#F2F2F4',
     color: '#1C1C1E',
     emoji: '👕',
     loginNote:
-      '무신사 로그인은 member.one.musinsa.com/login 의 React 화면입니다. 아이디·비밀번호 input이 숨은 필드(encryptMemberId/encryptPassword)와 reCAPTCHA(isCheckGoogleRecaptcha)를 함께 쓰므로, 로그인 버튼을 눌러도 화면이 그대로면 캡차·이메일 인증·비밀번호 오류를 먼저 의심하고 화면 문구를 사용자에게 그대로 전하세요.',
+      '무신사는 www.musinsa.com 메인에서 "로그인"을 눌러 member.one.musinsa.com/login?entryToken=… 으로 들어가야 로그인 폼이 나옵니다(단독 /login 주소는 404·에러 화면). 서버가 메인을 열고 로그인 버튼을 눌러 들어가며, 버튼이 잠겨 있으면 풀릴 때까지 기다렸다가 누릅니다. 캡차·이메일 인증·비밀번호 오류가 뜨면 화면 문구를 사용자에게 그대로 전하세요.',
     examples: ['무신사 장바구니 확인해줘', '내 사이즈로 재입고된 무스탕 찾아줘', '주문한 옷 배송 조회해줘'],
   },
   {

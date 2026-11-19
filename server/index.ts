@@ -49,6 +49,10 @@ import * as loginRequests from './login-requests';
 import * as vaultUnlock from './vault-unlock';
 import * as chatSessions from './sessions';
 import * as memoryExtract from './memory-extract';
+import * as history from './history';
+import { queueSnapshot, runInLane } from './queue';
+import * as monitorAlert from './monitor-alert';
+import { attachVncProxy, issueVncToken } from './vnc-proxy';
 import * as attachments from './attachments';
 import * as filesBox from './files';
 import { postAutomationMessage } from './automation-chat';
@@ -511,6 +515,32 @@ app.get('/api/monitor/stats', requireAuth, (_req, res) => {
   res.json({ ok: true, stats: currentStats(), history: getHistory() });
 });
 
+/* ------------ 서버 보안·장애 감시 (v0.6.0) ------------- */
+
+app.get('/api/monitor/security', requireAuth, (_req, res) => {
+  res.json({
+    ok: true,
+    report: monitorAlert.lastMonitorReport(),
+    alerts: monitorAlert.monitorAlertHistory(20),
+    enabled: process.env.MONITOR_ENABLED !== '0',
+  });
+});
+
+app.post('/api/monitor/check', requireAuth, async (_req, res) => {
+  try {
+    const report = await monitorAlert.runMonitorCheck();
+    res.json({ ok: true, report });
+  } catch (err) {
+    res.status(500).json({ ok: false, message: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/* ------------ 동시 작업 큐 상태 (v0.6.0) ------------- */
+
+app.get('/api/queue', requireAuth, (_req, res) => {
+  res.json({ ok: true, queue: queueSnapshot() });
+});
+
 /* ------------------------------ chat ------------------------------ */
 
 function serverContextForPrompt(): string {
@@ -598,16 +628,20 @@ function systemPrompt(memoryBlock = ''): string {
       '도구를 쓸 수 있어: 할 일 조회(tasks_list)·추가(tasks_add)·완료(tasks_complete), 금고 항목 이름 조회(vault_list), 서버 상태(server_stats), 날씨 조회(weather_get), 현재 시각(time_now), 웹 브라우저(browser_open·snapshot·click·type·extract·screenshot·handover·close), 예약·워치(automation_list·job_create·watch_create).'
     ),
     s(
-      '더 쓸 수 있는 도구: 무료 웹 검색(web_search), 중간 안내 말풍선(chat_notify), 영구 기억(memory_save·memory_search·memory_delete), 금고 계정 찾기(vault_find_for_site)·자동 입력(browser_fill_vault)·원스톱 로그인(browser_login_with_vault), 로그인 카드 띄우기(vault_request_login), 첨부 파일 다시 읽기(attachment_read).',
-      '더 쓸 수 있는 도구: 무료 웹 검색(web_search), 중간 안내 말풍선(chat_notify), 영구 기억(memory_save·memory_search·memory_delete), 금고 계정 찾기(vault_find_for_site)·자동 입력(browser_fill_vault)·원스톱 로그인(browser_login_with_vault), 로그인 카드 띄우기(vault_request_login), 첨부 파일 다시 읽기(attachment_read).'
+      '더 쓸 수 있는 도구: 무료 웹 검색(web_search), 과거 대화 전체 검색(chat_history_search), 중간 안내 말풍선(chat_notify), 영구 기억(memory_save·memory_search·memory_delete), 금고 계정 찾기(vault_find_for_site)·자동 입력(browser_fill_vault)·원스톱 로그인(browser_login_with_vault), 로그인 카드 띄우기(vault_request_login), 첨부 파일 다시 읽기(attachment_read).',
+      '더 쓸 수 있는 도구: 무료 웹 검색(web_search), 과거 대화 전체 검색(chat_history_search), 중간 안내 말풍선(chat_notify), 영구 기억(memory_save·memory_search·memory_delete), 금고 계정 찾기(vault_find_for_site)·자동 입력(browser_fill_vault)·원스톱 로그인(browser_login_with_vault), 로그인 카드 띄우기(vault_request_login), 첨부 파일 다시 읽기(attachment_read).'
+    ),
+    s(
+      '과거 대화는 chat_history_search로 직접 찾아보세요. 사용자가 "저번에 말한", "예전에 하던"처럼 이전 대화를 가리키면 추측하지 말고 검색해 근거를 확인한 뒤 답하세요. 다른 대화방의 기록까지 검색되므로 기억이 비어 있어도 찾을 수 있습니다.',
+      '과거 대화는 chat_history_search로 직접 찾아봐. 사용자가 "저번에 말한", "예전에 하던"처럼 이전 대화를 가리키면 추측하지 말고 검색해서 근거를 확인한 뒤 답해. 다른 대화방 기록까지 검색되니까 기억이 비어 있어도 찾을 수 있어.'
     ),
     s(
       '작업이 오래 걸릴 것 같으면(브라우저 열기, 여러 사이트 확인, 긴 검색 등) 도구를 부르기 전에 chat_notify로 "깃허브 연동해 드릴게요, 잠시만요!" 같은 짧은 안내를 먼저 보내세요. 한 번의 요청에서 한 번만 보냅니다.',
       '작업이 오래 걸릴 것 같으면(브라우저 열기, 여러 사이트 확인, 긴 검색 등) 도구를 부르기 전에 chat_notify로 "깃허브 연동해 줄게, 잠시만!" 같은 짧은 안내를 먼저 보내. 한 번의 요청에서 한 번만 보낸다.'
     ),
     s(
-      '기억 규칙(중요): 사용자가 "기억해 줘"라고 하지 않아도, 대화 중 드러난 취향·습관·직업·중요한 인물·약속·프로젝트 규칙은 memory_save로 조용히 저장하세요. 저장은 답변을 쓰기 전에 하고, 사용자에게 "저장했습니다"라고 말하지 않아도 됩니다. 인사·날씨 같은 일회성 내용은 저장하지 마세요.',
-      '기억 규칙(중요): 사용자가 "기억해 줘"라고 하지 않아도, 대화 중 드러난 취향·습관·직업·중요한 인물·약속·프로젝트 규칙은 memory_save로 조용히 저장해. 저장은 답변을 쓰기 전에 하고, 사용자에게 "저장했어"라고 굳이 말하지 않아도 돼. 인사·날씨 같은 일회성은 저장하지 마.'
+      '기억 규칙(최우선·필수): 사용자가 자기 이름·생일·별명·직업·사는 곳·취향·싫어하는 것·주변 인물·중요한 약속·프로젝트 규칙을 알려주면, **답변을 쓰기 전에 반드시 memory_save 도구를 먼저 호출**해 저장하세요. 도구를 부르지 않은 채 "기억했어요", "기억해 둘게요"라고만 말하는 것은 금지입니다(그 말은 실제로 저장된 뒤에만 하세요). 사용자가 "기억해 줘"라고 하지 않아도 대화 중 드러난 같은 정보는 조용히 저장하고, 저장했다는 말은 굳이 하지 않아도 됩니다. 인사·날씨·테스트 같은 일회성 내용은 저장하지 마세요. 이미 저장된 것과 같은 내용은 다시 저장하지 않습니다(중복은 서버가 거릅니다).',
+      '기억 규칙(최우선·필수): 사용자가 자기 이름·생일·별명·직업·사는 곳·취향·싫어하는 것·주변 인물·중요한 약속·프로젝트 규칙을 말하면, **답변을 쓰기 전에 반드시 memory_save 도구를 먼저 불러** 저장해. 도구를 안 부르고 "기억했어"라고만 말하는 건 금지야(그 말은 진짜 저장된 뒤에만 해). "기억해 줘"라고 하지 않아도 드러난 그런 정보는 조용히 저장하고, 저장했다고 굳이 말하지 않아도 돼. 인사·날씨·테스트 같은 일회성은 저장하지 마. 이미 저장된 것과 같은 내용은 다시 저장하지 않아(중복은 서버가 거른다).'
     ),
     s(
       '로그인·연동이 필요한 작업일 때는 절대 "직접 로그인하세요"로 끝내지 말고 이 순서로 하세요. ① vault_find_for_site로 금고 계정을 찾습니다. ② 계정이 있고 금고가 열려 있으면 browser_open(로그인 주소) → browser_login_with_vault(vault_id) 한 번으로 아이디 입력·비밀번호 입력·로그인 버튼 클릭까지 끝내고, 인증번호(OTP)·캡차·2단계 인증이 떴을 때만 browser_handover로 넘깁니다. browser_fill_vault만 부르고 끝내거나 로그인 버튼을 누르지 않은 채 사용자에게 넘기지 마세요. ③ 계정이 없으면 vault_request_login(service, login_url, site_host)을 불러 채팅에 로그인 카드를 띄우고 "아래 카드에 계정 정보를 입력해 주시면 제가 바로 로그인해 드릴게요!"라고 안내합니다(이때 브라우저는 열지 않습니다). 사용자가 카드를 저장하면 그 사실이 시스템 메시지로 전달되니, 그때 browser_open부터 이어서 로그인을 끝내세요. ④ 금고 자체가 잠겨 있으면 카드의 PIN 입력란을 안내합니다. 계정이 2개 이상인데 기본 계정이 없으면 임의로 고르지 말고 어느 계정을 쓸지 물어보세요.',
@@ -1092,26 +1126,32 @@ async function extractMemoriesAfterTurn(session: string, userText: string, assis
     const { decrypt, serverKey } = await import('./crypto');
     const apiKey = decrypt(String(config.apiKeyEnc), serverKey());
     const existing = memoryExtract.existingMemories(200);
+    const messages: { role: 'system' | 'user'; content: string }[] = [
+      { role: 'system', content: memoryExtract.extractionSystemPrompt() },
+      {
+        role: 'user',
+        content: [
+          '[방금 끝난 대화]',
+          `사용자: ${userText.slice(0, 1600)}`,
+          `AI: ${assistantText.slice(0, 1200)}`,
+          '',
+          '[이미 저장된 기억]',
+          existing.length ? existing.slice(0, 80).map((m) => `- ${m}`).join('\n') : '(없음)',
+        ].join('\n'),
+      },
+    ];
+    /**
+     * v0.6.0: 추출기는 본 채팅과 같은 Gemini 폴백 체인을 쓴다.
+     * 예전에는 allowFallback=false로 단건 호출만 해서 503·혼잡·시간 초과가 나면
+     * 기억을 통째로 건너뛰었다(사용자는 "기억했다고 했는데 없음"을 겪음).
+     */
     const result = await runAgentStep(
       config.provider,
       apiKey,
       config.model,
-      [
-        { role: 'system', content: memoryExtract.extractionSystemPrompt() },
-        {
-          role: 'user',
-          content: [
-            '[방금 끝난 대화]',
-            `사용자: ${userText.slice(0, 1600)}`,
-            `AI: ${assistantText.slice(0, 1200)}`,
-            '',
-            '[이미 저장된 기억]',
-            existing.length ? existing.slice(0, 80).map((m) => `- ${m}`).join('\n') : '(없음)',
-          ].join('\n'),
-        },
-      ],
+      messages,
       undefined,
-      false
+      true
     );
     const items = memoryExtract.parseExtraction(result.text);
     if (!items.length) return;
@@ -1179,7 +1219,9 @@ app.post('/api/chat/messages', requireAuth, async (req, res) => {
   liveTurns.set(session, controller);
 
   try {
-    const result = await runChatTurn({ session, history, prompt, signal: controller.signal });
+    const result = await runInLane('chat', `${session.slice(0, 12)} · ${prompt.slice(0, 24)}`, () =>
+      runChatTurn({ session, history, prompt, signal: controller.signal })
+    );
     res.json({
       ok: true,
       message: result.assistantMessage,
@@ -2113,10 +2155,17 @@ app.get('/api/browser/status', requireAuth, (_req, res) => {
   res.json({
     ok: true,
     ...browser.browserAvailable(),
+    vnc: browser.vncInfo(),
     sessions: browser.listSessions(),
     handoverLabels: browser.HANDOVER_LABELS,
     savedLoginHosts: browser.browserStateHosts().length,
   });
+});
+
+/** noVNC 웹소켓 접속 토큰(60초 1회용) — 쿠키가 없는 환경(아이폰 PWA) 대비 */
+app.post('/api/browser/vnc-token', requireAuth, (req, res) => {
+  const user = (req as Request & { user?: { username: string } }).user;
+  res.json({ ok: true, ...issueVncToken(user?.username || 'owner') });
 });
 
 /** 설정의 '브라우저 로그인 세션 초기화' */
@@ -2361,15 +2410,19 @@ activeConfig();
 // 지난번에 실제로 응답한 Gemini 모델을 기억해 두고 우선 시도한다.
 setLastGoodGeminiModel(getJson<string | null>('gemini.lastGoodModel', null));
 
-app.listen(PORT, HOST, () => {
+const server = app.listen(PORT, HOST, () => {
   startSampler(3000);
   addLog('success', `Pomong Agent v${APP_VERSION} 가동`);
+  // v0.6.0: noVNC 중계기·서버 감시·재시작 감지를 위해 이번 기동 시각을 남긴다.
+  (globalThis as unknown as { __pomongBootAt?: string }).__pomongBootAt = new Date().toISOString();
+  attachVncProxy(server);
 
   /* ---------------- Phase 2: 자동화 루프 시작 ---------------- */
   jobs.resyncJobs();
   jobs.startScheduler(
-    async (job, { deadline }) => {
-      const config = activeConfig();
+    async (job, { deadline }) =>
+      runInLane('automation', job.name, async () => {
+        const config = activeConfig();
       if (!config.apiKeyEnc) throw new Error('AI 키가 연결되어 있지 않습니다. 설정에서 키를 연결해 주세요.');
       const { decrypt, serverKey } = await import('./crypto');
       const apiKey = decrypt(config.apiKeyEnc, serverKey());
@@ -2393,7 +2446,7 @@ app.listen(PORT, HOST, () => {
         };
       }
       return { text: loop.text || '실행을 마쳤습니다.', steps: loop.steps };
-    },
+      }),
     (job, run) => {
       const failed = run.status === 'failed';
       const approval = run.status === 'approval_needed';
@@ -2450,6 +2503,8 @@ app.listen(PORT, HOST, () => {
   watchers.startWatcherLoop();
   browser.resetStaleSessions();
   browser.startIdleReaper();
+  // v0.6.0: 호스트 보안·장애 감시(3분마다, 이상할 때만 알림)
+  monitorAlert.startMonitor();
   // 웹 푸시 VAPID 키를 첫 기동에 자동으로 만들어 data/ 에 보관한다.
   const vapid = push.ensureVapid();
   if (vapid) addLog('info', '웹 푸시가 준비되었습니다(data/vapid.json)');

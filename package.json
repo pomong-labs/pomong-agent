@@ -1,6 +1,6 @@
 {
   "name": "pomong-agent",
-  "version": "0.5.6",
+  "version": "0.6.0",
   "private": true,
   "description": "Pomong Agent — a self-hosted personal AI assistant OS with BYOK multi-LLM, server monitoring and an encrypted vault.",
   "license": "MIT",
@@ -18,6 +18,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@novnc/novnc": "^1.7.0",
     "better-sqlite3": "^11.10.0",
     "cheerio": "^1.2.0",
     "croner": "^9.1.0",

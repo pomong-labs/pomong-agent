@@ -272,6 +272,7 @@ export default function Monitor() {
                 </ul>
               </div>
             </div>
+            <WorkloadCard />
           </>
         )}
       </div>
@@ -287,8 +288,144 @@ export default function Monitor() {
   );
 }
 
-function SystemDetail({ stats, history }: { stats: SystemStats; history: { t: number; cpu: number; ram: number; disk: number }[] }) {
-  const summary = (key: 'cpu' | 'ram' | 'disk') => {
+/**
+ * v0.6.0: 동시 작업 큐 + 서버 보안 감시 카드
+ *
+ * 예약 작업·워치·브라우저·대화가 각자 다른 레인에서 동시에 도는 것을 보여 주고,
+ * 서버 감시의 최근 점검 결과·알림 기록을 한눈에 보여 준다.
+ */
+type LaneView = {
+  lane: string;
+  label: string;
+  concurrency: number;
+  running: number;
+  queued: number;
+  active: { label: string; seconds: number }[];
+  waiting: { label: string; seconds: number }[];
+  completed: number;
+  failed: number;
+};
+
+type SecurityReport = {
+  at: string;
+  ok: boolean;
+  checks: {
+    disk: { pct: number };
+    ram: { pct: number; streak: number };
+    cpu: { load1: number; cores: number; streak: number };
+    ssh: { failures: number; windowMin: number; source: string };
+    fail2ban: { bans: number; currentlyBanned: number; source: string };
+    containers: { name: string; running: boolean; health: string | null; restarts: number }[];
+    queue: { running: number; queued: number; browserBusy: string | null };
+  };
+  findings: { kind: string; severity: string; title: string; detail: string }[];
+};
+
+type SecurityAlert = { kind: string; severity: string; title: string; lastSeen: string; count: number };
+
+function WorkloadCard() {
+  const [queue, setQueue] = useState<{ lanes: LaneView[]; totalRunning: number; totalQueued: number; browserBusy: { label: string; seconds: number } | null } | null>(null);
+  const [report, setReport] = useState<SecurityReport | null>(null);
+  const [alerts, setAlerts] = useState<SecurityAlert[]>([]);
+  const [checking, setChecking] = useState(false);
+
+  const loadQueue = () =>
+    api.get<{ queue: NonNullable<typeof queue> }>('/api/queue').then((r) => setQueue(r.queue)).catch(() => undefined);
+  const loadSecurity = () =>
+    api
+      .get<{ report: SecurityReport | null; alerts: SecurityAlert[] }>('/api/monitor/security')
+      .then((r) => {
+        setReport(r.report);
+        setAlerts(r.alerts);
+      })
+      .catch(() => undefined);
+
+  useEffect(() => {
+    void loadQueue();
+    void loadSecurity();
+    const q = window.setInterval(() => void loadQueue(), 5000);
+    const s = window.setInterval(() => void loadSecurity(), 30000);
+    return () => {
+      window.clearInterval(q);
+      window.clearInterval(s);
+    };
+  }, []);
+
+  const runCheck = async () => {
+    setChecking(true);
+    try {
+      await api.post('/api/monitor/check');
+      await loadSecurity();
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const laneColor = (lane: string) =>
+    lane === 'chat' ? '#8B72F6' : lane === 'automation' ? '#4A90FF' : lane === 'watch' ? '#12B886' : lane === 'browser' ? '#E2568B' : '#F5B547';
+
+  return (
+    <div className="pa-card mt-3 p-4 lg:mt-5 lg:p-6">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 className="text-[16px] font-bold text-[#1F1D2B] lg:text-[19px]">동시 작업 · 서버 감시</h2>
+          <p className="mt-0.5 text-[12px] text-[#9B98AB]">
+            대화·예약·감시·브라우저가 서로 기다리지 않고 동시에 돌아요. 이상이 생기면 채팅과 푸시로 알려드려요.
+          </p>
+        </div>
+        <button className="flex items-center gap-1.5 rounded-full bg-[#F3EEFF] px-3 py-1.5 text-[12px] font-bold text-[#7C63F6]" onClick={runCheck} disabled={checking}>
+          <RefreshCw size={13} className={checking ? 'animate-spin' : ''} /> 지금 점검
+        </button>
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {(queue?.lanes || []).map((lane) => (
+          <div key={lane.lane} className="rounded-2xl bg-[#FAF9FD] px-3 py-2.5">
+            <div className="flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full" style={{ background: laneColor(lane.lane) }} />
+              <span className="text-[12.5px] font-semibold text-[#5B5866]">{lane.label}</span>
+            </div>
+            <p className="mt-1 text-[17px] font-bold text-[#1F1D2B]">
+              {lane.running}
+              <span className="ml-1 text-[11.5px] font-medium text-[#9B98AB]">실행 / 대기 {lane.queued}</span>
+            </p>
+            <p className="mt-0.5 truncate text-[11px] text-[#A8A5B8]">{lane.active[0]?.label || (lane.waiting[0] ? `대기 · ${lane.waiting[0].label}` : '쉬는 중')}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-3 rounded-2xl bg-[#FAF9FD] px-3.5 py-3">
+        <div className="flex flex-wrap items-center gap-2 text-[12.5px]">
+          <span className={`rounded-full px-2.5 py-1 text-[11.5px] font-bold ${report && report.ok ? 'bg-[#EAFBF1] text-[#0F9668]' : 'bg-[#FFF1F1] text-[#D9534F]'}`}>
+            {report ? (report.ok ? '이상 없음' : `경고 ${report.findings.length}건`) : '점검 전'}
+          </span>
+          {report ? (
+            <>
+              <span className="text-[#6B677A]">디스크 {report.checks.disk.pct.toFixed(0)}%</span>
+              <span className="text-[#6B677A]">SSH 실패 {report.checks.ssh.failures}건/15분</span>
+              <span className="text-[#6B677A]">fail2ban 차단 {report.checks.fail2ban.currentlyBanned}개</span>
+              <span className="text-[#9B98AB]">컨테이너 {(report.checks.containers || []).filter((c) => c.running).length}/{(report.checks.containers || []).length} 정상</span>
+            </>
+          ) : null}
+        </div>
+        {report && report.findings.length ? (
+          <ul className="mt-2 space-y-1">
+            {report.findings.map((f) => (
+              <li key={f.kind} className="text-[12px] text-[#B2373B]">
+                · {f.title}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {alerts.length ? (
+          <p className="mt-2 truncate text-[11.5px] text-[#A8A5B8]">최근 알림: {alerts[0].title} ({alerts[0].count}회)</p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function SystemDetail({ stats, history }: { stats: SystemStats; history: { t: number; cpu: number; ram: number; disk: number }[] }) {  const summary = (key: 'cpu' | 'ram' | 'disk') => {
     if (!history.length) return { min: 0, avg: 0, max: 0 };
     const values = history.map((h) => h[key]);
     return {

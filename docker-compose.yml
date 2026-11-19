@@ -1,7 +1,7 @@
 services:
   pomong-agent:
     build: .
-    image: pomong-agent:0.5.6
+    image: pomong-agent:0.6.0
     container_name: pomong-agent
     restart: unless-stopped
     ports:
@@ -14,8 +14,15 @@ services:
       TZ: Asia/Seoul
       # 브라우저 워커는 기본 프로필에서 꺼져 있다. 켜려면 `--profile browser` 로 함께 실행한다.
       BROWSER_ENABLED: "${BROWSER_ENABLED:-1}"
-      BROWSER_WS_URL: "${BROWSER_WS_URL:-ws://browser:9222/}"
+      # v0.6.0: 화면 있는(headed) Chromium 에 CDP 로 붙는다(noVNC와 같은 창).
+      BROWSER_CDP_URL: "${BROWSER_CDP_URL:-http://browser:9224}"
       BROWSER_CONTROL_URL: "${BROWSER_CONTROL_URL:-http://browser:9223/}"
+      # noVNC 웹소켓 업스트림(앱 서버가 로그인 검증 후 중계한다)
+      BROWSER_VNC_UPSTREAM: "${BROWSER_VNC_UPSTREAM:-ws://browser:6080/websockify}"
+      BROWSER_SCREEN: "${BROWSER_SCREEN:-1280x800}"
+      # 서버 보안·장애 감시(3분마다, 이상할 때만 채팅+푸시)
+      MONITOR_ENABLED: "${MONITOR_ENABLED:-1}"
+      MONITOR_INTERVAL_MS: "${MONITOR_INTERVAL_MS:-180000}"
     volumes:
       # app data (SQLite database, setup token, keys) — back this folder up
       - ./data:/app/data
@@ -23,6 +30,10 @@ services:
       - /proc:/host/proc:ro
       - /etc/os-release:/host/etc/os-release:ro
       - /etc/hostname:/host/hostname:ro
+      # v0.6.0 감시: SSH 실패(fail2ban)·차단 기록·컨테이너 상태를 읽기 전용으로 본다.
+      - /var/log:/host/var/log:ro
+      - /var/lib/fail2ban:/host/var/lib/fail2ban:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     healthcheck:
       test:
         - CMD
@@ -35,30 +46,39 @@ services:
       start_period: 25s
 
   # ---------------------------------------------------------------
-  # 선택 프로필: 자율 웹 브라우저 (Playwright + Chromium)
+  # 선택 프로필: 자율 웹 브라우저 (Xvfb + headed Chromium + x11vnc + noVNC)
   #   docker compose --profile browser up -d
-  # 포트를 호스트에 열지 않는다 — 에이전트가 내부 네트워크에서만 붙는다.
+  # 포트를 호스트에 열지 않는다 — 앱 서버가 로그인 쿠키를 검증한 뒤 중계한다.
   # ---------------------------------------------------------------
   browser:
     profiles: ["browser"]
     build:
       context: .
       dockerfile: docker/Dockerfile.browser
-    image: pomong-agent-browser:0.5.1
+    image: pomong-agent-browser:0.6.0
     container_name: pomong-browser
     restart: unless-stopped
-    shm_size: "256m"
-    # 1GB 서버 보호: 브라우저가 이 한도를 넘으면 컨테이너만 재시작된다.
-    mem_limit: 640m
+    shm_size: "1g"
+    # 12GB 서버: 크로미움(400~700MB) + Xvfb + VNC + websockify 여유분
+    mem_limit: 2g
     environment:
       TZ: Asia/Seoul
+      DISPLAY: ":99"
+      SCREEN: "${BROWSER_SCREEN:-1280x800}"
+      PROFILE_DIR: /profile
+    volumes:
+      # 로그인 세션(쿠키·로컬스토리지)을 컨테이너 재배포 후에도 유지한다.
+      - browser-profile:/profile
     healthcheck:
       test:
         - CMD
         - node
         - -e
-        - "fetch('http://127.0.0.1:9223/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        - "fetch('http://127.0.0.1:9223/health').then(r=>r.json()).then(j=>process.exit(j.xvfb&&j.chromium?0:1)).catch(()=>process.exit(1))"
       interval: 30s
-      timeout: 5s
+      timeout: 6s
       retries: 3
-      start_period: 20s
+      start_period: 40s
+
+volumes:
+  browser-profile:

@@ -424,7 +424,7 @@ async function tick(): Promise<void> {
         db.prepare('UPDATE jobs SET next_run_at=? WHERE id=?').run(upcoming, row.id);
         continue;
       }
-      if (running.size >= 1 || running.has(row.id)) {
+      if (running.size >= 2 || running.has(row.id)) {
         recordRun(row, 'skipped_overlap', 'schedule', { started_at: new Date(next).toISOString(), error: '다른 작업이 실행 중입니다.' });
         db.prepare('UPDATE jobs SET next_run_at=? WHERE id=?').run(upcoming, row.id);
         continue;

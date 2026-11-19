@@ -12,7 +12,7 @@ import { publish } from './events';
 
 export const AUTOMATION_SESSION = 'default';
 
-export type AutomationKind = 'job' | 'watch';
+export type AutomationKind = 'job' | 'watch' | 'monitor';
 
 export interface AutomationChatInput {
   kind: AutomationKind;
@@ -40,7 +40,7 @@ const MAX_BODY_CHARS = 3500;
 /** 결과를 채팅 말풍선으로 저장하고 SSE로 밀어 준다. 실패하면 null. */
 export function postAutomationMessage(input: AutomationChatInput): AutomationChatResult | null {
   const body = String(input.body || '').trim().slice(0, MAX_BODY_CHARS);
-  const emoji = input.kind === 'job' ? '⏰' : '👀';
+  const emoji = input.kind === 'job' ? '⏰' : input.kind === 'monitor' ? '🛡️' : '👀';
   const content = `${emoji} [${input.badge}]${body ? `\n${body}` : ''}`;
   const meta = {
     type: 'notice' as const,

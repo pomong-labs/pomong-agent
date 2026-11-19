@@ -6,21 +6,30 @@ import { DATA_DIR } from './config';
 import { addLog, db } from './db';
 import { publish } from './events';
 import { evaluateBrowserAction, evaluateUrl, hostOf, looksLikeInjection, type PolicyLevel } from './policy';
+import { browserLock } from './queue';
 
 /**
- * 자율 웹 브라우저 (Phase 2)
+ * 자율 웹 브라우저 (Phase 2 → v0.6.0 noVNC)
  *
- * - 브라우저는 옵션 컨테이너(docker compose --profile browser)에서 Playwright 서버로 뜬다.
- *   (1GB 서버 보호를 위해 컨테이너가 노는 동안에는 크로미움이 아예 없다 → 연결할 때만 뜬다)
- * - 화면은 noVNC 대신 "스크린샷 스트림 + 입력 브리지"로 전달한다.
- *   같은 목적(사용자가 로그인·캡차를 직접 하고 AI가 이어받기)을 훨씬 적은 메모리로 달성한다.
+ * - 브라우저는 옵션 컨테이너(pomong-browser) 안에서 **화면 있는(headed) Chromium**으로 돈다.
+ *   컨테이너는 Xvfb(:99) + x11vnc + websockify(noVNC)를 함께 띄우고, Chromium은
+ *   `--remote-debugging-port=9222`(CDP)로 열려 있다.
+ * - 에이전트는 `connectOverCDP`로 **같은 창**을 조작하고, 사용자는 noVNC 캔버스로
+ *   같은 화면을 실시간으로 보며 직접 조작한다. (예전의 스크린샷 스트림은 폴백으로 남겨 둔다)
  * - 제어권 리스: 사람이 조작 중이면(control_owner='user') 에이전트 액션은 서버 레벨에서 거부한다.
+ * - 브라우저 조작은 queue.browserLock 으로 한 번에 하나만 실행한다(에이전트·예약·사람 입력 경합 방지).
  */
 
+export const BROWSER_CDP_URL = (process.env.BROWSER_CDP_URL || 'http://browser:9222').replace(/\/$/, '');
+/** (구) Playwright 서버 주소 — 예전 워커와 호환용 */
 export const BROWSER_WS_URL = process.env.BROWSER_WS_URL || 'ws://browser:9222/';
 /** 워커 감독(supervisor) 제어 주소 — 워커를 켜고 끄고 잔여 크로미움을 회수한다. */
 export const BROWSER_CONTROL_URL = (process.env.BROWSER_CONTROL_URL || 'http://browser:9223/').replace(/\/$/, '');
+/** noVNC 웹소켓 업스트림(브라우저 컨테이너의 websockify) */
+export const BROWSER_VNC_UPSTREAM = process.env.BROWSER_VNC_UPSTREAM || 'ws://browser:6080/websockify';
 export const BROWSER_ENABLED = process.env.BROWSER_ENABLED !== '0';
+/** 화면 크기(Xvfb와 같다) — 프런트엔드 noVNC 뷰어가 비율을 맞출 때 쓴다. */
+export const BROWSER_SCREEN = process.env.BROWSER_SCREEN || '1280x800';
 
 /** 일반 데스크톱 Chrome UA (헤드리스 기본 UA 문구로 인한 차단을 줄인다) */
 export const DESKTOP_UA =
@@ -40,6 +49,18 @@ const LOGIN_URL_FIXES: { test: RegExp; to: string; note: string }[] = [
     test: /^https?:\/\/(www\.)?kmong\.com\/login\/?(\?.*)?$/i,
     to: 'https://kmong.com/',
     note: '크몽은 로그인 전용 주소(/login)가 없어 404가 뜹니다. 메인 페이지에서 오른쪽 위 로그인으로 들어가야 합니다.',
+  },
+  {
+    // v0.6.0: 무신사는 /login 이 404이고, member.one.musinsa.com/login 도 entryToken 없이 열면 에러 화면이 뜹니다.
+    // 메인 페이지에서 "로그인"을 눌러 들어가야 실제 로그인 폼이 나온다.
+    test: /^https?:\/\/(www\.)?musinsa\.com\/login\/?(\?.*)?$/i,
+    to: 'https://www.musinsa.com/',
+    note: '무신사는 /login 주소가 404입니다. 메인 페이지에서 "로그인" 버튼을 눌러 들어가야 합니다.',
+  },
+  {
+    test: /^https?:\/\/member\.one\.musinsa\.com\/login\/?(\?(?![^#]*entryToken).*)?$/i,
+    to: 'https://www.musinsa.com/',
+    note: '무신사 로그인은 입장 토큰(entryToken)이 필요해 단독 주소로는 에러 화면이 뜹니다. 메인에서 로그인으로 들어갑니다.',
   },
 ];
 
@@ -214,8 +235,10 @@ export async function controlWorker(action: 'start' | 'stop' | 'restart' | 'touc
 function connectOnce(): Promise<Browser> {
   return new Promise<Browser>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('연결 대기 시간 초과(25초)')), 25_000);
+    // v0.6.0: 워커가 띄운 **화면 있는(headed) Chromium**에 CDP로 붙는다.
+    // 같은 창을 사용자가 noVNC로 보면서, 에이전트는 그 창의 기본 컨텍스트를 조작한다.
     chromium
-      .connect(BROWSER_WS_URL, { timeout: 20_000 })
+      .connectOverCDP(BROWSER_CDP_URL, { timeout: 20_000 })
       .then((browser) => {
         clearTimeout(timer);
         resolve(browser);
@@ -265,14 +288,6 @@ async function connectBrowser(): Promise<Browser> {
 /** 워커를 완전히 회수한다(연결 종료 + 크로미움 종료). 유휴 메모리 ~0 */
 export async function stopWorker(): Promise<void> {
   for (const id of Array.from(live.keys())) {
-    const s = live.get(id);
-    if (s) {
-      try {
-        await s.context.close();
-      } catch {
-        /* ignore */
-      }
-    }
     live.delete(id);
   }
   if (connectedBrowser) {
@@ -294,8 +309,24 @@ export function resetStaleSessions(): void {
   addLog('info', '서버 재시작으로 이전 브라우저 세션을 정리했습니다');
 }
 
-export function browserAvailable(): { enabled: boolean; connected: boolean; wsUrl: string } {
-  return { enabled: BROWSER_ENABLED, connected: Boolean(connectedBrowser?.isConnected()), wsUrl: BROWSER_WS_URL };
+export function browserAvailable(): { enabled: boolean; connected: boolean; wsUrl: string; vnc: boolean } {
+  return {
+    enabled: BROWSER_ENABLED,
+    connected: Boolean(connectedBrowser?.isConnected()),
+    wsUrl: BROWSER_CDP_URL,
+    vnc: BROWSER_ENABLED,
+  };
+}
+
+/** noVNC 뷰어가 붙을 주소·화면 크기 (프런트엔드 표시용) */
+export function vncInfo(): { enabled: boolean; path: string; screen: string; width: number; height: number } {
+  const [w, h] = BROWSER_SCREEN.split('x').map((v) => Number(v) || 0);
+  return { enabled: BROWSER_ENABLED, path: '/api/browser/vnc', screen: BROWSER_SCREEN, width: w || 1280, height: h || 800 };
+}
+
+/** 브라우저 조작 구간을 하나씩만 실행한다(에이전트·예약·사람 입력이 겹치지 않게). */
+export function withBrowserLock<T>(label: string, fn: () => Promise<T>): Promise<T> {
+  return browserLock(label, fn);
 }
 
 /* ------------------------------------------------------------------ */
@@ -383,29 +414,25 @@ export function listActions(sessionId: string, limit = 40): { id: string; actor:
 
 async function openContext(id: string): Promise<LiveSession> {
   const browser = await connectBrowser();
+  // CDP로 붙으면 브라우저가 이미 열어 둔 **기본 컨텍스트**를 그대로 쓴다.
+  // (새 컨텍스트를 만들면 화면에 보이지 않는 별도 창이 되어 noVNC로 볼 수 없다)
+  let context = browser.contexts()[0];
+  if (!context) context = await browser.newContext();
+
+  // 지난번에 로그인해 둔 쿠키를 그대로 이어받는다(프로필에도 남아 있지만 한 번 더 보정).
   const state = readStorageState();
-  const context = await withTimeout(
-    browser.newContext({
-      viewport: { width: 1280, height: 800 },
-      locale: 'ko-KR',
-      timezoneId: 'Asia/Seoul',
-      acceptDownloads: true, // 내려받은 파일은 워커 안에 저장된다
-      // 일반 데스크톱 Chrome으로 보이게 한다(불필요한 봇 차단 감소).
-      userAgent: DESKTOP_UA,
-      extraHTTPHeaders: { 'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7' },
-      // 지난번에 로그인해 둔 쿠키·스토리지를 그대로 이어받는다(깃허브·쇼핑몰 로그인 유지).
-      ...(state ? { storageState: state as never } : {}),
-    }),
-    20_000,
-    '브라우저 컨텍스트 생성'
-  );
-  // 기본 스텔스: navigator.webdriver·헤드리스 흔적을 지운다(읽기 전용 조작만 하고, 차단 회피용 우회는 하지 않는다).
+  if (state && (state.cookies as unknown[]).length) {
+    try {
+      await context.addCookies(state.cookies as never);
+    } catch {
+      /* 형식이 맞지 않는 쿠키는 건너뛴다 */
+    }
+  }
+  // 기본 스텔스: navigator.webdriver·헤드리스 흔적을 지운다(차단 회피용 우회는 하지 않는다).
   await context.addInitScript(() => {
     try {
       Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
       Object.defineProperty(navigator, 'languages', { get: () => ['ko-KR', 'ko', 'en-US', 'en'] });
-      Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
-      Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
       if (!(window as unknown as { chrome?: unknown }).chrome) {
         (window as unknown as { chrome?: unknown }).chrome = { runtime: {} };
       }
@@ -420,8 +447,12 @@ async function openContext(id: string): Promise<LiveSession> {
       /* 무시 */
     }
   });
-  const page = await withTimeout(context.newPage(), 20_000, '브라우저 탭 열기');
+  // 화면에 보이는 페이지를 그대로 쓴다(없으면 하나 연다).
+  const pages = context.pages().filter((p) => !p.isClosed());
+  let page = pages[pages.length - 1] || (await withTimeout(context.newPage(), 20_000, '브라우저 탭 열기'));
+  if (!page) throw new Error('브라우저 화면을 만들지 못했습니다.');
   page.setDefaultTimeout(20_000);
+  await page.bringToFront().catch(() => undefined);
   const session: LiveSession = { browser, context, page, frameAt: 0, frame: null, stateSavedAt: 0 };
   live.set(id, session);
   if (state) addLog('info', '저장된 브라우저 로그인 세션을 불러왔습니다');
@@ -479,15 +510,15 @@ export async function closeSession(id?: string): Promise<void> {
   if (s) {
     // 닫기 전에 로그인 세션을 저장한다(다음에 다시 열 때 로그인 유지).
     await saveState(s, true);
+    // v0.6.0: 공유 창은 닫지 않는다(noVNC 화면이 남아 있어야 함). 빈 페이지로 돌린다.
     try {
-      await s.context.close();
+      await s.page.goto('about:blank', { timeout: 8_000 });
     } catch {
-      /* ignore */
+      /* 무시 */
     }
     live.delete(target);
   }
   db.prepare("UPDATE browser_sessions SET status='closed', ended_at=? WHERE id=?").run(new Date().toISOString(), target);
-  // 닫힌 세션 스크린샷 파일 정리(7일 보존 원칙은 파일 단위로 별도 처리)
   addLog('info', '자율 브라우저 세션을 닫았습니다');
 }
 
@@ -863,9 +894,13 @@ export async function detectLoginRefs(page: Page): Promise<LoginRefs> {
             inputs.find((el) => ['email', 'text', 'tel'].includes((el.getAttribute('type') || 'text').toLowerCase()) && /아이디|이메일|id|email|login|username|account/i.test(`${el.name} ${el.id} ${el.placeholder}`)) ||
             null;
         }
-        // 로그인 버튼은 비밀번호 칸과 같은 폼·모달 안에서 먼저 찾고, 없으면 화면 전체에서 찾는다.
+        // 로그인 버튼은 로그인 칸(비밀번호 → 아이디)과 같은 폼·모달 안에서만 찾는다.
+        // v0.6.0: 로그인 칸이 아예 없는데 화면의 아무 버튼(예: '자세히 보기')을 로그인 버튼으로
+        //         잘못 고르던 오탐을 막는다.
+        const anchor = passwordInput || usernameInput;
+        if (!anchor) return { usernameRef: null, passwordRef: null, submitRef: null };
         const scope =
-          passwordInput?.closest('form, [role="dialog"], [class*=modal], [class*=Modal], [class*=layer], [class*=Layer]') || document;
+          anchor.closest('form, [role="dialog"], [class*=modal], [class*=Modal], [class*=layer], [class*=Layer]') || document;
         const buttons = Array.from(
           scope.querySelectorAll<HTMLElement>('button, input[type=submit], [role=button], a')
         ).filter(visible);
@@ -893,7 +928,9 @@ export async function detectLoginRefs(page: Page): Promise<LoginRefs> {
           .map((el) => ({ el, score: submitScore(el) }))
           .filter((x) => x.score > 0)
           .sort((a, b) => b.score - a.score);
-        const submitButton = ranked.length ? ranked[0].el : (passwordInput?.closest('form')?.querySelector<HTMLElement>('button[type=submit]') || null);
+        const submitButton = ranked.length
+          ? ranked[0].el
+          : anchor.closest('form')?.querySelector<HTMLElement>('button[type=submit], input[type=submit]') || null;
         return {
           usernameRef: refOf(usernameInput),
           passwordRef: refOf(passwordInput),
@@ -922,8 +959,19 @@ async function fillRef(page: Page, ref: string, value: string): Promise<boolean>
   const handle = page.locator(selector).first();
   if (!(await handle.count())) return false;
   const read = async (): Promise<string> => handle.inputValue().catch(() => '');
+  /**
+   * v0.6.0: React·Vue controlled input은 input/change 둘 다 필요하고,
+   * 검증을 blur에서 하는 사이트(무신사·네이버)는 blur 신호까지 보내야 버튼이 열린다.
+   */
   const commit = async (): Promise<void> => {
-    await handle.evaluate((el) => el.dispatchEvent(new Event('change', { bubbles: true }))).catch(() => undefined);
+    await handle
+      .evaluate((el) => {
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        el.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
+      })
+      .catch(() => undefined);
+    await handle.blur().catch(() => undefined);
   };
 
   try {
@@ -1005,7 +1053,8 @@ async function openLoginModal(page: Page): Promise<boolean> {
       // 크몽의 /login 은 404라서 누르면 다시 404로 간다.
       if (href && /kmong\.com/i.test(page.url()) && /\/login\/?$/i.test(href)) continue;
       await el.click({ timeout: 5000 }).catch(() => undefined);
-      await page.waitForTimeout(1200);
+      // 모달이 열릴 수도, 로그인 페이지로 이동할 수도 있다(무신사) — 둘 다 기다린다.
+      if (await waitForPasswordField(page, 4500)) return true;
       if (await hasPassword()) return true;
     }
     return false;
@@ -1014,6 +1063,14 @@ async function openLoginModal(page: Page): Promise<boolean> {
   if (await attempt(page.getByRole('button', { name: exact }))) return true;
   if (await attempt(page.getByRole('link', { name: exact }))) return true;
   if (await attempt(page.getByRole('tab', { name: exact }))) return true;
+  /**
+   * v0.6.0: 무신사·크몽처럼 역할(role) 정보 없이 <a>/<div> 에 "로그인" 글자만 있는 사이트.
+   * 글자가 정확히 "로그인"인 요소를 직접 찾아 누른다.
+   * (무신사는 이 클릭으로 entryToken 로그인 페이지로 이동해, 단독 주소로는 열리지 않던 폼이 나타난다)
+   */
+  for (const name of ['로그인', '로그 인', 'Login', 'Sign in']) {
+    if (await attempt(page.getByText(name, { exact: true }))) return true;
+  }
   return false;
 }
 
@@ -1029,7 +1086,10 @@ export interface LoginScreenRead {
 }
 
 const BLOCK_PATTERNS: { kind: NonNullable<LoginScreenRead['blocked']>; test: RegExp }[] = [
-  { kind: 'captcha', test: /(recaptcha|hcaptcha|로봇이 아닙니다|i'?m not a robot|보안\s*문자|captcha)/i },
+  {
+    kind: 'captcha',
+    test: /(recaptcha|hcaptcha|로봇이 아닙니다|i'?m not a robot|보안\s*문자|자동\s*입력\s*방지|자동입력방지|additional security verification|security verification|captcha)/i,
+  },
   { kind: 'passkey', test: /(패스키|passkey|보안\s*키|security\s*key)/i },
   { kind: 'otp', test: /(인증\s*번호|verification code|one-time|2단계\s*인증|2-?step|two-step|authenticator)/i },
   { kind: 'email_verify', test: /(이메일\s*인증|메일로\s*인증|verify your email|인증\s*메일)/i },
@@ -1064,6 +1124,9 @@ export async function readLoginScreen(page: Page): Promise<LoginScreenRead> {
         '[class*="Error"]',
         '[id*="error" i]',
         '[class*="alert" i]',
+        '[class*="toast" i]',
+        '[class*="Toast"]',
+        '[role="status"]',
         '[class*="warn" i]',
         '[class*="notice" i]',
         '[class*="invalid" i]',
@@ -1185,7 +1248,7 @@ export interface LoginWithVaultResult {
   snapshot: string;
   filledUsername: boolean;
   filledPassword: boolean;
-  submitted: 'click' | 'enter' | 'none';
+  submitted: 'click' | 'form' | 'enter' | 'none';
   /** 아직 로그인 화면이면 true (아이디·비밀번호가 틀렸거나 2차 인증일 수 있다) */
   stillOnLogin: boolean;
   url: string;
@@ -1196,17 +1259,181 @@ export interface LoginWithVaultResult {
   notice: string | null;
   /** 자동 로그인을 이어갈 수 없게 막는 요소(있으면 사용자에게 넘겨야 한다) */
   blocked: LoginScreenRead['blocked'];
+  /** v0.6.0: 로그인 버튼이 disabled 에서 풀렸는지 */
+  submitReady: boolean;
+  /** 버튼이 잠겨 있을 때 시도한 대체 경로 안내 */
+  submitNote: string | null;
+  /** v0.6.0: 캅차·OTP·패스키를 만나 서버가 noVNC 핸드오버를 자동으로 열었는지 */
+  handoverOpened: boolean;
+  /** v0.6.0: 원인 파악용 화면 구조(서버 로그·도구 응답에 딸린다) */
+  diagnostics: LoginDiagnostics;
+}
+
+export interface LoginDiagnostics {
+  url: string;
+  title: string;
+  inputs: { type: string; name: string; id: string; placeholder: string; filled: boolean }[];
+  buttons: { text: string; type: string; disabled: boolean }[];
+  formCount: number;
+  hasPasswordField: boolean;
+}
+
+/** 어떤 화면에서 막혔는지 서버가 기록할 수 있게 구조를 읽는다(값은 담지 않는다). */
+export async function loginDiagnostics(page: Page): Promise<LoginDiagnostics> {
+  try {
+    return (await withTimeout(
+      page.evaluate(() => {
+        const inputs = Array.from(document.querySelectorAll<HTMLInputElement>('input'))
+          .filter((el) => el.type !== 'hidden')
+          .slice(0, 12)
+          .map((el) => ({
+            type: el.type,
+            name: el.name || '',
+            id: el.id || '',
+            placeholder: el.placeholder || '',
+            filled: Boolean(el.value),
+          }));
+        const buttons = Array.from(document.querySelectorAll<HTMLElement>('button, input[type=submit], [role=button]'))
+          .slice(0, 16)
+          .map((el) => ({
+            text: ((el as HTMLButtonElement).innerText || (el as HTMLInputElement).value || el.getAttribute('aria-label') || '')
+              .replace(/\s+/g, ' ')
+              .trim()
+              .slice(0, 40),
+            type: (el as HTMLButtonElement).type || '',
+            disabled: Boolean((el as HTMLButtonElement).disabled),
+          }));
+        return {
+          url: location.href,
+          title: document.title,
+          inputs,
+          buttons,
+          formCount: document.querySelectorAll('form').length,
+          hasPasswordField: Array.from(document.querySelectorAll('input')).some((el) => el.type === 'password'),
+        };
+      }),
+      8_000,
+      '로그인 구조 읽기'
+    )) as LoginDiagnostics;
+  } catch {
+    return { url: page.url(), title: '', inputs: [], buttons: [], formCount: 0, hasPasswordField: false };
+  }
+}
+
+/** ref 요소를 실제로 클릭한다(요소가 없거나 가려졌으면 false). */
+async function clickRef(page: Page, ref: string): Promise<boolean> {
+  const selector = `[data-pomong-ref="${String(ref || '').replace(/[^a-zA-Z0-9_-]/g, '')}"]`;
+  const button = page.locator(selector).first();
+  if (!(await button.count().catch(() => 0))) return false;
+  if (!(await button.isVisible().catch(() => false))) return false;
+  try {
+    await button.click({ timeout: 8_000 });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
- * 금고 값으로 로그인을 끝낸다 (v0.5.2 → v0.5.4 2단계 지원).
+ * 로그인 버튼이 disabled 에서 풀리기를 기다린다 (v0.6.0).
+ * 무신사·네이버처럼 "두 칸이 다 채워지면 버튼을 여는" 사이트에서, 예전에는
+ * 곷바로 누르려다 아무 일도 일어나지 않고 "아직 로그인 화면"만 반복됐다.
+ */
+async function waitSubmitReady(page: Page, ref: string, timeoutMs = 6_000): Promise<boolean> {
+  const selector = `[data-pomong-ref="${String(ref || '').replace(/[^a-zA-Z0-9_-]/g, '')}"]`;
+  const button = page.locator(selector).first();
+  if (!(await button.count().catch(() => 0))) return false;
+  const deadline = Date.now() + timeoutMs;
+  let checked = false;
+  while (Date.now() < deadline) {
+    const enabled = await button.isEnabled().catch(() => true);
+    if (enabled) return true;
+    if (!checked) {
+      checked = true;
+      // 잠금 사유가 '값이 비어 있다'인 경우가 많다 → input 이벤트를 한 번 더 보낸다.
+      await button
+        .evaluate(() => {
+          for (const el of Array.from(document.querySelectorAll<HTMLInputElement>('input'))) {
+            if (!['text', 'email', 'tel', 'password'].includes(el.type)) continue;
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        })
+        .catch(() => undefined);
+    }
+    await page.waitForTimeout(200);
+  }
+  return button.isEnabled().catch(() => true);
+}
+
+/**
+ * 버튼 클릭이 안 먹히는 사이트를 위한 폴백: 폼 requestSubmit → 폼 submit 이벤트.
+ * (Naver `log.login`, 예전 Musinsa 로그인은 버튼이 아니라 폼 핸들러가 제출을 처리한다)
+ */
+async function submitViaForm(page: Page, passwordRef: string): Promise<boolean> {
+  const selector = `[data-pomong-ref="${String(passwordRef || '').replace(/[^a-zA-Z0-9_-]/g, '')}"]`;
+  const input = page.locator(selector).first();
+  if (!(await input.count().catch(() => 0))) return false;
+  return input
+    .evaluate((el) => {
+      const form = (el as HTMLElement).closest('form');
+      if (!form) return false;
+      try {
+        const submitter = form.querySelector<HTMLElement>('button[type=submit], input[type=submit], button');
+        if (typeof form.requestSubmit === 'function') {
+          form.requestSubmit(submitter || undefined);
+          return true;
+        }
+        form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        return true;
+      } catch {
+        return false;
+      }
+    })
+    .catch(() => false);
+}
+
+/** 제출 뒤 비밀번호 칸이 비워졌는지(같은 화면에서 처리하는 SPA 판정) */
+async function passwordFieldsCleared(page: Page): Promise<boolean> {
+  await page.waitForTimeout(500);
+  try {
+    const values = await page
+      .locator('input[type=password]')
+      .evaluateAll((els) => els.map((el) => (el as HTMLInputElement).value));
+    return values.length > 0 && values.every((value) => !value);
+  } catch {
+    return false;
+  }
+}
+
+/** 페이지가 로그인 화면을 떠났는지(주소 변경 또는 비밀번호 칸 사라짐) */
+async function leftLoginScreen(page: Page, before: { url: string; passwordFields: number }): Promise<boolean> {
+  await page.waitForTimeout(400);
+  const url = page.url();
+  const fields = await page.locator('input[type=password]').count().catch(() => 0);
+  if (url !== before.url && fields === 0) return true;
+  if (fields === 0 && before.passwordFields > 0) return true;
+  return false;
+}
+
+/** 로그인 화면이 '사람이 필요한 상태'인지 알려주는 사람용 문구 */
+export const BLOCKED_HANDOVER_REASON: Record<NonNullable<LoginScreenRead['blocked']>, HandoverReason> = {
+  captcha: 'captcha',
+  passkey: 'identity',
+  otp: 'otp',
+  wrong_password: 'manual',
+  email_verify: 'identity',
+  bot_check: 'manual',
+  account_locked: 'manual',
+};
+
+/**
+ * 금고 값으로 로그인을 끝낸다 (v0.5.2 → v0.6.0 사이트별 보강).
  *
- * ① 한 화면 로그인: 아이디 → 비밀번호 → 로그인
- * ② 두 화면 로그인(구글·마이크로소프트): 아이디 → 다음/계속 클릭 → 비밀번호 창 대기(최대 8초)
- *    → 비밀번호 → 로그인
- * ③ 1단계 후 패스키·캡차·2차 인증·오류가 나오면 즉시 화면의 실제 문구와 함께 반환
- *
- * 값은 이 함수 안에서만 쓰고 로그·응답·AI 대화에는 남기지 않는다.
+ * ① 한 화면 로그인: 아이디 → 비밀번호 → (버튼 활성화 대기) → 로그인
+ * ② 두 화면 로그인(구글·마이크로소프트): 아이디 → 다음/계속 → 비밀번호 창 대기 → 비밀번호 → 로그인
+ * ③ 버튼이 안 눌리면 폼 전송·Enter로 재시도
+ * ④ 패스키·캡차·2차 인증·오류가 뜨면 즉시 noVNC 핸드오버로 넘김
  */
 export async function loginWithVault(input: {
   username?: string | null;
@@ -1288,28 +1515,52 @@ export async function loginWithVault(input: {
   const filledPassword = await fillRef(s.page, passwordRef, input.password);
   if (!filledPassword) throw new Error(`비밀번호 입력창을 채우지 못했습니다: ${passwordRef}`);
 
+  // v0.6.0: 버튼이 '두 칸이 다 채워지면 열리는' 사이트를 위해 활성화를 기다린다.
+  const urlBefore = s.page.url();
+  const passwordFieldsBefore = await s.page.locator('input[type=password]').count().catch(() => 0);
+  let submitReady = true;
+  if (submitRef) submitReady = await waitSubmitReady(s.page, submitRef, 6_000);
+
   let submitted: LoginWithVaultResult['submitted'] = 'none';
+  let submitNote: string | null = submitReady || !submitRef ? null : '로그인 버튼이 계속 잠겨 있어 폼으로 직접 제출했습니다';
   if (input.submit !== false) {
-    if (submitRef) {
-      const selector = `[data-pomong-ref="${submitRef.replace(/[^a-zA-Z0-9_-]/g, '')}"]`;
-      const button = s.page.locator(selector).first();
-      if ((await button.count()) && (await button.isVisible().catch(() => false))) {
-        await Promise.all([
-          s.page.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => undefined),
-          button.click({ timeout: 15_000 }).catch(() => undefined),
-        ]);
-        submitted = 'click';
-      }
+    if (submitRef && submitReady) {
+      await Promise.all([
+        s.page.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => undefined),
+        clickRef(s.page, submitRef),
+      ]);
+      if (await leftLoginScreen(s.page, { url: urlBefore, passwordFields: passwordFieldsBefore })) submitted = 'click';
+      // v0.6.0: 무신사처럼 같은 화면에서 제출하고 입력칸을 비우는 SPA — 비워졌으면 제출된 것으로 본다.
+      else if (await passwordFieldsCleared(s.page)) submitted = 'click';
     }
     if (submitted === 'none') {
-      // 버튼을 못 찾았으면 비밀번호 칸에서 Enter(대부분의 로그인 폼이 전송된다)
-      const pwd = s.page.locator(`[data-pomong-ref="${passwordRef.replace(/[^a-zA-Z0-9_-]/g, '')}"]`).first();
-      if (await pwd.count()) {
-        await Promise.all([
-          s.page.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => undefined),
-          pwd.press('Enter').catch(() => undefined),
-        ]);
-        submitted = 'enter';
+      // 버튼이 잠겨 있었거나 클릭이 먹히지 않았다 → 폼 전송으로 한 번 더.
+      const sent = await submitViaForm(s.page, passwordRef);
+      if (sent) {
+        submitted = 'form';
+        await s.page.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => undefined);
+        await s.page.waitForTimeout(500);
+        if (!(await leftLoginScreen(s.page, { url: urlBefore, passwordFields: passwordFieldsBefore }))) {
+          // 폼 전송도 화면을 바꾸지 못했으면 비밀번호 칸에서 Enter (예전 방식)
+          const pwd = s.page.locator(`[data-pomong-ref="${passwordRef.replace(/[^a-zA-Z0-9_-]/g, '')}"]`).first();
+          if (await pwd.count().catch(() => 0)) {
+            await Promise.all([
+              s.page.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => undefined),
+              pwd.press('Enter').catch(() => undefined),
+            ]);
+            if (await leftLoginScreen(s.page, { url: urlBefore, passwordFields: passwordFieldsBefore })) submitted = 'enter';
+          }
+        }
+      } else {
+        // 버튼도 폼도 없으면 비밀번호 칸에서 Enter
+        const pwd = s.page.locator(`[data-pomong-ref="${passwordRef.replace(/[^a-zA-Z0-9_-]/g, '')}"]`).first();
+        if (await pwd.count().catch(() => 0)) {
+          await Promise.all([
+            s.page.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => undefined),
+            pwd.press('Enter').catch(() => undefined),
+          ]);
+          submitted = 'enter';
+        }
       }
     }
     // 화면이 바뀌거나 2차 인증으로 넘어가는 시간을 잠깐 준다.
@@ -1323,16 +1574,31 @@ export async function loginWithVault(input: {
   const stillOnLogin =
     screen.passwordField || screen.blocked !== null || (await s.page.locator('input[type=password]').count().catch(() => 0)) > 0;
   const notice = screen.notice && stillOnLogin ? screen.notice : null;
+  // v0.6.0: 캅차·OTP·패스키·본인인증은 AI가 풀 수 없다 → 서버가 곧바로 noVNC 전체화면 핸드오버를 연다.
+  // (예전에는 모델이 browser_handover를 따로 부르기를 기다렸고, 빼먹으면 사용자는 빈 화면만 봤다)
+  let handoverOpened = false;
+  if (stillOnLogin && screen.blocked && screen.blocked !== 'wrong_password') {
+    try {
+      await requestHandover(
+        BLOCKED_HANDOVER_REASON[screen.blocked],
+        `${LOGIN_BLOCK_LABELS[screen.blocked]}${notice ? ` · ${notice}` : ''}`,
+        session.id
+      );
+      handoverOpened = true;
+    } catch {
+      /* 핸드오버를 열지 못해도 결과는 그대로 돌려준다 */
+    }
+  }
   touch(session.id, { url: data.url, title: data.title });
   void saveState(s);
   logAction(
     session.id,
     'agent',
     'browser.login_with_vault',
-    { usernameRef, passwordRef, submitRef, filledUsername, submitted, steps, password: '***' },
+    { usernameRef, passwordRef, submitRef, filledUsername, submitted, steps, submitReady, password: '***' },
     `${stillOnLogin ? '로그인 화면 유지' : '로그인 통과 추정'}${screen.blocked ? ` · ${LOGIN_BLOCK_LABELS[screen.blocked]}` : ''} · ${
-      submitted === 'click' ? '로그인 버튼 클릭' : submitted === 'enter' ? 'Enter 전송' : '전송 안 함'
-    }`,
+      submitted === 'click' ? '로그인 버튼 클릭' : submitted === 'form' ? '폼 제출' : submitted === 'enter' ? 'Enter 전송' : '전송 안 함'
+    }${submitNote ? ` (${submitNote})` : ''}`,
     data.url
   );
   void before;
@@ -1348,6 +1614,10 @@ export async function loginWithVault(input: {
     steps,
     notice,
     blocked: stillOnLogin ? screen.blocked : null,
+    submitReady,
+    submitNote,
+    handoverOpened,
+    diagnostics: await loginDiagnostics(s.page),
   };
 }
 

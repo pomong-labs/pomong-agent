@@ -1,19 +1,32 @@
 # syntax=docker/dockerfile:1
 
-# Pomong Agent — 브라우저 워커 (선택 프로필)
+# Pomong Agent — 브라우저 워커 (선택 프로필) · v0.6.0 noVNC
 #
 # `docker compose --profile browser up -d` 로만 띄운다.
-# Playwright 서버(run-server)가 9222에서 대기하고, 에이전트가 연결할 때만
-# 크로미움이 뜬다. 연결이 끊기면 브라우저도 함께 사라져 1GB 서버에서도 안전하다.
-# (idle 상태 메모리 ~60MB · 브라우저 실행 중 ~300MB)
+# 이 컨테이너 안에서 아래가 함께 돈다.
+#   Xvfb(:99)  → 화면(1280x800)
+#   Chromium   → 화면 있는(headed) 브라우저, CDP 9222 (Playwright connectOverCDP)
+#   x11vnc     → X 화면을 VNC(5900)로
+#   websockify → VNC를 WebSocket(6080)으로 (noVNC 클라이언트가 붙는 곳)
+#
+# 12GB ARM64 서버 기준. 포트는 도커 내부 네트워크에만 열린다(호스트에 publish 하지 않음).
 
 FROM node:20-bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright \
+    DISPLAY=:99 \
     TZ=Asia/Seoul
 
 WORKDIR /app
+
+# Xvfb + VNC + noVNC(websockify) + 한글 폰트
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      xvfb x11vnc novnc websockify \
+      fonts-noto-cjk fonts-noto-color-emoji \
+      ca-certificates curl procps \
+ && rm -rf /var/lib/apt/lists/*
 
 # playwright(CLI) + 크로미움(고정 버전) + 실행에 필요한 OS 라이브러리
 RUN npm init -y >/dev/null 2>&1 \
@@ -22,14 +35,12 @@ RUN npm init -y >/dev/null 2>&1 \
  && npm cache clean --force \
  && rm -rf /var/lib/apt/lists/*
 
-# 한국어 사이트가 두부(□□□)로 보이지 않도록 CJK 폰트 추가
-RUN apt-get update \
- && apt-get install -y --no-install-recommends fonts-noto-cjk \
- && rm -rf /var/lib/apt/lists/*
-
 COPY docker/browser-supervisor.mjs /app/supervisor.mjs
 
-# 9222 = Playwright, 9223 = 감독(시작/정지/회수). 호스트에 포트를 열지 않는다.
-EXPOSE 9222 9223
+# 9222 = CDP, 9223 = 감독(시작/정지/상태), 6080 = noVNC WebSocket, 5900 = VNC
+EXPOSE 9222 9223 6080 5900
+
+HEALTHCHECK --interval=30s --timeout=6s --start-period=40s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:9223/health || exit 1
 
 CMD ["node", "/app/supervisor.mjs"]

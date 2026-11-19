@@ -78,6 +78,7 @@ export default function SettingsPage() {
   const [accentColor, setAccentColor] = useState('#8B72F8');
   const [savedFlash, setSavedFlash] = useState('');
   const themeSaveTimer = useRef<number | null>(null);
+  const profileSaveTimer = useRef<number | null>(null);
 
   const [provider, setProvider] = useState<ProviderId>('gemini');
   const [model, setModel] = useState('');
@@ -208,6 +209,40 @@ export default function SettingsPage() {
     } finally {
       setBrowserBusy(false);
     }
+  };
+
+  /**
+   * v0.6.0: 말토·성격 프리셋도 테마처럼 **누르는 즉시 서버에 저장**한다.
+   * 예전에는 저장 버튼을 눌러야만 반영돼서, 프리셋만 고치고 나가면 사라졌다.
+   */
+  const applyAndSaveProfile = (patch: { tone?: 'polite' | 'casual'; persona?: PersonaId; personaCustom?: string }) => {
+    const toneNext = patch.tone ?? tone;
+    const personaNext = patch.persona ?? persona;
+    const customNext = patch.personaCustom ?? personaCustom;
+    setTone(toneNext);
+    setPersona(personaNext);
+    setPersonaCustom(customNext);
+    if (profileSaveTimer.current) window.clearTimeout(profileSaveTimer.current);
+    profileSaveTimer.current = window.setTimeout(() => {
+      void api
+        .put('/api/settings/profile', {
+          nickname,
+          agentName,
+          character,
+          tone: toneNext,
+          persona: personaNext,
+          personaCustom: customNext,
+          theme,
+          accentMode,
+          accentColor,
+        })
+        .then(() => refreshProfile())
+        .then(() => {
+          setSavedFlash('저장했습니다');
+          window.setTimeout(() => setSavedFlash(''), 1500);
+        })
+        .catch(() => undefined);
+    }, 250);
   };
 
   const saveProfile = async () => {
@@ -391,7 +426,7 @@ export default function SettingsPage() {
           <div className="mt-5">
             <div className="flex items-baseline justify-between">
               <span className="text-[13px] font-semibold text-[#5B5866]">AI 말투</span>
-              <span className="text-[11.5px] text-[#B4B1C2]">저장하면 다음 대화부터 적용돼요</span>
+              <span className="text-[11.5px] text-[#B4B1C2]">누르면 바로 저장돼요 · 다음 대화부터 적용</span>
             </div>
             <div className="mt-2.5 grid gap-2 sm:grid-cols-2">
               {toneOptions(callName, agentName).map((opt) => {
@@ -399,7 +434,7 @@ export default function SettingsPage() {
                 return (
                   <button
                     key={opt.id}
-                    onClick={() => setTone(opt.id)}
+                    onClick={() => applyAndSaveProfile({ tone: opt.id })}
                     className={`rounded-2xl border-[1.5px] px-4 py-3 text-left transition ${
                       active ? 'border-[#C9B8FF] bg-[#F8F5FF]' : 'border-[#EFEDF6] bg-white hover:bg-[#FBFAFF]'
                     }`}
@@ -434,7 +469,7 @@ export default function SettingsPage() {
                 return (
                   <button
                     key={opt.id}
-                    onClick={() => setPersona(opt.id)}
+                    onClick={() => applyAndSaveProfile({ persona: opt.id })}
                     className={`rounded-2xl border-[1.5px] px-4 py-3 text-left transition ${
                       active ? 'border-[#C9B8FF] bg-[#F8F5FF]' : 'border-[#EFEDF6] bg-white hover:bg-[#FBFAFF]'
                     }`}
@@ -465,7 +500,7 @@ export default function SettingsPage() {
                   value={personaCustom}
                   maxLength={60}
                   placeholder="예: 츤데레지만 챙길 건 다 챙기는 비서"
-                  onChange={(e) => setPersonaCustom(e.target.value)}
+                  onChange={(e) => applyAndSaveProfile({ personaCustom: e.target.value })}
                 />
               </label>
             ) : null}
@@ -798,7 +833,7 @@ export default function SettingsPage() {
           <ul className="mt-3 divide-y divide-[#F6F4FB] text-[13.5px]">
             <li className="flex items-center justify-between py-3">
               <span className="text-pomong-sub">버전</span>
-              <span className="font-semibold text-[#3B3947]">v{data?.version || '0.5.6'}</span>
+              <span className="font-semibold text-[#3B3947]">v{data?.version || '0.6.0'}</span>
             </li>
             <li className="flex items-center justify-between py-3">
               <span className="text-pomong-sub">데이터 보관</span>
@@ -817,7 +852,7 @@ export default function SettingsPage() {
         </section>
 
         <p className="mt-6 flex items-center justify-center gap-1.5 text-[12px] text-[#B4B1C2]">
-          <Sparkles size={12} /> Pomong Agent v{data?.version || '0.5.6'} · Pomong Labs
+          <Sparkles size={12} /> Pomong Agent v{data?.version || '0.6.0'} · Pomong Labs
         </p>
       </div>
     </div>
