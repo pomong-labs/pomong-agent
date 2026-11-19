@@ -211,6 +211,8 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   const messagesLoadedRef = useRef(false);
   /** 연결 복구 루프 세대 번호 — 값이 바뀌면 진행 중이던 복구를 버린다 */
   const recoveryTokenRef = useRef(0);
+  /** 지금 복구 루프가 진행 UI를 들고 있는지(방을 옮길 때 정리하려고) */
+  const recoveringRef = useRef(false);
   const reconcilingRef = useRef(false);
   const lastReconcileRef = useRef(0);
 
@@ -350,6 +352,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       const session = input.session;
       if (session !== activeSessionRef.current) return;
       const token = ++recoveryTokenRef.current;
+      recoveringRef.current = true;
       setRecovering(true);
       setSending(true);
       sendingRef.current = true;
@@ -357,6 +360,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
 
       const finish = () => {
         if (token !== recoveryTokenRef.current) return;
+        recoveringRef.current = false;
         sendingRef.current = false;
         setSending(false);
         setLiveTask(null);
@@ -511,6 +515,13 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       setUnlockRequests([]);
       setError('');
       recoveryTokenRef.current += 1;
+      if (recoveringRef.current) {
+        // 복구 대기 중에 방을 옮기면 그 화면의 진행 표시도 함께 정리한다(멈춘 점 3개 방지).
+        recoveringRef.current = false;
+        sendingRef.current = false;
+        setSending(false);
+        setLiveTask(null);
+      }
       setRecovering(false);
       await loadMessages(id);
       void refreshSessions();
@@ -811,6 +822,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     const id = activeSessionRef.current;
     // 복구 대기 중이었다면 그 루프부터 멈춘다(사용자가 중지했으니 더 기다리지 않는다).
     recoveryTokenRef.current += 1;
+    recoveringRef.current = false;
     setRecovering(false);
     await api.post('/api/chat/stop', { session: id }).catch(() => undefined);
     sendingRef.current = false;

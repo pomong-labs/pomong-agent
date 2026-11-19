@@ -1059,7 +1059,7 @@ export async function runTool(name: string, args: Record<string, unknown>, ctx: 
           sessionId: ctx.session || null,
         });
         return {
-          content: `파일함에 저장했습니다: ${saved.name} (${(saved.size / 1024).toFixed(1)}KB). 주소 ${saved.downloadUrl} — 사용자에게 "파일함(/files)에서 다시 열거나 내려받을 수 있어요"라고 알려 주세요.`,
+          content: `파일함에 저장했습니다: ${saved.name} (${saved.size < 1024 ? `${saved.size}B` : `${(saved.size / 1024).toFixed(1)}KB`}). 주소 ${saved.downloadUrl} — 사용자에게 "파일함(/files)에서 다시 열거나 내려받을 수 있어요"라고 알려 주세요.`,
         };
       } catch (err) {
         return { content: `파일을 저장하지 못했습니다: ${err instanceof Error ? err.message : String(err)}` };
