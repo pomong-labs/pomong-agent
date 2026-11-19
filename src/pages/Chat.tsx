@@ -679,21 +679,21 @@ function AssistantBubble({
               onDismiss={onUnlockDismiss}
             />
           ))}
-        <div className="mt-2.5 flex items-center gap-1 text-[11.5px] text-[#C0BCCD]">
-          {formatClock(message.createdAt)}
+        <div className="mt-2.5 flex flex-wrap items-center gap-x-1 gap-y-1 text-[11.5px] text-[#C0BCCD]">
+          <span className="shrink-0 whitespace-nowrap">{formatClock(message.createdAt)}</span>
           {answeredLabel ? (
-            <span className="ml-1 rounded-full bg-[#FAF9FD] px-1.5 py-0.5 text-[10.5px] font-medium text-[#B4B1C2]" title="실제 응답한 모델">
+            <span className="ml-1 hidden shrink-0 whitespace-nowrap rounded-full bg-[#FAF9FD] px-1.5 py-0.5 text-[10.5px] font-medium text-[#B4B1C2] sm:inline-block" title="실제 응답한 모델">
               {answeredLabel}
             </span>
           ) : null}
           {message.meta?.tools?.length ? (
-            <span className="ml-1 rounded-full bg-[#F7F5FF] px-1.5 py-0.5 text-[10.5px] font-medium text-[#9B98AB]">
+            <span className="ml-1 shrink-0 whitespace-nowrap rounded-full bg-[#F7F5FF] px-1.5 py-0.5 text-[10.5px] font-medium text-[#9B98AB]">
               도구 {message.meta.tools.length}회
             </span>
           ) : null}
-          <div className="ml-auto flex items-center gap-0.5">
+          <div className="ml-auto flex shrink-0 items-center gap-0.5">
             <button
-              className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-medium transition ${
+              className={`flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[10.5px] font-medium transition ${
                 speaking
                   ? 'bg-[#F1ECFF] text-[#7C63F6]'
                   : 'text-[#B4B1C2] hover:bg-[#F7F5FF] hover:text-[#7C63F6]'
@@ -707,7 +707,7 @@ function AssistantBubble({
               {speaking ? '멈춤' : '듣기'}
             </button>
             <button
-              className="flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-medium text-[#B4B1C2] transition hover:bg-[#F7F5FF] hover:text-[#7C63F6]"
+              className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[10.5px] font-medium text-[#B4B1C2] transition hover:bg-[#F7F5FF] hover:text-[#7C63F6]"
               onClick={() => void copy()}
               aria-label="답변 복사"
               title="답변 복사"

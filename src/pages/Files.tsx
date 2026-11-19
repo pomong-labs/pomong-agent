@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Bot,
+  RotateCw as RotateCwIcon,
   Download,
   FileText,
   FolderOpen,
@@ -130,16 +131,16 @@ export default function FilesPage() {
           <h1 className="flex items-center gap-2 text-[20px] font-bold tracking-[-0.02em] lg:text-[24px]">
             <FolderOpen size={21} className="text-[#7C63F6]" /> 파일함
           </h1>
-          <p className="mt-0.5 text-[12.5px] text-pomong-sub">
+          <p className="mt-0.5 hidden text-[12.5px] text-pomong-sub sm:block">
             채팅 첨부 · 브라우저 저장 · AI 결과물을 한곳에서
           </p>
         </div>
         <button
           onClick={() => void load()}
-          className="flex h-10 shrink-0 items-center gap-1.5 rounded-2xl bg-white px-3 text-[12.5px] font-semibold text-[#6B677A] ring-1 ring-[#EFEDF6]"
+          className="flex h-10 w-10 shrink-0 items-center justify-center gap-1.5 rounded-2xl bg-white text-[12.5px] font-semibold text-[#6B677A] ring-1 ring-[#EFEDF6] sm:w-auto sm:px-3"
           aria-label="새로고침"
         >
-          {loading ? <Loader2 size={14} className="animate-spin" /> : null} 새로고침
+          {loading ? <Loader2 size={14} className="animate-spin" /> : <RotateCwIcon />} <span className="hidden sm:inline">새로고침</span>
         </button>
       </header>
 
