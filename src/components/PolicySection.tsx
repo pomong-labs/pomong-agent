@@ -69,8 +69,9 @@ export default function PolicySection() {
       <div className="mt-3 grid grid-cols-2 gap-1.5 sm:grid-cols-4">
         {counts.map(({ value, count }) => {
           const meta = LEVEL_META[value];
+          // 다크 테마에서도 어울리게, 파스텔 대신 같은 색의 옅은 알파 틴트를 쓴다
           return (
-            <div key={value} className="rounded-[14px] px-3 py-2" style={{ background: meta.bg }}>
+            <div key={value} className="rounded-[14px] px-3 py-2" style={{ background: `${meta.color}1F` }}>
               <p className="text-[11px] font-bold" style={{ color: meta.color }}>
                 {meta.label} {count}
               </p>

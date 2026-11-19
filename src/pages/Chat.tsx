@@ -42,6 +42,7 @@ import {
   dictationSupported,
   dictationUnsupportedMessage,
   getSpeakingKey,
+  isAppleWebKit,
   startDictation,
   stopSpeech,
   subscribeSpeech,
@@ -181,6 +182,8 @@ export default function Chat() {
   const [voiceHint, setVoiceHint] = useState('');
   const dictationRef = useRef<DictationHandle | null>(null);
   const dictationBaseRef = useRef('');
+  /** 사용자가 직접 마이크를 꺼서 끝난 것인지 (WebKit 자동 종료 안내를 구분) */
+  const dictationManualStopRef = useRef(false);
   const voiceHintTimer = useRef<number | null>(null);
 
   const flashVoiceHint = useCallback((message: string) => {
@@ -191,6 +194,7 @@ export default function Chat() {
   }, []);
 
   const stopDictation = useCallback(() => {
+    dictationManualStopRef.current = true;
     dictationRef.current?.stop();
     dictationRef.current = null;
     setListening(false);
@@ -206,6 +210,7 @@ export default function Chat() {
       return;
     }
     dictationBaseRef.current = draft.trim();
+    dictationManualStopRef.current = false;
     const handle = startDictation({
       onText: (finalText, interim) => {
         const spoken = [finalText, interim].filter(Boolean).join(' ');
@@ -220,8 +225,15 @@ export default function Chat() {
         flashVoiceHint(message || dictationErrorMessage(code));
       },
       onEnd: () => {
+        const manual = dictationManualStopRef.current;
+        dictationManualStopRef.current = false;
         dictationRef.current = null;
         setListening(false);
+        // 아이폰(WebKit)은 한 번 말할 때마다 인식기가 새로 만들어지므로,
+        // 저절로 끝난 경우에는 "마이크를 다시 눌러 이어서 말하라"고 알려 준다.
+        if (!manual && isAppleWebKit()) {
+          flashVoiceHint('받아쓰기를 마쳤어요. 이어서 말하려면 마이크를 다시 눌러 주세요.');
+        }
       },
     });
     if (!handle) {
@@ -351,7 +363,7 @@ export default function Chat() {
                     {m.content ? (
                       <div
                         className="rounded-[22px] rounded-br-lg px-4 py-3 text-[15px] leading-relaxed text-[#2A2A35] shadow-[0_2px_10px_rgba(120,100,200,0.05)] sm:text-[16px]"
-                        style={{ background: 'linear-gradient(135deg,#EFE8FF,#E7DFFC)' }}
+                        style={{ background: 'var(--bubble-user)' }}
                       >
                         {m.content}
                       </div>
@@ -501,7 +513,7 @@ export default function Chat() {
               ) : (
                 <button
                   className="mb-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-white shadow-float transition active:scale-95 disabled:opacity-40"
-                  style={{ background: 'linear-gradient(135deg,#A88BFF,#8B72F8)' }}
+                  style={{ background: 'var(--accent-grad)', color: 'var(--accent-contrast)' }}
                   onClick={submit}
                   disabled={!draft.trim() && !pending.length}
                   aria-label="보내기"
@@ -927,7 +939,7 @@ function LoginCard({
 
         <button
           className="flex w-full items-center justify-center gap-2 rounded-xl py-2.5 text-[13.5px] font-bold text-white transition active:scale-[0.99] disabled:opacity-50"
-          style={{ background: 'linear-gradient(135deg,#A88BFF,#8B72F8)' }}
+          style={{ background: 'var(--accent-grad)', color: 'var(--accent-contrast)' }}
           onClick={() => void submit()}
           disabled={busy}
         >
@@ -1200,7 +1212,7 @@ function RoomDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
         <div className="px-3 pt-3">
           <button
             className="flex w-full items-center justify-center gap-1.5 rounded-[14px] py-2.5 text-[13.5px] font-bold text-white transition active:scale-[0.99] disabled:opacity-60"
-            style={{ background: 'linear-gradient(135deg,#A88BFF,#8B72F8)' }}
+            style={{ background: 'var(--accent-grad)', color: 'var(--accent-contrast)' }}
             disabled={busy}
             onClick={async () => {
               setBusy(true);

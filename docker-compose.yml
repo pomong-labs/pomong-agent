@@ -1,7 +1,7 @@
 services:
   pomong-agent:
     build: .
-    image: pomong-agent:0.5.5
+    image: pomong-agent:0.5.6
     container_name: pomong-agent
     restart: unless-stopped
     ports:

@@ -4,7 +4,8 @@ import { ArrowLeft, ArrowRight, Check, Eye, EyeOff, KeyRound, ShieldCheck, Spark
 import Mascot from '../components/Mascot';
 import MascotFace from '../components/MascotFace';
 import Logo from '../components/Logo';
-import { api, ApiError } from '../lib/api';
+import { api, ApiError, type ThemeMode } from '../lib/api';
+import { applyTheme } from '../lib/theme';
 
 type ProviderId = 'gemini' | 'openai' | 'claude';
 
@@ -86,7 +87,7 @@ export default function Setup() {
   const [nickname, setNickname] = useState('');
   const [agentName, setAgentName] = useState('Pomong');
   const [character, setCharacter] = useState('pimong');
-  const [theme, setTheme] = useState<'light' | 'dark'>('light');
+  const [theme, setTheme] = useState<ThemeMode>('light');
   const [language, setLanguage] = useState<'ko' | 'en'>('ko');
 
   useEffect(() => {
@@ -463,28 +464,30 @@ export default function Setup() {
                     })}
                   </div>
                 </Field>
-                <Field label="테마">
-                  <div className="grid grid-cols-2 gap-3">
-                    <button
-                      type="button"
-                      onClick={() => setTheme('light')}
-                      className={`rounded-2xl border-[1.5px] px-4 py-3 text-left text-[14px] font-semibold ${
-                        theme === 'light' ? 'border-[#C9B8FF] bg-[#F8F5FF] text-[#7C63F6]' : 'border-[#E9E7F2] bg-white text-[#5B5866]'
-                      }`}
-                    >
-                      라이트 (기본)
-                      <span className="mt-1 block text-[12px] font-normal text-[#9B98AB]">포몽 파스텔</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setTheme('dark')}
-                      className={`rounded-2xl border-[1.5px] px-4 py-3 text-left text-[14px] font-semibold ${
-                        theme === 'dark' ? 'border-[#C9B8FF] bg-[#F8F5FF] text-[#7C63F6]' : 'border-[#E9E7F2] bg-white text-[#5B5866]'
-                      }`}
-                    >
-                      다크
-                      <span className="mt-1 block text-[12px] font-normal text-[#9B98AB]">v0.2에서 적용</span>
-                    </button>
+                <Field label="테마" hint="고르는 즉시 화면에 적용돼요">
+                  <div className="grid grid-cols-3 gap-2">
+                    {(
+                      [
+                        ['light', '라이트', '포몽 파스텔'],
+                        ['dark', '다크', '어두운 화면'],
+                        ['system', '기기 설정', '아이폰 따라'],
+                      ] as const
+                    ).map(([value, label, hint]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => {
+                          setTheme(value);
+                          applyTheme({ theme: value, accentMode: 'character', accentColor: '#8B72F8', character });
+                        }}
+                        className={`rounded-2xl border-[1.5px] px-3 py-3 text-left text-[13.5px] font-semibold ${
+                          theme === value ? 'border-[#C9B8FF] bg-[#F8F5FF] text-[#7C63F6]' : 'border-[#E9E7F2] bg-white text-[#5B5866]'
+                        }`}
+                      >
+                        {label}
+                        <span className="mt-1 block text-[11.5px] font-normal text-[#9B98AB]">{hint}</span>
+                      </button>
+                    ))}
                   </div>
                 </Field>
                 <Field label="언어">

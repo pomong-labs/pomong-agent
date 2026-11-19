@@ -46,14 +46,28 @@ export const api = {
 
 export type ProviderId = 'gemini' | 'openai' | 'claude';
 
+/** AI 성격·말투 프리셋 (v0.5.6) */
+export type PersonaId = 'default' | 'calm' | 'bright' | 'concise' | 'witty' | 'custom';
+
+export type ThemeMode = 'light' | 'dark' | 'system';
+export type AccentMode = 'character' | 'purple' | 'custom';
+
 export interface Profile {
   nickname: string;
-  theme: 'light' | 'dark';
+  /** 라이트 / 다크 / 기기 설정 따름 */
+  theme: ThemeMode;
+  /** 포인트 컬러: 캐릭터 맞춤 / 기본 퍼플 / 직접 고르기 */
+  accentMode: AccentMode;
+  accentColor: string;
   language: 'ko' | 'en';
   agentName: string;
   character: string;
   /** AI 말투: polite=존댓말, casual=편한 반말 */
   tone: 'polite' | 'casual';
+  /** AI 성격·말투 프리셋 */
+  persona: PersonaId;
+  /** persona='custom'일 때 직접 쓴 한 줄 성격 */
+  personaCustom: string;
 }
 
 export interface ProcessInfo {

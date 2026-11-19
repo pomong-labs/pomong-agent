@@ -15,3 +15,6 @@ data/
 .DS_Store
 .idea/
 .vscode/
+
+# python caches (테마 CSS 생성기)
+__pycache__/

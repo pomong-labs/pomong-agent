@@ -11,6 +11,7 @@ import {
   type VaultUnlockRequest,
 } from './api';
 import { decideTurnOutcome, isBusyState, isNetworkError } from './network';
+import { applyStoredTheme, applyTheme, watchSystemTheme } from './theme';
 
 export type AgentState = 'idle' | 'thinking' | 'working' | 'responding' | 'error';
 
@@ -78,7 +79,18 @@ interface AppStoreValue {
   keyboardOpen: boolean;
 }
 
-const DEFAULT_PROFILE: Profile = { nickname: '', theme: 'light', language: 'ko', agentName: 'Pomong', character: 'pimong', tone: 'polite' };
+const DEFAULT_PROFILE: Profile = {
+  nickname: '',
+  theme: 'light',
+  accentMode: 'purple',
+  accentColor: '#8B72F8',
+  language: 'ko',
+  agentName: 'Pomong',
+  character: 'pimong',
+  tone: 'polite',
+  persona: 'default',
+  personaCustom: '',
+};
 
 const AppStore = createContext<AppStoreValue | null>(null);
 
@@ -234,6 +246,22 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       /* ignore */
     }
   }, []);
+
+  // v0.5.6: 테마 — 저장된 값을 먼저 칠하고(깜빡임 방지), 기기 설정이 바뀌면 따라간다.
+  useEffect(() => {
+    applyStoredTheme();
+    return watchSystemTheme();
+  }, []);
+
+  // 서버 설정을 받아 오면 그 값이 최종 테마다.
+  useEffect(() => {
+    applyTheme({
+      theme: profile.theme,
+      accentMode: profile.accentMode || 'purple',
+      accentColor: profile.accentColor || '#8B72F8',
+      character: profile.character || 'pimong',
+    });
+  }, [profile.theme, profile.accentMode, profile.accentColor, profile.character]);
 
   // 첫 로드: 프로필 · 모델 목록 · 지난 대화
   useEffect(() => {

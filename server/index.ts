@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { APP_NAME, APP_VERSION, CLIENT_DIST, DATA_DIR, HOST, PORT, ensureDataDir, writePrivate } from './config';
+import { type AgentPersona, normalizePersona, personaInstruction } from './persona';
 import { addLog, db, getJson, getSetting, setJson, setSetting } from './db';
 import { hashPassword, readSetupToken, randomToken, signValue, unsignValue, verifyPassword } from './crypto';
 import {
@@ -123,16 +124,32 @@ export type MascotId = (typeof MASCOTS)[number]['id'];
 
 export type AgentTone = 'polite' | 'casual';
 
+/** 테마: 라이트 / 다크 / 기기 설정 따름 */
+export type ThemeMode = 'light' | 'dark' | 'system';
+/** 포인트 컬러: 캐릭터 맞춤 / 기본 퍼플 / 직접 고르기 */
+export type AccentMode = 'character' | 'purple' | 'custom';
+
+const THEME_MODES: ThemeMode[] = ['light', 'dark', 'system'];
+const ACCENT_MODES: AccentMode[] = ['character', 'purple', 'custom'];
+
 const MASCOT_IDS = MASCOTS.map((m) => m.id) as string[];
 
 interface Profile {
   nickname: string;
-  theme: 'light' | 'dark';
+  theme: ThemeMode;
+  /** 포인트 컬러 모드 (v0.5.6) */
+  accentMode: AccentMode;
+  /** accentMode='custom'일 때 직접 고른 색 */
+  accentColor: string;
   language: 'ko' | 'en';
   agentName: string;
   character: MascotId;
   /** AI 말투: polite=존댓말, casual=편한 반말 */
   tone: AgentTone;
+  /** AI 성격·말투 프리셋 (v0.5.6) */
+  persona: AgentPersona;
+  /** persona='custom'일 때 직접 쓴 한 줄 성격 */
+  personaCustom: string;
 }
 
 /** 닉네임을 비워 두었을 때 AI가 쓰는 기본 호칭 */
@@ -142,17 +159,34 @@ function profile(): Profile {
   const stored = getJson<Partial<Profile>>('profile', {});
   return {
     nickname: stored.nickname || '',
-    theme: stored.theme === 'dark' ? 'dark' : 'light',
+    theme: normalizeTheme(stored.theme, 'light'),
+    accentMode: normalizeAccentMode(stored.accentMode, 'purple'),
+    accentColor: normalizeAccentColor(stored.accentColor, '#8B72F8'),
     language: stored.language === 'en' ? 'en' : 'ko',
     agentName: stored.agentName || 'Pomong',
     character: MASCOT_IDS.includes(String(stored.character)) ? (stored.character as MascotId) : 'pimong',
     tone: stored.tone === 'casual' ? 'casual' : 'polite',
+    persona: normalizePersona(stored.persona, 'default'),
+    personaCustom: typeof stored.personaCustom === 'string' ? stored.personaCustom.slice(0, 200) : '',
   };
 }
 
 function normalizeTone(value: unknown, fallback: AgentTone): AgentTone {
   return value === 'casual' || value === 'polite' ? value : fallback;
 }
+
+function normalizeTheme(value: unknown, fallback: ThemeMode): ThemeMode {
+  return THEME_MODES.includes(value as ThemeMode) ? (value as ThemeMode) : fallback;
+}
+
+function normalizeAccentMode(value: unknown, fallback: AccentMode): AccentMode {
+  return ACCENT_MODES.includes(value as AccentMode) ? (value as AccentMode) : fallback;
+}
+
+function normalizeAccentColor(value: unknown, fallback: string): string {
+  return typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value) ? value.toUpperCase() : fallback;
+}
+
 
 function normalizeCharacter(value: unknown, fallback: MascotId): MascotId {
   return MASCOT_IDS.includes(String(value)) ? (value as MascotId) : fallback;
@@ -399,11 +433,16 @@ app.post('/api/setup/preferences', requireSetup, (req, res) => {
   setJson('profile', {
     ...current,
     nickname: (body.nickname ?? current.nickname).slice(0, 40),
-    theme: body.theme === 'dark' ? 'dark' : 'light',
-    language: body.language === 'en' ? 'en' : 'ko',
+    theme: normalizeTheme(body.theme, current.theme),
+    accentMode: normalizeAccentMode(body.accentMode, current.accentMode),
+    accentColor: normalizeAccentColor(body.accentColor, current.accentColor),
+    language: body.language === 'en' ? 'en' : body.language === 'ko' ? 'ko' : current.language,
     agentName: (body.agentName ?? current.agentName).slice(0, 24) || 'Pomong',
     character: normalizeCharacter(body.character, current.character),
     tone: normalizeTone(body.tone, current.tone),
+    persona: normalizePersona(body.persona, current.persona),
+    personaCustom:
+      typeof body.personaCustom === 'string' ? body.personaCustom.slice(0, 200) : current.personaCustom,
   });
   res.json({ ok: true });
 });
@@ -537,10 +576,7 @@ function systemPrompt(memoryBlock = ''): string {
       `사용자의 이름은 '${callName}'이야. 사용자를 부를 때는 반드시 이 이름으로 불러.${p.nickname.trim() ? ' (설정에 저장된 닉네임)' : ' (닉네임을 따로 정하지 않아 쓰는 기본 호칭)'}`
     ),
     toneExample,
-    s(
-      '포몽 캐릭터처럼 다정하고 발랄한 성격이지만, 말투는 위 규칙을 그대로 따릅니다. 답변은 한국어로 짧고 명확하게 해 주세요. (사용자가 다른 언어로 쓰면 그 언어로 답해 주세요)',
-      '포몽 캐릭터처럼 다정하고 발랄한 성격이야. 답변은 한국어로 짧고 명확하게 해. (사용자가 다른 언어로 쓰면 그 언어로 답해)'
-    ),
+    personaInstruction(p.persona, p.personaCustom, polite),
     s(
       '당신의 일은 사용자의 일상 곁에서 할 일·메모·금고·날씨·서버 상태를 챙겨 드리는 개인 비서 일입니다. 사용자의 서버·계정·데이터는 모두 사용자의 것이고, 당신은 그 안에서만 돕습니다.',
       '너의 일은 사용자의 일상 곁에서 할 일·메모·금고·날씨·서버 상태를 챙겨 주는 개인 비서 일이야. 사용자의 서버·계정·데이터는 모두 사용자의 것이고, 너는 그 안에서만 돕는다.'
@@ -1748,11 +1784,16 @@ app.put('/api/settings/profile', requireAuth, (req, res) => {
   setJson('profile', {
     ...current,
     nickname: (body.nickname ?? current.nickname).slice(0, 40),
-    theme: body.theme === 'dark' ? 'dark' : 'light',
-    language: body.language === 'en' ? 'en' : 'ko',
+    theme: normalizeTheme(body.theme, current.theme),
+    accentMode: normalizeAccentMode(body.accentMode, current.accentMode),
+    accentColor: normalizeAccentColor(body.accentColor, current.accentColor),
+    language: body.language === 'en' ? 'en' : body.language === 'ko' ? 'ko' : current.language,
     agentName: (body.agentName ?? current.agentName).slice(0, 24) || 'Pomong',
     character: normalizeCharacter(body.character, current.character),
     tone: normalizeTone(body.tone, current.tone),
+    persona: normalizePersona(body.persona, current.persona),
+    personaCustom:
+      typeof body.personaCustom === 'string' ? body.personaCustom.slice(0, 200) : current.personaCustom,
   });
   res.json({ ok: true, profile: profile() });
 });

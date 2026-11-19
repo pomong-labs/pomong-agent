@@ -2,10 +2,59 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * 테마 변수 (v0.5.6)
+ * - 라이트/다크 표면·글자·선은 --pa-* 로 모았다.
+ * - 포인트 컬러(--accent*)는 src/lib/theme.ts가 라이트/다크에 맞춰 계산해 넣는다.
+ * - 색 유틸리티 클래스 → 변수 치환은 src/theme.generated.css (생성기) 참고.
+ */
 :root {
   color-scheme: light;
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-top: env(safe-area-inset-top, 0px);
+
+  --pa-bg: #f6f6fa;
+  --pa-surface: #ffffff;
+  --pa-surface-2: #fcfcfe;
+  --pa-surface-3: #faf9fd;
+  --pa-line: #e9e7f2;
+  --pa-line-soft: #f6f4fb;
+  --pa-ink: #2a2a35;
+  --pa-ink-strong: #1f1d2b;
+  --pa-mute: #8a8a9a;
+  --pa-mute-2: #b7b4c6;
+  --pa-knob: #ffffff;
+  --pa-shadow: 0 10px 30px rgba(90, 80, 160, 0.07);
+
+  /* 테마 JS가 채우기 전 첫 페인트용 기본값 (포몽 퍼플) */
+  --accent: #8b72f8;
+  --accent-deep: #6f52e8;
+  --accent-soft: #f1ecff;
+  --accent-soft-weak: #faf9ff;
+  --accent-line: #d6c9ff;
+  --accent-line-soft: #eae3ff;
+  --accent-muted: #c5b8fb;
+  --accent-faint: #7b74a8;
+  --accent-ink: #4b3fb0;
+  --accent-grad: linear-gradient(135deg, #a88bff 0%, #8b72f8 100%);
+  --accent-contrast: #ffffff;
+  --bubble-user: linear-gradient(135deg, #efe8ff, #e7dffc);
+}
+
+html.dark {
+  color-scheme: dark;
+  --pa-bg: #100f16;
+  --pa-surface: #1b1923;
+  --pa-surface-2: #17151f;
+  --pa-surface-3: #232030;
+  --pa-line: #332e42;
+  --pa-line-soft: #2a2636;
+  --pa-ink: #edeaf6;
+  --pa-ink-strong: #faf8ff;
+  --pa-mute: #a9a4ba;
+  --pa-mute-2: #7d7891;
+  --pa-knob: #f4f1ff;
+  --pa-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
 }
 
 @layer base {
@@ -20,7 +69,7 @@
     --app-height: 100%;
     --app-offset: 0px;
     --app-offset-x: 0px;
-    background: #f6f6fa;
+    background: var(--pa-bg);
     overscroll-behavior: none;
   }
 
@@ -30,7 +79,9 @@
   }
 
   body {
-    @apply bg-[#F6F6FA] text-pomong-ink antialiased;
+    @apply antialiased;
+    background: var(--pa-bg);
+    color: var(--pa-ink);
     font-family: 'Spoqa Han Sans Neo', 'Apple SD Gothic Neo', system-ui, -apple-system, sans-serif;
     -webkit-tap-highlight-color: transparent;
     overscroll-behavior-y: none;
@@ -61,7 +112,7 @@
   }
 
   ::selection {
-    background: #e5dcff;
+    background: var(--accent-line);
   }
 
   input,
@@ -87,11 +138,12 @@
 
 @layer components {
   .pa-card {
-    @apply rounded-[26px] bg-white shadow-card;
+    @apply rounded-[26px] shadow-card;
+    background: var(--pa-surface);
   }
 
   .pa-hairline {
-    @apply border-[#F0EFF6];
+    border-color: var(--pa-line);
   }
 
   .pa-btn {
@@ -100,32 +152,59 @@
   }
 
   .pa-btn-primary {
-    @apply pa-btn text-white shadow-float;
-    background-image: linear-gradient(135deg, #a48bff 0%, #8b72f8 100%);
+    @apply pa-btn shadow-float;
+    background-image: var(--accent-grad);
+    color: var(--accent-contrast);
   }
 
   .pa-btn-ghost {
-    @apply pa-btn border border-[#E9E7F2] bg-white text-pomong-ink hover:bg-[#FAF9FF];
+    @apply pa-btn border;
+    border-color: var(--pa-line);
+    background: var(--pa-surface);
+    color: var(--pa-ink);
+  }
+
+  .pa-btn-ghost:hover {
+    background: var(--pa-surface-3);
   }
 
   .pa-input {
-    @apply w-full rounded-2xl border border-[#E9E7F2] bg-white px-4 py-3 text-[15px] text-pomong-ink
-      placeholder:text-[#B7B4C6] focus:border-[#C3B4FF] focus:outline-none focus:ring-4 focus:ring-[#F1ECFF];
+    @apply w-full rounded-2xl border px-4 py-3 text-[15px] focus:outline-none;
+    border-color: var(--pa-line);
+    background: var(--pa-surface);
+    color: var(--pa-ink);
+    --tw-ring-color: var(--accent-line);
+  }
+
+  .pa-input::placeholder {
+    color: var(--pa-mute-2);
+  }
+
+  .pa-input:focus {
+    border-color: var(--accent-line);
+    box-shadow: 0 0 0 4px var(--accent-soft);
   }
 
   .pa-chip {
-    @apply rounded-full border border-[#EDEBF5] bg-white px-5 py-2.5 text-[15px] font-medium text-[#5B5866]
-      transition hover:border-[#DCD6F5];
+    @apply rounded-full border px-5 py-2.5 text-[15px] font-medium transition;
+    border-color: var(--pa-line);
+    background: var(--pa-surface);
+    color: var(--pa-ink);
+  }
+
+  .pa-chip:hover {
+    border-color: var(--accent-line);
   }
 
   .pa-chip-active {
-    @apply border-transparent text-white;
-    background-image: linear-gradient(135deg, #a48bff 0%, #8b72f8 100%);
+    @apply border-transparent;
+    background-image: var(--accent-grad);
+    color: var(--accent-contrast);
   }
 
   .pa-scroll {
     scrollbar-width: thin;
-    scrollbar-color: #e4e1ef transparent;
+    scrollbar-color: var(--pa-line) transparent;
   }
 
   .pa-scroll::-webkit-scrollbar {
@@ -134,7 +213,7 @@
   }
 
   .pa-scroll::-webkit-scrollbar-thumb {
-    background: #e4e1ef;
+    background: var(--pa-line);
     border-radius: 999px;
   }
 }

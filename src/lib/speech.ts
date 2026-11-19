@@ -198,6 +198,20 @@ export function dictationSupported(): boolean {
   return Boolean(recognitionCtor());
 }
 
+/**
+ * iOS/iPadOS의 모든 브라우저와 맥 사파리는 WebKit이다.
+ *
+ * WebKit의 SpeechRecognition은 `continuous = true`로 두고 `onend`에서 같은 인스턴스를
+ * 다시 `start()` 하면 두 번째 인식부터 `start_failed`/`aborted`로 실패한다.
+ * 그래서 WebKit에서는 한 번 말할 때마다 인식기를 새로 만들고, 끝나면 그대로 정리한다.
+ */
+export function isAppleWebKit(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  if (/iPhone|iPad|iPod/i.test(ua)) return true;
+  return /AppleWebKit/i.test(ua) && !/(Chrome|Chromium|CriOS|FxiOS|Edg|OPR|SamsungBrowser|Android)/i.test(ua);
+}
+
 const FATAL_ERRORS = new Set(['not-allowed', 'service-not-allowed', 'audio-capture', 'network', 'language-not-supported']);
 
 export function dictationErrorMessage(code: string): string {
@@ -245,14 +259,23 @@ export function startDictation(callbacks: DictationCallbacks): DictationHandle |
   } catch {
     return null;
   }
+  const webkit = isAppleWebKit();
   recognition.lang = 'ko-KR';
   recognition.interimResults = true;
-  recognition.continuous = true;
+  // WebKit은 continuous 모드에서 같은 인스턴스를 재시작하면 실패한다.
+  recognition.continuous = !webkit;
   recognition.maxAlternatives = 1;
 
   let stopped = false;
+  let finished = false;
   let finalText = '';
   let silentRounds = 0;
+
+  const finishOnce = () => {
+    if (finished) return;
+    finished = true;
+    callbacks.onEnd();
+  };
 
   recognition.onresult = (event) => {
     let interim = '';
@@ -267,6 +290,8 @@ export function startDictation(callbacks: DictationCallbacks): DictationHandle |
   };
   recognition.onerror = (event) => {
     const code = String(event?.error || 'unknown');
+    // 사용자가 마이크를 끄거나 화면을 떠날 때 나오는 aborted 는 정상 신호다.
+    if (code === 'aborted' || code === 'abort' || stopped) return;
     if (FATAL_ERRORS.has(code)) stopped = true;
     // 한 번의 침묵은 흘려보내고, 두 번 연속이면 안내한다(이어 듣기는 계속).
     if (code === 'no-speech') {
@@ -278,6 +303,12 @@ export function startDictation(callbacks: DictationCallbacks): DictationHandle |
     callbacks.onError(code, dictationErrorMessage(code));
   };
   recognition.onend = () => {
+    if (webkit) {
+      // WebKit: 같은 인스턴스를 다시 start() 하지 않는다. 말이 끝나면 깔끔하게 정리하고,
+      // 이어서 말하려면 마이크를 다시 눌러 **새 인스턴스**로 시작한다.
+      finishOnce();
+      return;
+    }
     if (!stopped) {
       // 침묵으로 잠깐 멈춘 경우엔 계속 듣는다(사용자가 끌 때까지).
       try {
@@ -287,14 +318,14 @@ export function startDictation(callbacks: DictationCallbacks): DictationHandle |
         /* 이어 듣기 실패 → 종료로 처리 */
       }
     }
-    callbacks.onEnd();
+    finishOnce();
   };
 
   try {
     recognition.start();
   } catch {
     callbacks.onError('start_failed', dictationErrorMessage('start_failed'));
-    callbacks.onEnd();
+    finishOnce();
     return null;
   }
 
@@ -304,7 +335,7 @@ export function startDictation(callbacks: DictationCallbacks): DictationHandle |
       try {
         recognition.stop();
       } catch {
-        callbacks.onEnd();
+        finishOnce();
       }
     },
     abort: () => {
@@ -314,7 +345,7 @@ export function startDictation(callbacks: DictationCallbacks): DictationHandle |
       } catch {
         /* ignore */
       }
-      callbacks.onEnd();
+      finishOnce();
     },
   };
 }

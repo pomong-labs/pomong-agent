@@ -20,6 +20,38 @@
       rel="stylesheet"
       href="https://spoqa.github.io/spoqa-han-sans/css/SpoqaHanSansNeo.css"
     />
+    <!-- v0.5.6: 저장된 테마(라이트/다크/기기 설정 따름 + 포인트 컬러)를 첫 페인트 전에 적용해 깜빡임을 없앤다 -->
+    <script>
+      (function () {
+        try {
+          var raw = localStorage.getItem('pomong.theme');
+          if (!raw) return;
+          var s = JSON.parse(raw);
+          var mode =
+            s.mode === 'system'
+              ? window.matchMedia('(prefers-color-scheme: dark)').matches
+                ? 'dark'
+                : 'light'
+              : s.mode === 'dark'
+                ? 'dark'
+                : 'light';
+          var root = document.documentElement;
+          root.classList.toggle('dark', mode === 'dark');
+          root.dataset.theme = mode;
+          root.dataset.themeMode = s.mode || 'light';
+          root.style.colorScheme = mode;
+          if (s.vars && typeof s.vars === 'object') {
+            Object.keys(s.vars).forEach(function (key) {
+              root.style.setProperty(key, s.vars[key]);
+            });
+          }
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) meta.setAttribute('content', mode === 'dark' ? '#100F16' : '#FBFBFD');
+        } catch (e) {
+          /* 테마 정보가 없거나 깨졌으면 기본 라이트로 둔다 */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -1,10 +1,36 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bell, BellOff, Check, Download, ExternalLink, Globe, LogOut, Send, ShieldCheck, Sparkles, Trash2 } from 'lucide-react';
+import {
+  Bell,
+  BellOff,
+  Check,
+  Download,
+  ExternalLink,
+  Globe,
+  LogOut,
+  Moon,
+  Monitor,
+  Palette,
+  Send,
+  ShieldCheck,
+  Sparkles,
+  Sun,
+  Trash2,
+} from 'lucide-react';
 import BackButton from '../components/BackButton';
 import MascotFace from '../components/MascotFace';
-import { api, type ProviderId, type PushStatus, type SettingsResponse } from '../lib/api';
+import {
+  api,
+  type AccentMode,
+  type PersonaId,
+  type ProviderId,
+  type PushStatus,
+  type SettingsResponse,
+  type ThemeMode,
+} from '../lib/api';
 import { useAppStore } from '../lib/store';
+import { PERSONA_OPTIONS, personaExample } from '../lib/persona';
+import { ACCENT_CHOICES, CHARACTER_ACCENTS, applyTheme, normalizeHex } from '../lib/theme';
 import PolicySection from '../components/PolicySection';
 
 /** VAPID 공개키(base64url) → Uint8Array (PushManager.subscribe에 필요) */
@@ -45,7 +71,13 @@ export default function SettingsPage() {
   const [agentName, setAgentName] = useState('Pomong');
   const [character, setCharacter] = useState('pimong');
   const [tone, setTone] = useState<'polite' | 'casual'>('polite');
+  const [persona, setPersona] = useState<PersonaId>('default');
+  const [personaCustom, setPersonaCustom] = useState('');
+  const [theme, setTheme] = useState<ThemeMode>('light');
+  const [accentMode, setAccentMode] = useState<AccentMode>('purple');
+  const [accentColor, setAccentColor] = useState('#8B72F8');
   const [savedFlash, setSavedFlash] = useState('');
+  const themeSaveTimer = useRef<number | null>(null);
 
   const [provider, setProvider] = useState<ProviderId>('gemini');
   const [model, setModel] = useState('');
@@ -68,6 +100,11 @@ export default function SettingsPage() {
         setAgentName(r.profile.agentName);
         setCharacter(r.profile.character || 'pimong');
         setTone(r.profile.tone === 'casual' ? 'casual' : 'polite');
+        setPersona(r.profile.persona || 'default');
+        setPersonaCustom(r.profile.personaCustom || '');
+        setTheme(r.profile.theme || 'light');
+        setAccentMode(r.profile.accentMode || 'purple');
+        setAccentColor(r.profile.accentColor || '#8B72F8');
         setProvider(r.active.provider);
         setModel(r.active.model);
       })
@@ -174,12 +211,61 @@ export default function SettingsPage() {
   };
 
   const saveProfile = async () => {
-    await api.put('/api/settings/profile', { nickname, agentName, character, tone });
+    await api.put('/api/settings/profile', {
+      nickname,
+      agentName,
+      character,
+      tone,
+      persona,
+      personaCustom,
+      theme,
+      accentMode,
+      accentColor,
+    });
+    applyTheme({ theme, accentMode, accentColor, character });
     setSavedFlash('저장했습니다');
     window.setTimeout(() => setSavedFlash(''), 1800);
     await load();
     await refreshProfile();
   };
+
+  /**
+   * 테마는 고르는 즉시 화면에 적용하고 서버에도 저장한다.
+   * (새로고침·다른 기기에서도 그대로, 저장 버튼을 잊을 일 없이)
+   */
+  const applyAndSaveTheme = (next: { theme?: ThemeMode; accentMode?: AccentMode; accentColor?: string }) => {
+    const themeNext = next.theme ?? theme;
+    const modeNext = next.accentMode ?? accentMode;
+    const colorNext = next.accentColor ?? accentColor;
+    setTheme(themeNext);
+    setAccentMode(modeNext);
+    setAccentColor(colorNext);
+    applyTheme({ theme: themeNext, accentMode: modeNext, accentColor: colorNext, character });
+    if (themeSaveTimer.current) window.clearTimeout(themeSaveTimer.current);
+    // 색상 피커는 움직일 때마다 값이 바뀌므로 잠깐 모아서 한 번만 저장한다.
+    themeSaveTimer.current = window.setTimeout(() => {
+      void api
+        .put('/api/settings/profile', {
+          nickname,
+          agentName,
+          character,
+          tone,
+          persona,
+          personaCustom,
+          theme: themeNext,
+          accentMode: modeNext,
+          accentColor: colorNext,
+        })
+        .then(() => refreshProfile())
+        .catch(() => undefined);
+    }, 400);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (themeSaveTimer.current) window.clearTimeout(themeSaveTimer.current);
+    };
+  }, []);
 
   const saveKey = async () => {
     setKeyBusy(true);
@@ -217,6 +303,24 @@ export default function SettingsPage() {
 
   const selected = data?.providers.find((p) => p.id === provider);
   const callName = nickname.trim() || '주인님';
+  const characterAccent = CHARACTER_ACCENTS[character]?.color || '#8B72F8';
+  const previewAccent = accentMode === 'character' ? characterAccent : accentMode === 'custom' ? normalizeHex(accentColor) : '#8B72F8';
+  const accentLabel =
+    accentMode === 'character'
+      ? `캐릭터 맞춤 · ${CHARACTER_ACCENTS[character]?.name || '피몽'} ${CHARACTER_ACCENTS[character]?.hint || ''}`
+      : accentMode === 'custom'
+        ? `직접 고른 색 ${normalizeHex(accentColor)}`
+        : '기본 퍼플';
+  const themeChoices: { id: ThemeMode; label: string; hint: string; icon: typeof Sun }[] = [
+    { id: 'light', label: '라이트', hint: '밝은 화면', icon: Sun },
+    { id: 'dark', label: '다크', hint: '어두운 화면', icon: Moon },
+    { id: 'system', label: '기기 설정 따름', hint: '아이폰 설정에 맞춤', icon: Monitor },
+  ];
+  const accentChoices: { id: AccentMode; label: string; hint: string }[] = [
+    { id: 'character', label: '캐릭터 맞춤', hint: `${CHARACTER_ACCENTS[character]?.name || '피몽'} 컬러` },
+    { id: 'purple', label: '기본 퍼플', hint: '포몽 브랜드' },
+    { id: 'custom', label: '직접 고르기', hint: '원하는 색으로' },
+  ];
   const mascots = data?.mascots || [
     { id: 'poding', name: '포딩' },
     { id: 'pimong', name: '피몽' },
@@ -319,6 +423,60 @@ export default function SettingsPage() {
             </div>
           </div>
 
+          <div className="mt-5">
+            <div className="flex items-baseline justify-between">
+              <span className="text-[13px] font-semibold text-[#5B5866]">AI 성격·말투 프리셋</span>
+              <span className="text-[11.5px] text-[#B4B1C2]">말투 위에 얹는 성격의 결</span>
+            </div>
+            <div className="mt-2.5 grid gap-2 sm:grid-cols-2">
+              {PERSONA_OPTIONS.map((opt) => {
+                const active = persona === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    onClick={() => setPersona(opt.id)}
+                    className={`rounded-2xl border-[1.5px] px-4 py-3 text-left transition ${
+                      active ? 'border-[#C9B8FF] bg-[#F8F5FF]' : 'border-[#EFEDF6] bg-white hover:bg-[#FBFAFF]'
+                    }`}
+                    aria-pressed={active}
+                  >
+                    <span className="flex items-center gap-2">
+                      <span className="text-[15px] leading-none">{opt.emoji}</span>
+                      <span className={`text-[14px] font-semibold ${active ? 'text-[#7C63F6]' : 'text-[#4B4856]'}`}>
+                        {opt.label}
+                      </span>
+                      <span className="text-[11.5px] font-medium text-[#B4B1C2]">{opt.hint}</span>
+                      {active ? (
+                        <span className="ml-auto flex h-5 w-5 items-center justify-center rounded-full bg-[#8B72F8] text-white">
+                          <Check size={12} strokeWidth={4} />
+                        </span>
+                      ) : null}
+                    </span>
+                    <span className="mt-1.5 block text-[11.5px] leading-relaxed text-[#8A8A9A]">{opt.summary}</span>
+                  </button>
+                );
+              })}
+            </div>
+            {persona === 'custom' ? (
+              <label className="mt-2.5 block">
+                <span className="mb-1.5 block text-[12.5px] font-semibold text-[#5B5866]">원하는 성격 한 줄</span>
+                <input
+                  className="pa-input"
+                  value={personaCustom}
+                  maxLength={60}
+                  placeholder="예: 츤데레지만 챙길 건 다 챙기는 비서"
+                  onChange={(e) => setPersonaCustom(e.target.value)}
+                />
+              </label>
+            ) : null}
+            <div className="mt-2.5 rounded-2xl bg-[#FAF9FD] px-3.5 py-2.5">
+              <span className="text-[11px] font-semibold text-[#B4B1C2]">미리보기</span>
+              <p className="mt-1 whitespace-pre-line text-[12.5px] leading-relaxed text-[#5B5866]">
+                {personaExample(persona, { callName, agentName, polite: tone === 'polite', custom: personaCustom })}
+              </p>
+            </div>
+          </div>
+
           <div className="mt-4 flex items-center gap-3">
             <button className="pa-btn-primary px-5 py-2.5" onClick={saveProfile}>
               저장
@@ -328,6 +486,129 @@ export default function SettingsPage() {
                 <Check size={14} /> {savedFlash}
               </span>
             ) : null}
+          </div>
+        </section>
+
+        {/* 테마 (v0.5.6) */}
+        <section className="mt-4 rounded-[24px] bg-white p-5 shadow-card ring-1 ring-[#F6F4FB] lg:p-6">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="text-[16px] font-bold text-[#1F1D2B]">화면 테마</h2>
+              <p className="mt-1 text-[13px] text-pomong-sub">고르는 즉시 적용되고, 새로고침해도 그대로예요</p>
+            </div>
+            <span className="flex shrink-0 items-center gap-1 rounded-full bg-[#F3EEFF] px-3 py-1.5 text-[11.5px] font-semibold text-[#7C63F6]">
+              <Palette size={12} />
+              {theme === 'system' ? '기기 설정 따름' : theme === 'dark' ? '다크' : '라이트'}
+            </span>
+          </div>
+
+          <div className="mt-4 grid grid-cols-3 gap-2">
+            {themeChoices.map((opt) => {
+              const active = theme === opt.id;
+              const Icon = opt.icon;
+              return (
+                <button
+                  key={opt.id}
+                  onClick={() => applyAndSaveTheme({ theme: opt.id })}
+                  className={`flex flex-col items-center gap-1.5 rounded-2xl border-[1.5px] px-2 py-3 transition ${
+                    active ? 'border-[#C9B8FF] bg-[#F8F5FF] text-[#7C63F6]' : 'border-[#EFEDF6] bg-white text-[#5B5866]'
+                  }`}
+                  aria-pressed={active}
+                >
+                  <Icon size={19} />
+                  <span className="text-[12.5px] font-semibold leading-none">{opt.label}</span>
+                  <span className={`text-[10.5px] ${active ? 'text-[#8B72F6]' : 'text-[#B4B1C2]'}`}>{opt.hint}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="mt-5">
+            <div className="flex items-baseline justify-between">
+              <span className="text-[13px] font-semibold text-[#5B5866]">포인트 컬러</span>
+              <span className="text-[11.5px] text-[#B4B1C2]">버튼 · 활성 탭 · 배지 · 내 말풍선</span>
+            </div>
+            <div className="mt-2.5 grid gap-2 sm:grid-cols-3">
+              {accentChoices.map((opt) => {
+                const active = accentMode === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    onClick={() => applyAndSaveTheme({ accentMode: opt.id })}
+                    className={`flex items-center gap-2.5 rounded-2xl border-[1.5px] px-3.5 py-2.5 text-left transition ${
+                      active ? 'border-[#C9B8FF] bg-[#F8F5FF]' : 'border-[#EFEDF6] bg-white hover:bg-[#FBFAFF]'
+                    }`}
+                    aria-pressed={active}
+                  >
+                    <span
+                      className="h-6 w-6 shrink-0 rounded-full ring-2 ring-white"
+                      style={{
+                        background:
+                          opt.id === 'character'
+                            ? characterAccent
+                            : opt.id === 'custom'
+                              ? normalizeHex(accentColor)
+                              : '#8B72F8',
+                      }}
+                    />
+                    <span className="min-w-0">
+                      <span className={`block text-[13px] font-semibold ${active ? 'text-[#7C63F6]' : 'text-[#4B4856]'}`}>
+                        {opt.label}
+                      </span>
+                      <span className="block truncate text-[10.5px] text-[#B4B1C2]">{opt.hint}</span>
+                    </span>
+                    {active ? (
+                      <span className="ml-auto flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-[#8B72F8] text-white">
+                        <Check size={10} strokeWidth={4} />
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+
+            {accentMode === 'custom' ? (
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                {ACCENT_CHOICES.map((choice) => {
+                  const active = normalizeHex(accentColor) === choice.color;
+                  return (
+                    <button
+                      key={choice.color}
+                      onClick={() => applyAndSaveTheme({ accentColor: choice.color })}
+                      className={`h-8 w-8 rounded-full ring-2 transition ${active ? 'ring-[#7C63F6]' : 'ring-transparent'}`}
+                      style={{ background: choice.color }}
+                      title={choice.name}
+                      aria-label={choice.name}
+                      aria-pressed={active}
+                    />
+                  );
+                })}
+                <label className="ml-1 flex items-center gap-2 rounded-full border border-[#E9E7F2] px-3 py-1.5 text-[11.5px] font-semibold text-[#5B5866]">
+                  <input
+                    type="color"
+                    className="h-6 w-6 cursor-pointer rounded border-0 bg-transparent p-0"
+                    value={normalizeHex(accentColor)}
+                    onChange={(e) => applyAndSaveTheme({ accentColor: e.target.value })}
+                    aria-label="직접 색 고르기"
+                  />
+                  직접 고르기
+                </label>
+              </div>
+            ) : null}
+
+            <div className="mt-3 flex items-center gap-2.5 rounded-2xl bg-[#FAF9FD] px-3.5 py-2.5">
+              <span className="h-6 w-6 shrink-0 rounded-full" style={{ background: previewAccent }} />
+              <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-[#5B5866]">{accentLabel}</span>
+              <span
+                className="inline-flex items-center gap-1 rounded-full px-3 py-1 text-[11px] font-bold"
+                style={{ background: 'var(--accent-grad)', color: 'var(--accent-contrast)' }}
+              >
+                <Check size={10} strokeWidth={4} /> 저장됨
+              </span>
+            </div>
+            <p className="mt-2 text-[11.5px] leading-[1.6] text-[#B4B1C2]">
+              캐릭터 맞춤은 지금 고른 마스코트의 색을 그대로 따라가요. 마스코트를 바꾸면 포인트 컬러도 함께 바뀝니다.
+            </p>
           </div>
         </section>
 
@@ -517,7 +798,7 @@ export default function SettingsPage() {
           <ul className="mt-3 divide-y divide-[#F6F4FB] text-[13.5px]">
             <li className="flex items-center justify-between py-3">
               <span className="text-pomong-sub">버전</span>
-              <span className="font-semibold text-[#3B3947]">v{data?.version || '0.5.5'}</span>
+              <span className="font-semibold text-[#3B3947]">v{data?.version || '0.5.6'}</span>
             </li>
             <li className="flex items-center justify-between py-3">
               <span className="text-pomong-sub">데이터 보관</span>
@@ -536,7 +817,7 @@ export default function SettingsPage() {
         </section>
 
         <p className="mt-6 flex items-center justify-center gap-1.5 text-[12px] text-[#B4B1C2]">
-          <Sparkles size={12} /> Pomong Agent v{data?.version || '0.5.5'} · Pomong Labs
+          <Sparkles size={12} /> Pomong Agent v{data?.version || '0.5.6'} · Pomong Labs
         </p>
       </div>
     </div>
