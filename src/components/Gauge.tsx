@@ -17,7 +17,7 @@ export default function Gauge({
   thickness = 10,
   from,
   to,
-  track = '#F1EFFA',
+  track = 'var(--pa-gauge-track)',
   className = '',
   children,
 }: GaugeProps) {

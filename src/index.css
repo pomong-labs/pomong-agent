@@ -24,6 +24,7 @@
   --pa-mute: #8a8a9a;
   --pa-mute-2: #b7b4c6;
   --pa-knob: #ffffff;
+  --pa-gauge-track: #f1effa;
   --pa-shadow: 0 10px 30px rgba(90, 80, 160, 0.07);
 
   /* 테마 JS가 채우기 전 첫 페인트용 기본값 (포몽 퍼플) */
@@ -54,6 +55,7 @@ html.dark {
   --pa-mute: #a9a4ba;
   --pa-mute-2: #7d7891;
   --pa-knob: #f4f1ff;
+  --pa-gauge-track: #2a2636;
   --pa-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
 }
 
