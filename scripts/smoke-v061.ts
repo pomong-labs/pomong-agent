@@ -108,6 +108,12 @@ async function main(): Promise<void> {
     '전송 버튼은 막지 않는다',
     evaluateBrowserAction('browser_click', { text: '전송' }).confirm === false
   );
+  const navigationLabels = ['게시판', '게시물 보기', '리뷰 탭', '등록증 보기', '마이페이지'];
+  check(
+    '단순 이동 버튼(게시판·게시물·리뷰 탭)은 막지 않는다',
+    navigationLabels.every((text) => evaluateBrowserAction('browser_click', { text }).confirm === false),
+    navigationLabels.join(', ')
+  );
 
   /* 4) 금고 잠금 + 계정 있음 → PIN 카드 1장만 --------------------------- */
   const vault = await import('../server/vault');

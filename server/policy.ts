@@ -164,10 +164,13 @@ export function evaluateUrl(rawUrl: string): PolicyVerdict {
 /** 결제·게시·삭제처럼 되돌릴 수 없는 조작인지 */
 const PAYMENT_WORDS = /(결제|구매|송금|후원|입금|출금|주문\s*완료|pay\s*now|place\s*order|buy\s*now|checkout|purchase|donate|transfer)/i;
 /**
- * 게시·댓글·리뷰로 나가는 버튼 (v0.6.1: '댓글 등록'·'등록'처럼 실제 화면에 많은 말을 보강했다.
- * 영어는 단어 경계를 써서 postcode 같은 단어를 잘못 잡지 않는다)
+ * 게시·댓글·리뷰로 나가는 버튼.
+ * v0.6.1: 화면 라벨을 직접 검사하게 되면서 '게시판'·'게시물 보기'·'리뷰 탭' 같은
+ * 단순 이동 버튼을 잘못 막지 않도록 '게시·등록' 뒤에 오는 말을 구분한다.
+ * (영어는 단어 경계를 써서 postcode 같은 단어를 잡지 않는다)
  */
-const PUBLISH_WORDS = /(게시|등록|올리기|댓글|리뷰|후기|\b(post|publish|tweet|comment|submit)\b)/i;
+const PUBLISH_WORDS =
+  /(게시(?!판|물)|등록(?!증)|올리기|댓글\s*(등록|작성|쓰기|달기|보내기|남기기)|리뷰\s*(등록|작성|쓰기)|후기\s*(등록|작성|쓰기)|\b(post|publish|tweet|comment|submit)\b)/i;
 const DESTRUCTIVE_WORDS = /(삭제|탈퇴|해지|계정\s*변경|비밀번호\s*변경|delete|remove|unsubscribe|cancel\s*account)/i;
 
 export interface ActionVerdict {
