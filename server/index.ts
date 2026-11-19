@@ -49,6 +49,7 @@ import * as vaultUnlock from './vault-unlock';
 import * as chatSessions from './sessions';
 import * as memoryExtract from './memory-extract';
 import * as attachments from './attachments';
+import * as filesBox from './files';
 import { postAutomationMessage } from './automation-chat';
 import type { TaskRunView } from './task-runs';
 
@@ -2141,6 +2142,50 @@ app.post('/api/browser/sessions/:id/resume', requireAuth, async (req, res) => {
 
 app.get('/api/browser/sessions/:id/actions', requireAuth, (req, res) => {
   res.json({ ok: true, actions: browser.listActions(req.params.id, 40) });
+});
+
+/* ------------------------- 파일함 (v0.5.5) ------------------------- */
+
+/** 받은 파일 · 결과물 목록 (채팅 첨부 + 브라우저 저장 + AI 결과물) */
+app.get('/api/files', requireAuth, (req, res) => {
+  const list = filesBox.listFiles({
+    q: String(req.query.q || ''),
+    kind: String(req.query.kind || ''),
+    source: String(req.query.source || ''),
+    limit: Number(req.query.limit || 300),
+  });
+  res.json({ ok: true, files: list, totals: filesBox.totals(list) });
+});
+
+/** 파일 내려받기. 사진은 기본으로 화면에 보여 주고(?download=1 이면 내려받기) */
+app.get('/api/files/:id/download', requireAuth, (req, res) => {
+  const found = filesBox.resolveFile(req.params.id);
+  if (!found) {
+    res.status(404).json({ ok: false, code: 'not_found', message: '파일을 찾을 수 없습니다.' });
+    return;
+  }
+  if (!fs.existsSync(found.absPath)) {
+    res.status(410).json({ ok: false, code: 'file_gone', message: '파일이 서버에 남아 있지 않습니다.' });
+    return;
+  }
+  const download = String(req.query.download || '') === '1';
+  const inline = !download && found.item.kind === 'image';
+  res.setHeader('Content-Type', found.item.mime || 'application/octet-stream');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cache-Control', 'private, max-age=3600');
+  // 경로·이름이 헤더로 새지 않게 정리한 파일명만 쓴다.
+  res.setHeader('Content-Disposition', filesBox.contentDisposition(found.item.name, inline));
+  res.sendFile(found.absPath);
+});
+
+app.delete('/api/files/:id', requireAuth, (req, res) => {
+  const result = filesBox.deleteFile(req.params.id);
+  if (!result.ok) {
+    res.status(404).json({ ok: false, code: 'not_found', message: '파일을 찾을 수 없습니다.' });
+    return;
+  }
+  publish({ type: 'files', title: '파일 삭제', body: '', data: { id: req.params.id } });
+  res.json({ ok: true, removed: result.removed });
 });
 
 /* ---------------------------- policies --------------------------- */

@@ -8,6 +8,7 @@ import Automation from './pages/Automation';
 import Browser from './pages/Browser';
 import Chat from './pages/Chat';
 import Login from './pages/Login';
+import FilesPage from './pages/Files';
 import MemoryPage from './pages/Memory';
 import Monitor from './pages/Monitor';
 import More from './pages/More';
@@ -77,6 +78,7 @@ export default function App() {
             <Route path="services" element={<Services />} />
             <Route path="tools" element={<Tools />} />
             <Route path="settings" element={<SettingsPage />} />
+            <Route path="files" element={<FilesPage />} />
             <Route path="more" element={<More />} />
           </Route>
         </Route>

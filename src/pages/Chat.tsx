@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Check,
@@ -27,6 +27,7 @@ import {
   Sparkles,
   Square,
   Trash2,
+  Volume2,
   X,
   XCircle,
 } from 'lucide-react';
@@ -36,6 +37,17 @@ import ModelBar from '../components/ModelBar';
 import { StatsCard, TasksCard } from '../components/Cards';
 import { api, type ChatAttachment, type ChatMessage, type LoginRequest, type ChatSession, type TaskRun, type VaultUnlockRequest } from '../lib/api';
 import { formatClock } from '../lib/format';
+import {
+  dictationErrorMessage,
+  dictationSupported,
+  dictationUnsupportedMessage,
+  getSpeakingKey,
+  startDictation,
+  stopSpeech,
+  subscribeSpeech,
+  toggleSpeech,
+  type DictationHandle,
+} from '../lib/speech';
 import { useAppStore } from '../lib/store';
 
 function renderInline(text: string, keyPrefix: string) {
@@ -83,6 +95,7 @@ export default function Chat() {
   const {
     messages,
     sending,
+    recovering,
     error,
     aiReady,
     send,
@@ -163,6 +176,74 @@ export default function Chat() {
 
   const removePending = (id: string) => setPending((prev) => prev.filter((p) => p.id !== id));
 
+  /* ---------------- v0.5.5: 음성 입력 · 답변 읽어주기 ---------------- */
+  const [listening, setListening] = useState(false);
+  const [voiceHint, setVoiceHint] = useState('');
+  const dictationRef = useRef<DictationHandle | null>(null);
+  const dictationBaseRef = useRef('');
+  const voiceHintTimer = useRef<number | null>(null);
+
+  const flashVoiceHint = useCallback((message: string) => {
+    if (!message) return;
+    setVoiceHint(message);
+    if (voiceHintTimer.current) window.clearTimeout(voiceHintTimer.current);
+    voiceHintTimer.current = window.setTimeout(() => setVoiceHint(''), 6500);
+  }, []);
+
+  const stopDictation = useCallback(() => {
+    dictationRef.current?.stop();
+    dictationRef.current = null;
+    setListening(false);
+  }, []);
+
+  const toggleDictation = useCallback(() => {
+    if (dictationRef.current) {
+      stopDictation();
+      return;
+    }
+    if (!dictationSupported()) {
+      flashVoiceHint(dictationUnsupportedMessage());
+      return;
+    }
+    dictationBaseRef.current = draft.trim();
+    const handle = startDictation({
+      onText: (finalText, interim) => {
+        const spoken = [finalText, interim].filter(Boolean).join(' ');
+        const base = dictationBaseRef.current;
+        setDraft([base, spoken].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim());
+      },
+      onError: (code, message) => {
+        if (code === 'not-allowed' || code === 'service-not-allowed' || code === 'audio-capture') {
+          dictationRef.current = null;
+          setListening(false);
+        }
+        flashVoiceHint(message || dictationErrorMessage(code));
+      },
+      onEnd: () => {
+        dictationRef.current = null;
+        setListening(false);
+      },
+    });
+    if (!handle) {
+      flashVoiceHint(dictationUnsupportedMessage());
+      return;
+    }
+    dictationRef.current = handle;
+    setListening(true);
+    flashVoiceHint('듣고 있어요. 말씀을 마치면 마이크를 한 번 더 눌러 주세요.');
+  }, [draft, flashVoiceHint, stopDictation, setDraft]);
+
+  // 화면을 떠날 때 마이크·읽어주기를 정리한다.
+  useEffect(() => {
+    return () => {
+      dictationRef.current?.abort();
+      dictationRef.current = null;
+      if (voiceHintTimer.current) window.clearTimeout(voiceHintTimer.current);
+      stopSpeech();
+    };
+  }, []);
+
+
   /** 작업 카드는 실제 도구가 한 번이라도 돈 경우에만 보여 준다(빈 0단계 카드 숨김). */
   const hasWork = (run: TaskRun | null | undefined): run is TaskRun =>
     Boolean(run && ((run.items?.length || 0) > 0 || run.steps > 0));
@@ -205,6 +286,7 @@ export default function Chat() {
 
   const submit = () => {
     if ((!draft.trim() && !pending.length) || sending || uploading) return;
+    if (dictationRef.current) stopDictation();
     const ids = pending.map((p) => p.id);
     void send(draft, ids);
     setPending([]);
@@ -223,7 +305,11 @@ export default function Chat() {
     }
   };
 
-  const pendingLabel = visibleState === 'working' ? '포몽이 작업 중…' : '포몽이 생각 중…';
+  const pendingLabel = recovering
+    ? '연결을 다시 잇는 중…'
+    : visibleState === 'working'
+      ? '포몽이 작업 중…'
+      : '포몽이 생각 중…';
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -334,6 +420,9 @@ export default function Chat() {
                   <Dot delay="300ms" />
                 </span>
                 <span className="text-[12.5px] font-medium text-[#9B98AB]">{pendingLabel}</span>
+                {recovering ? (
+                  <span className="hidden text-[11px] font-medium text-[#C0BCCD] sm:block">앱을 나갔다 와도 답장은 이어서 도착해요</span>
+                ) : null}
               </div>
             </div>
             </div>
@@ -386,11 +475,18 @@ export default function Chat() {
                 className="pa-scroll max-h-[140px] min-h-[44px] flex-1 resize-none bg-transparent px-2 py-2.5 text-[16px] leading-relaxed placeholder:text-[#B7B4C6] focus:outline-none"
               />
               <button
-                className="mb-0.5 hidden h-11 w-11 shrink-0 items-center justify-center rounded-full border border-[#EFEDF6] text-[#8A8A9A] sm:flex"
-                title="음성 입력 (준비 중)"
-                aria-label="음성"
+                className={`relative mb-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full border transition active:scale-95 ${
+                  listening
+                    ? 'border-[#FFD3E2] bg-[#FFEFF3] text-[#E2568B] shadow-[0_0_0_4px_rgba(226,86,139,0.12)]'
+                    : 'border-[#EFEDF6] text-[#8A8A9A] hover:bg-[#FAF9FF]'
+                }`}
+                onClick={toggleDictation}
+                title={listening ? '음성 입력 멈추기' : '음성으로 말하기'}
+                aria-label={listening ? '음성 입력 멈추기' : '음성 입력'}
+                aria-pressed={listening}
               >
-                <Mic size={18} />
+                {listening ? <span className="absolute h-11 w-11 animate-ping rounded-full bg-[#FFE0EA]/60" /> : null}
+                <Mic size={18} className={listening ? 'relative animate-pulse' : 'relative'} />
               </button>
               {sending ? (
                 <button
@@ -415,7 +511,20 @@ export default function Chat() {
               )}
             </div>
           </div>
-          {!keyboardOpen ? (
+          {listening || voiceHint ? (
+            <p
+              className={`mt-1.5 flex items-start justify-center gap-1.5 rounded-xl px-2 py-1 text-center text-[11.5px] font-medium ${
+                listening ? 'text-[#E2568B]' : 'text-[#8A82B8]'
+              }`}
+              role="status"
+              aria-live="polite"
+            >
+              {listening ? <span className="mt-1 h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[#E2568B]" /> : null}
+              <span className="min-w-0">{listening ? '듣고 있어요 · 말씀을 마치면 마이크를 한 번 더 누르세요' : null}</span>
+              {voiceHint ? <span className={listening ? 'hidden' : 'min-w-0'}>{voiceHint}</span> : null}
+            </p>
+          ) : null}
+          {!keyboardOpen && !listening && !voiceHint ? (
             <p className="mt-2 hidden text-center text-[11.5px] text-[#C0BCCD] lg:block">
               Enter 전송 / Shift+Enter 줄바꿈 · 사진·파일도 붙여서 보낼 수 있어요
             </p>
@@ -512,6 +621,9 @@ function AssistantBubble({
   const { models } = useAppStore();
   // v0.5.4: 답변 복사 (한 번 누르면 원문 그대로 클립보드로)
   const [copied, setCopied] = useState(false);
+  // v0.5.5: 답변 읽어주기 — 다른 말풍선을 읽는 중이면 자동으로 멈추고 이 답변을 읽는다.
+  const speechKey = `msg-${message.id}`;
+  const speaking = useSyncExternalStore(subscribeSpeech, getSpeakingKey, () => null) === speechKey;
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(message.content);
@@ -579,15 +691,31 @@ function AssistantBubble({
               도구 {message.meta.tools.length}회
             </span>
           ) : null}
-          <button
-            className="ml-auto flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-medium text-[#B4B1C2] transition hover:bg-[#F7F5FF] hover:text-[#7C63F6]"
-            onClick={() => void copy()}
-            aria-label="답변 복사"
-            title="답변 복사"
-          >
-            {copied ? <Check size={11} /> : <Copy size={11} />}
-            {copied ? '복사됨' : '복사'}
-          </button>
+          <div className="ml-auto flex items-center gap-0.5">
+            <button
+              className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-medium transition ${
+                speaking
+                  ? 'bg-[#F1ECFF] text-[#7C63F6]'
+                  : 'text-[#B4B1C2] hover:bg-[#F7F5FF] hover:text-[#7C63F6]'
+              }`}
+              onClick={() => toggleSpeech(speechKey, message.content)}
+              aria-label={speaking ? '읽어주기 멈춤' : '답변 읽어주기'}
+              title={speaking ? '읽어주기 멈춤' : '답변 읽어주기'}
+              aria-pressed={speaking}
+            >
+              {speaking ? <Square size={10} fill="currentColor" strokeWidth={0} /> : <Volume2 size={11} />}
+              {speaking ? '멈춤' : '듣기'}
+            </button>
+            <button
+              className="flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-medium text-[#B4B1C2] transition hover:bg-[#F7F5FF] hover:text-[#7C63F6]"
+              onClick={() => void copy()}
+              aria-label="답변 복사"
+              title="답변 복사"
+            >
+              {copied ? <Check size={11} /> : <Copy size={11} />}
+              {copied ? '복사됨' : '복사'}
+            </button>
+          </div>
           <span className="sr-only">{agentName}</span>
         </div>
         </div>

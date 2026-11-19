@@ -10,6 +10,7 @@ export const ko = {
     tasks: '할 일',
     automation: '자동화',
     browser: '브라우저',
+    files: '파일함',
     settings: '설정',
     more: '더보기',
   },

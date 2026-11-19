@@ -10,6 +10,7 @@ import {
   type TaskRun,
   type VaultUnlockRequest,
 } from './api';
+import { decideTurnOutcome, isBusyState, isNetworkError } from './network';
 
 export type AgentState = 'idle' | 'thinking' | 'working' | 'responding' | 'error';
 
@@ -41,6 +42,8 @@ interface AppStoreValue {
   /** 지난 대화에 붙은 작업 카드 */
   taskRuns: TaskRun[];
   sending: boolean;
+  /** 서버 작업이 이어지는 중이라 연결을 다시 붙여 지켜보는 상태 (v0.5.5) */
+  recovering: boolean;
   error: string;
   aiReady: boolean;
   /** 채팅에 떠 있는 로그인 카드 (금고에 계정이 없을 때) */
@@ -196,6 +199,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   const [vaultState, setVaultState] = useState<{ configured: boolean; unlocked: boolean }>({ configured: false, unlocked: false });
   const [messagesLoaded, setMessagesLoaded] = useState(false);
   const [sending, setSending] = useState(false);
+  const [recovering, setRecovering] = useState(false);
   const [error, setError] = useState('');
   const [aiReady, setAiReady] = useState(true);
   const [draft, setDraft] = useState('');
@@ -203,6 +207,12 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   const sendingRef = useRef(false);
   const messagesRef = useRef<ChatMessage[]>([]);
   messagesRef.current = messages;
+  /** messagesLoaded의 최신값(이벤트 핸들러에서 읽는다) */
+  const messagesLoadedRef = useRef(false);
+  /** 연결 복구 루프 세대 번호 — 값이 바뀌면 진행 중이던 복구를 버린다 */
+  const recoveryTokenRef = useRef(0);
+  const reconcilingRef = useRef(false);
+  const lastReconcileRef = useRef(0);
 
   const refreshModels = useCallback(async () => {
     try {
@@ -288,6 +298,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       /* not signed in yet */
     } finally {
       setMessagesLoaded(true);
+      messagesLoadedRef.current = true;
     }
   }, []);
 
@@ -299,6 +310,189 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       /* ignore */
     }
   }, []);
+
+  /* ------------------------------------------------------------------ */
+  /* v0.5.5: 아이폰 백그라운드 끊김(Load failed)에서 이어 받기             */
+  /* iOS가 fetch를 끊어도 서버는 계속 그 턴을 돌린다. 그래서 화면은        */
+  /* 오류 카드를 띄우지 않고, 서버가 작업 중이면 진행 UI를 유지한 채        */
+  /* 짧은 폴링(SSE + 1.8초)으로 완료를 기다렸다가 답장을 그대로 붙인다.     */
+  /* ------------------------------------------------------------------ */
+
+  const fetchSnapshot = useCallback(async (session: string) => {
+    try {
+      const r = await api.get<{ messages: ChatMessage[]; taskRuns?: TaskRun[] }>(
+        `/api/chat/messages?session=${encodeURIComponent(session)}`
+      );
+      return { messages: r.messages || [], taskRuns: r.taskRuns || [] };
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const applySnapshot = useCallback(
+    (session: string, snapshot: { messages: ChatMessage[]; taskRuns: TaskRun[] }) => {
+      if (session !== activeSessionRef.current) return;
+      setMessages((prev) => {
+        const sameLength = prev.length === snapshot.messages.length;
+        const sameLast = prev[prev.length - 1]?.id === snapshot.messages[snapshot.messages.length - 1]?.id;
+        return sameLength && sameLast ? prev : snapshot.messages;
+      });
+      setTaskRuns(snapshot.taskRuns || []);
+      messagesLoadedRef.current = true;
+      setMessagesLoaded(true);
+    },
+    []
+  );
+
+  /** 연결이 끊긴 뒤 서버 작업을 지켜보고, 끝나면 답장을 화면에 붙인다. */
+  const watchServerTurn = useCallback(
+    async (input: { session: string; sinceId: number; prompt?: string }) => {
+      const session = input.session;
+      if (session !== activeSessionRef.current) return;
+      const token = ++recoveryTokenRef.current;
+      setRecovering(true);
+      setSending(true);
+      sendingRef.current = true;
+      setError('');
+
+      const finish = () => {
+        if (token !== recoveryTokenRef.current) return;
+        sendingRef.current = false;
+        setSending(false);
+        setLiveTask(null);
+        setRecovering(false);
+        void refreshSessions();
+      };
+      const stillMine = () => token === recoveryTokenRef.current && session === activeSessionRef.current;
+      const freshReply = (snapshot: { messages: ChatMessage[] }) =>
+        snapshot.messages.some((m) => m.role === 'assistant' && m.id > input.sinceId);
+
+      const deadline = Date.now() + 8 * 60 * 1000;
+      while (stillMine() && Date.now() < deadline) {
+        const snapshot = await fetchSnapshot(session);
+        if (!stillMine()) return;
+        if (snapshot) {
+          if (freshReply(snapshot)) {
+            applySnapshot(session, snapshot);
+            setError('');
+            finish();
+            return;
+          }
+          // 내가 보낸 말풍선이 서버에 저장됐으면 임시 말풍선을 실제 것과 바꿔 둔다.
+          applySnapshot(session, snapshot);
+        }
+
+        const running = await api
+          .get<{ running: boolean }>(`/api/chat/running?session=${encodeURIComponent(session)}`)
+          .catch(() => null);
+        if (!stillMine()) return;
+
+        // 진행 중 표시가 방금 끝났거나, 다른 경로(예약 실행·다른 기기)에서 돈 턴일 수 있어 상태도 본다.
+        const status = await api
+          .get<AgentStatus & { ok: true }>('/api/agent/status')
+          .catch(() => null);
+        if (!stillMine()) return;
+        if (status) {
+          setAgent({ state: status.state, label: status.label, detail: status.detail, startedAt: status.startedAt, lastError: status.lastError });
+        }
+
+        const decision = decideTurnOutcome({
+          freshReply: false,
+          running: Boolean(running?.running),
+          busy: isBusyState(status?.state),
+          agentError: status?.state === 'error' ? status.lastError || 'AI 응답을 받지 못했어요.' : null,
+          delivered: true,
+        });
+        if (decision === 'wait') {
+          await new Promise((resolve) => window.setTimeout(resolve, 1800));
+          continue;
+        }
+        if (decision === 'error' && status?.state === 'error' && status.lastError) {
+          // 진짜 서버 오류(API 키 오류·제공자 오류 등)만 오류 카드로 보여 준다.
+          setError(status.lastError);
+          finish();
+          return;
+        }
+
+        // 답장 저장과 조회가 엇갈렸을 수 있어 한 번 더 확인한다.
+        await new Promise((resolve) => window.setTimeout(resolve, 400));
+        if (!stillMine()) return;
+        const again = await fetchSnapshot(session);
+        if (!stillMine()) return;
+        if (again) {
+          if (freshReply(again)) {
+            applySnapshot(session, again);
+            setError('');
+            finish();
+            return;
+          }
+          applySnapshot(session, again);
+        }
+
+        const ended = decideTurnOutcome({
+          freshReply: false,
+          running: false,
+          busy: false,
+          agentError: status?.state === 'error' ? status.lastError || 'AI 응답을 받지 못했어요.' : null,
+          delivered: Boolean(again && again.messages.some((m) => m.role === 'user' && m.id > input.sinceId)),
+        });
+        if (ended === 'lost') {
+          // 연결이 끊겨 요청 자체가 서버에 닿지 않았다 → 입력한 글을 되살려 준다.
+          if (input.prompt) setDraft(input.prompt);
+          setError('연결이 잠시 끊겨 메시지가 서버에 도착하지 않았어요. 방금 쓴 내용을 되살려 두었으니 다시 보내 주세요.');
+          finish();
+          return;
+        }
+        if (ended === 'error') {
+          setError(status?.lastError || 'AI 응답을 받지 못했어요. 잠시 뒤 다시 시도해 주세요.');
+          finish();
+          return;
+        }
+        // 서버는 처리를 마쳤고 답장은 없는 상태(사용자가 중지했거나 빈 응답) — 조용히 맞춘다.
+        setError('');
+        finish();
+        return;
+      }
+
+      if (!stillMine()) return;
+      // 제한 시간 안에 끝나지 않았다. 화면은 진행 상태로 두지 않고 안내만 남긴다.
+      setError('서버가 아직 이어서 작업하고 있어요. 잠시 뒤 대화를 다시 열면 결과가 나타나요.');
+      finish();
+    },
+    [applySnapshot, fetchSnapshot, refreshSessions]
+  );
+
+  /**
+   * 앱으로 돌아왔을 때·새로 열었을 때 서버와 화면을 맞춘다.
+   * ① 끊긴 동안 저장된 답장이 있으면 불러오고 ② 서버가 아직 그 방을 작업 중이면 진행 UI로 이어 붙는다.
+   */
+  const reconcileActiveSession = useCallback(async () => {
+    if (reconcilingRef.current) return;
+    const session = activeSessionRef.current;
+    if (!session) return;
+    if (Date.now() - lastReconcileRef.current < 2000) return;
+    reconcilingRef.current = true;
+    lastReconcileRef.current = Date.now();
+    try {
+      const snapshot = await fetchSnapshot(session);
+      if (session !== activeSessionRef.current) return;
+      let watermark = 0;
+      if (snapshot) {
+        const localMax = messagesRef.current.reduce((max, m) => Math.max(max, m.id > 0 ? m.id : 0), 0);
+        const serverMax = snapshot.messages.reduce((max, m) => Math.max(max, m.id), 0);
+        watermark = serverMax;
+        if (serverMax > localMax || !messagesLoadedRef.current) applySnapshot(session, snapshot);
+      }
+      if (sendingRef.current) return;
+      const running = await api
+        .get<{ running: boolean }>(`/api/chat/running?session=${encodeURIComponent(session)}`)
+        .catch(() => null);
+      if (!running?.running || session !== activeSessionRef.current || sendingRef.current) return;
+      void watchServerTurn({ session, sinceId: watermark });
+    } finally {
+      reconcilingRef.current = false;
+    }
+  }, [applySnapshot, fetchSnapshot, watchServerTurn]);
 
   const switchSession = useCallback(
     async (id: string) => {
@@ -316,6 +510,8 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       setLoginRequests([]);
       setUnlockRequests([]);
       setError('');
+      recoveryTokenRef.current += 1;
+      setRecovering(false);
       await loadMessages(id);
       void refreshSessions();
     },
@@ -377,6 +573,29 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void loadLoginCards();
   }, [loadLoginCards, activeSession]);
+
+  /**
+   * v0.5.5: 앱으로 돌아오는 순간(visibilitychange·pageshow·online)과 첫 실행 때
+   * 서버와 화면을 맞춘다. 끊긴 사이에 도착한 답장을 불러오고, 서버가 아직
+   * 그 방을 작업 중이면 진행 UI로 이어 붙인다.
+   */
+  useEffect(() => {
+    const onBack = () => {
+      if (document.visibilityState === 'hidden') return;
+      void reconcileActiveSession();
+    };
+    document.addEventListener('visibilitychange', onBack);
+    window.addEventListener('pageshow', onBack);
+    window.addEventListener('online', onBack);
+    // 앱을 새로 열었을 때 서버가 이미 그 방을 돌리고 있는 경우(백그라운드 실행 중)도 이어 붙는다.
+    const boot = window.setTimeout(() => void reconcileActiveSession(), 1200);
+    return () => {
+      window.clearTimeout(boot);
+      document.removeEventListener('visibilitychange', onBack);
+      window.removeEventListener('pageshow', onBack);
+      window.removeEventListener('online', onBack);
+    };
+  }, [reconcileActiveSession]);
 
   /**
    * 서버 이벤트(SSE): 중간 안내 말풍선·최종 답변·작업 카드를 실시간으로 받는다.
@@ -513,6 +732,9 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     setSending(true);
     setError('');
     setDraft('');
+    // 끊겼을 때 "이 요청 전에 있던 마지막 메시지"를 기준점으로 삼아 새 답장을 가려낸다.
+    const watermark = messagesRef.current.reduce((max, m) => Math.max(max, m.id > 0 ? m.id : 0), 0);
+    const session = activeSessionRef.current;
     const optimistic: ChatMessage = {
       id: -Date.now(),
       role: 'user',
@@ -522,10 +744,12 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       createdAt: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, optimistic]);
+    // 네트워크 단절로 복구 모드에 넘겼는지(그때는 finally가 진행 상태를 끄지 않는다)
+    let handedOff = false;
     try {
       const res = await api.post<{ message: ChatMessage; userMessage?: ChatMessage; taskRun?: TaskRun | null }>('/api/chat/messages', {
         message: content,
-        session: activeSessionRef.current,
+        session,
         attachmentIds: ids.length ? ids : undefined,
       });
       // 서버가 저장한 내 메시지(userMessage)로 임시 메시지를 바꾸고, AI 답변을 뒤에 붙인다.
@@ -547,6 +771,14 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         void loadMessages();
         return;
       }
+      // v0.5.5: 아이폰에서 앱을 나가면 iOS가 fetch를 끊는다(Load failed). 서버는 계속 작업 중이므로
+      // 오류 카드를 띄우지 않고, 서버가 끝낼 때까지 진행 UI를 유지하며 답장을 이어 받는다.
+      if (isNetworkError(err)) {
+        handedOff = true;
+        setSending(true);
+        void watchServerTurn({ session, sinceId: watermark, prompt: content });
+        return;
+      }
       if (err instanceof ApiError && err.code === 'no_provider') {
         setAiReady(false);
         await refreshModels();
@@ -555,15 +787,17 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       // 서버에는 내 메시지가 이미 저장돼 있을 수 있으니 실제 저장본으로 맞춘다.
       void loadMessages();
     } finally {
-      sendingRef.current = false;
-      setSending(false);
-      setLiveTask(null);
+      if (!handedOff) {
+        sendingRef.current = false;
+        setSending(false);
+        setLiveTask(null);
+      }
       void refreshSessions();
       window.setTimeout(() => {
         api.get<AgentStatus & { ok: true }>('/api/agent/status').then((r) => setAgent({ state: r.state, label: r.label, detail: r.detail, startedAt: r.startedAt, lastError: r.lastError })).catch(() => undefined);
       }, 600);
     }
-  }, [refreshModels, loadMessages, refreshSessions]);
+  }, [refreshModels, loadMessages, refreshSessions, watchServerTurn]);
 
   const clearChat = useCallback(async () => {
     await api.del(`/api/chat/messages?session=${encodeURIComponent(activeSessionRef.current)}`).catch(() => undefined);
@@ -575,6 +809,9 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   /** AI 답변·브라우저 작업 중지 (■ 중지) */
   const stop = useCallback(async () => {
     const id = activeSessionRef.current;
+    // 복구 대기 중이었다면 그 루프부터 멈춘다(사용자가 중지했으니 더 기다리지 않는다).
+    recoveryTokenRef.current += 1;
+    setRecovering(false);
     await api.post('/api/chat/stop', { session: id }).catch(() => undefined);
     sendingRef.current = false;
     setSending(false);
@@ -645,6 +882,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       liveTask,
       taskRuns,
       sending,
+      recovering,
       error,
       aiReady,
       loginRequests,
@@ -682,6 +920,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       liveTask,
       taskRuns,
       sending,
+      recovering,
       error,
       aiReady,
       loginRequests,

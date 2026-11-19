@@ -431,3 +431,18 @@ export interface PolicyEntry {
   level: 'allow' | 'confirm' | 'block' | 'handover';
   note: string | null;
 }
+
+/** 받은 파일 · 결과물 (v0.5.5) — 채팅 첨부·브라우저 저장·AI 결과물 */
+export interface FileItem {
+  id: string;
+  name: string;
+  mime: string;
+  size: number;
+  kind: 'image' | 'text' | 'pdf' | 'other';
+  source: 'chat' | 'browser' | 'agent';
+  previewUrl: string;
+  downloadUrl: string;
+  createdAt: string;
+  sessionId: string | null;
+  exists: boolean;
+}

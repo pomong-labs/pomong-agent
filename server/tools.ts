@@ -11,6 +11,7 @@ import * as loginRequests from './login-requests';
 import * as vaultUnlock from './vault-unlock';
 import { findServiceInText } from './services';
 import * as attachments from './attachments';
+import * as files from './files';
 import { webSearch, formatSearch } from './web-search';
 import type { ToolSpec } from './providers';
 
@@ -466,6 +467,23 @@ export const TOOL_SPECS: ToolSpec[] = [
       required: ['attachment_id'],
     },
   },
+
+  /* ------------------ v0.5.5: 결과물 파일 저장 ------------------ */
+  {
+    name: 'file_save',
+    description:
+      '네가 만든 결과물(정리한 글·표·코드·메모 등)을 파일로 저장해 앱의 파일함(/files)에 보관한다. 사용자가 "파일로 저장해줘"·"문서로 만들어줘"라고 하거나, 길어서 다시 열어 볼 수 있게 남겨야 할 때 쓴다. 저장한 파일은 파일함에서 보기·내려받기·삭제할 수 있다.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: '파일 이름(확장자 포함, 예: 회의정리.md)' },
+        content: { type: 'string', description: '파일에 담을 텍스트' },
+        content_base64: { type: 'string', description: '이미지·PDF 같은 바이너리를 base64로 넘길 때(content 대신 사용)' },
+        mime: { type: 'string', description: '파일 형식(비우면 확장자로 판단)' },
+      },
+      required: ['name'],
+    },
+  },
 ];
 
 /** 앱 '더보기 → 도구 목록' 화면에 보여줄 도구 설명 */
@@ -572,6 +590,12 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
     label: '로그인 정보 받기',
     summary: '금고에 계정이 없으면 채팅에 로그인 카드를 띄워 아이디·비밀번호를 받고, 저장한 뒤 바로 로그인까지 해요.',
     example: '깃허브 연동하고 싶어',
+  },
+  {
+    name: 'file_save',
+    label: '결과물 파일 저장',
+    summary: 'AI가 만든 글·표·코드를 파일로 저장해 파일함에 보관해요.',
+    example: '오늘 정리한 내용을 파일로 저장해줘',
   },
 ];
 
@@ -1011,6 +1035,35 @@ export async function runTool(name: string, args: Record<string, unknown>, ctx: 
         };
       }
       return { content: `<file name="${row.filename}" (앞부분)>\n${content}\n</file>` };
+    }
+    case 'file_save': {
+      const name = String(args.name || '').trim();
+      if (!name) return { content: '저장할 파일 이름이 필요합니다.' };
+      const base64 = typeof args.content_base64 === 'string' ? args.content_base64.trim() : '';
+      const text = typeof args.content === 'string' ? args.content : '';
+      let data: Buffer;
+      if (base64) {
+        const cleaned = base64.replace(/^data:[^;]+;base64,/, '');
+        data = Buffer.from(cleaned, 'base64');
+      } else if (text.trim()) {
+        data = Buffer.from(text, 'utf8');
+      } else {
+        return { content: '저장할 내용이 비어 있습니다. content에 글을 담아 주세요.' };
+      }
+      try {
+        const saved = files.saveFile({
+          name,
+          data,
+          source: 'agent',
+          mime: args.mime ? String(args.mime) : undefined,
+          sessionId: ctx.session || null,
+        });
+        return {
+          content: `파일함에 저장했습니다: ${saved.name} (${(saved.size / 1024).toFixed(1)}KB). 주소 ${saved.downloadUrl} — 사용자에게 "파일함(/files)에서 다시 열거나 내려받을 수 있어요"라고 알려 주세요.`,
+        };
+      } catch (err) {
+        return { content: `파일을 저장하지 못했습니다: ${err instanceof Error ? err.message : String(err)}` };
+      }
     }
     case 'time_now': {
       const now = new Date();

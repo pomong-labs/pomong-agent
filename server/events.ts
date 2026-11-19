@@ -18,7 +18,8 @@ export type AppEventType =
   | 'login_request'
   | 'vault_unlock_request'
   | 'memory'
-  | 'agent_stop';
+  | 'agent_stop'
+  | 'files';
 
 export interface AppEvent {
   id: number;

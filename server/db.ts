@@ -346,6 +346,26 @@ CREATE TABLE IF NOT EXISTS vault_unlock_requests (
 CREATE INDEX IF NOT EXISTS idx_vault_unlock_requests ON vault_unlock_requests(session_id, created_at DESC);
 `);
 
+/* ------------------------------------------------------------------ */
+/* v0.5.5 schema: 파일함(saved_files)                                    */
+/* 채팅 첨부(chat_attachments)와 별도로 브라우저 화면·AI 결과물을 등록한다. */
+/* ------------------------------------------------------------------ */
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS saved_files (
+  id         TEXT PRIMARY KEY,
+  name       TEXT NOT NULL,
+  mime       TEXT NOT NULL,
+  size       INTEGER NOT NULL,
+  kind       TEXT NOT NULL DEFAULT 'other',
+  source     TEXT NOT NULL DEFAULT 'agent',
+  path       TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_saved_files_path ON saved_files(path);
+CREATE INDEX IF NOT EXISTS idx_saved_files_created ON saved_files(created_at DESC);
+`);
+
 // 예전 대화가 있는데 방 목록이 비어 있으면 'default' 방을 만들어 준다.
 {
   const now = new Date().toISOString();
