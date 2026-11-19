@@ -309,7 +309,7 @@ export const TOOL_SPECS: ToolSpec[] = [
   {
     name: 'vault_request_login',
     description:
-      '금고에 그 서비스 계정이 없을 때, 채팅 화면에 아이디·비밀번호를 받는 로그인 카드를 띄운다. 사용자가 카드에 입력해 저장하면 서버가 금고에 암호화 저장하고 AI에게 후속 턴을 줘 브라우저 로그인을 이어서 한다. 계정이 없을 때 "직접 하세요"로 끝내지 말고 반드시 이 도구를 부른다.',
+      '금고에 그 서비스 계정이 없을 때, 채팅 화면에 아이디·비밀번호를 받는 로그인 카드를 띄운다. 사용자가 카드에 입력해 저장하면 서버가 금고에 암호화 저장하고 AI에게 후속 턴을 줘 브라우저 로그인을 이어간다. 금고에 그 사이트 계정이 **이미 있으면**(잠겼더라도) 카드를 만들지 않고 금고 PIN 해제 카드만 띄운다. 계정이 없을 때 "직접 하세요"로 끝내지 말고 반드시 이 도구를 부른다.',
     parameters: {
       type: 'object',
       properties: {
@@ -339,14 +339,14 @@ export const TOOL_SPECS: ToolSpec[] = [
   {
     name: 'browser_login_with_vault',
     description:
-      '금고 계정으로 로그인을 **한 번에 끝낸다**: 아이디 입력 → 비밀번호 입력 → 로그인 버튼 클릭까지 서버가 직접 한다(값은 AI에게 전달되지 않는다). 로그인 화면에서 vault_find_for_site로 항목 id를 찾았으면 이것만 부르면 된다. ref는 비워 두어도 서버가 화면에서 찾는다. 인증번호(OTP)·캡차가 나오면 그때만 browser_handover를 쓴다.',
+      '금고 계정으로 로그인을 **한 번에 끝낸다**: 아이디 입력 → 비밀번호 입력 → 로그인 버튼 클릭까지 서버가 직접 한다(값은 AI에게 전달되지 않는다). 로그인 화면에서 vault_find_for_site로 항목 id를 찾았으면 이것만 부르면 된다. ref는 비워 두어도 서버가 화면에서 찾는다. 이미 로그인된 사이트면 "이미 로그인된 상태"를 돌려주니 로그인을 반복하지 말고 하던 일을 이어간다. 인증번호(OTP)·캡차가 나오면 그때만 browser_handover를 쓴다.',
     parameters: {
       type: 'object',
       properties: {
         vault_id: { type: 'string', description: '금고 항목 id (vault_find_for_site 결과)' },
-        username_ref: { type: 'string', description: '아이디 입력창 ref (없으면 자동 탐색)' },
-        password_ref: { type: 'string', description: '비밀번호 입력창 ref (없으면 자동 탐색)' },
-        submit_ref: { type: 'string', description: '로그인 버튼 ref (없으면 자동 탐색)' },
+        username_ref: { type: 'string', description: '아이디 입력창 ref (없거나 틀리면 서버가 다시 찾는다)' },
+        password_ref: { type: 'string', description: '비밀번호 입력창 ref (없거나 틀리면 서버가 다시 찾는다)' },
+        submit_ref: { type: 'string', description: '로그인 버튼 ref (없거나 틀리면 서버가 다시 찾는다)' },
         submit: { type: 'boolean', description: '로그인 버튼을 누를지(기본 true)' },
       },
       required: ['vault_id'],
@@ -372,7 +372,7 @@ export const TOOL_SPECS: ToolSpec[] = [
   {
     name: 'browser_click',
     description:
-      '화면의 버튼·링크를 누른다. ref는 browser_snapshot이 준 값(e1, e2 …). 결제·게시·삭제 버튼은 눌 수 없고 사용자에게 넘겨야 한다.',
+      '화면의 버튼·링크를 누른다. ref는 browser_snapshot이 준 값(e1, e2 …). 누르지 못하면 최신 화면을 함께 돌려준다. 결제·구매 버튼과 삭제·계정 변경 버튼은 누를 수 없다. 메시지·문의 답장 전송 버튼은 사용자가 이번에 직접 부탁했을 때만 누를 수 있다.',
     parameters: {
       type: 'object',
       properties: {
@@ -384,13 +384,14 @@ export const TOOL_SPECS: ToolSpec[] = [
   {
     name: 'browser_type',
     description:
-      '입력창에 글자를 넣는다. 비밀번호·카드번호·인증번호 입력은 하드블록이라 할 수 없다(사용자에게 넘긴다).',
+      '입력창에 글자를 넣는다. 비밀번호·카드번호·인증번호 입력은 하드블록이라 할 수 없다(사용자에게 넘긴다). 메시지·답장 입력창에 글을 쓴 뒤 바로 보내려면 pressEnter: true를 함께 넘긴다(누를 버튼이 따로 있으면 그 버튼을 browser_click으로 누른다).',
     parameters: {
       type: 'object',
       properties: {
         ref: { type: 'string', description: '입력창 ref' },
         text: { type: 'string', description: '넣을 내용' },
         submit: { type: 'boolean', description: '입력 후 Enter까지 누를지' },
+        pressEnter: { type: 'boolean', description: 'submit과 같은 뜻(입력 후 Enter). 둘 중 하나만 넘겨도 된다' },
       },
       required: ['ref', 'text'],
     },
@@ -636,12 +637,18 @@ export interface ToolResult {
     loginCardCreated?: boolean;
     /** v0.5.4: 금고 PIN 입력 카드를 채팅에 띄웠다 */
     vaultLockedCardCreated?: boolean;
+    /** v0.6.1: 금고에 그 사이트 계정이 이미 있어 로그인 카드를 만들지 않았다 */
+    vaultHasAccount?: boolean;
+    /** v0.6.1: 사이트가 이미 로그인된 상태였다 */
+    alreadyLoggedIn?: boolean;
   };
 }
 
 export interface ToolContext {
   /** 채팅 세션 id (로그인 카드를 그 세션 화면에 붙인다) */
   session?: string;
+  /** v0.6.1: 이번 턴에 사용자가 실제로 보낸 문장(전송·답장을 직접 부탁했는지 판단) */
+  userRequest?: string;
 }
 
 /**
@@ -792,7 +799,11 @@ async function runToolInner(name: string, args: Record<string, unknown>, ctx: To
     }
     case 'browser_click': {
       try {
-        const result = await browser.click({ ref: args.ref ? String(args.ref) : undefined, text: args.text ? String(args.text) : undefined });
+        const result = await browser.click({
+          ref: args.ref ? String(args.ref) : undefined,
+          text: args.text ? String(args.text) : undefined,
+          userRequest: ctx.userRequest,
+        });
         return { content: result.snapshot, meta: 'browser' };
       } catch (err) {
         return { content: `누르지 못했습니다: ${err instanceof Error ? err.message : String(err)}` };
@@ -813,7 +824,8 @@ async function runToolInner(name: string, args: Record<string, unknown>, ctx: To
         const result = await browser.typeInto({
           ref: args.ref ? String(args.ref) : undefined,
           text: String(args.text || ''),
-          submit: Boolean(args.submit),
+          // v0.6.1: 모델이 pressEnter / submit 어느 쪽으로 불러도 Enter까지 누르게 맞춘다.
+          submit: Boolean(args.submit ?? args.pressEnter),
         });
         return { content: result.snapshot, meta: 'browser' };
       } catch (err) {
@@ -990,6 +1002,45 @@ async function runToolInner(name: string, args: Record<string, unknown>, ctx: To
       const noteText = note || undefined;
       if (!service || !loginUrl) return { content: '서비스 이름과 로그인 주소가 필요합니다.' };
       if (!/^https?:\/\//i.test(loginUrl)) return { content: 'login_url은 http:// 또는 https://로 시작하는 주소여야 합니다.' };
+      /**
+       * v0.6.1: 금고에 그 사이트 계정이 이미 있는데 로그인 카드까지 띄워
+       * 금고 PIN 카드와 둘 다 나오던 문제(IMG_3605)를 막는다.
+       * 계정이 있으면 새 로그인 카드를 만들지 않고, 잠겨 있을 때는 PIN 해제 카드만 띄운다.
+       * (사용자가 "새 계정 추가"를 직접 부탁한 경우만 예외)
+       */
+      const wantsNewAccount = /(새\s*계정|다른\s*계정|계정\s*추가|추가\s*등록|새로\s*(등록|추가))/.test(ctx.userRequest || '');
+      if (!wantsNewAccount) {
+        const host = siteHost || (() => {
+          try {
+            return new URL(loginUrl).host;
+          } catch {
+            return '';
+          }
+        })();
+        const catalogName = findServiceInText(service)?.name || '';
+        const account =
+          [service, host, catalogName]
+            .filter(Boolean)
+            .map((term) => vault.findForSite(String(term)).find((m) => m.type === 'login'))
+            .find(Boolean) || null;
+        if (account) {
+          if (!vault.vaultUnlocked()) {
+            return lockedVaultResponse(ctx, {
+              tool: 'browser_login_with_vault',
+              vaultId: account.id,
+              service,
+              loginUrl,
+              note: `금고에 '${account.title}' 계정이 이미 저장돼 있습니다. 새 계정을 받을 필요 없이 금고 PIN만 풀면 바로 로그인할 수 있습니다.`,
+            });
+          }
+          return {
+            content:
+              `로그인 카드를 만들지 않았습니다. 금고에 '${account.title}' 계정이 이미 있습니다(id: ${account.id}). ` +
+              `browser_open(로그인 주소) → browser_login_with_vault(vault_id: ${account.id})로 바로 로그인하고, 하던 일을 이어서 하세요.`,
+            flags: { vaultHasAccount: true },
+          };
+        }
+      }
       // 이미 대기 중인 같은 서비스 카드가 있으면 새로 만들지 않고 그것을 안내한다.
       const open = loginRequests
         .listForSession(ctx.session || 'default')
@@ -1040,6 +1091,16 @@ async function runToolInner(name: string, args: Record<string, unknown>, ctx: To
           submitRef: args.submit_ref ? String(args.submit_ref) : undefined,
           submit: args.submit === undefined ? true : Boolean(args.submit),
         });
+        // v0.6.1: 이미 로그인된 사이트 — 로그인을 반복하지 말고 하던 일로 돌아가게 한다.
+        if (result.alreadyLoggedIn) {
+          return {
+            content: `이미 로그인된 상태입니다(${result.title || result.url})${
+              result.loginHints.length ? ` · 화면 근거: ${result.loginHints.join(', ')}` : ''
+            }. 로그인 과정을 건너뛰었으니 다시 로그인하지 말고, 사용자가 요청한 작업(메시지함 이동·답장 등)을 바로 이어서 하세요.\n\n${result.snapshot}`,
+            meta: 'browser',
+            flags: { alreadyLoggedIn: true },
+          };
+        }
         const done = `아이디 ${result.filledUsername ? '입력 완료' : '칸을 찾지 못해 건너뜀'} · 비밀번호 입력 완료 · ${
           result.submitted === 'click'
             ? '로그인 버튼 클릭'

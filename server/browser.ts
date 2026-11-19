@@ -5,7 +5,7 @@ import { chromium, type Browser, type BrowserContext, type Page } from 'playwrig
 import { DATA_DIR } from './config';
 import { addLog, db } from './db';
 import { publish } from './events';
-import { evaluateBrowserAction, evaluateUrl, hostOf, looksLikeInjection, type PolicyLevel } from './policy';
+import { evaluateBrowserAction, evaluateUrl, hostOf, looksLikeInjection, userRequestedPublish, type PolicyLevel } from './policy';
 import { browserLock } from './queue';
 
 /**
@@ -114,6 +114,22 @@ export interface BrowserSessionView {
   alive: boolean;
 }
 
+/**
+ * 사이트가 띄운 alert/confirm 창 기록 (v0.6.1)
+ *
+ * 예전에는 Playwright가 알림창을 기본으로 즉시 닫아 버려, 무신사 로그인처럼
+ * "아이디 또는 비밀번호가 일치하지 않습니다" 를 alert로 띄우고 리다이렉트하는
+ * 사이트에서 사용자도 AI도 실패 사유를 볼 수 없었다.
+ */
+export interface DialogRecord {
+  /** alert · confirm · prompt · beforeunload */
+  type: string;
+  message: string;
+  at: number;
+  /** 서버가 자동으로 누른 버튼 (확인=accept, 취소=dismiss) */
+  autoAction: 'accept' | 'dismiss';
+}
+
 interface LiveSession {
   browser: Browser;
   context: BrowserContext;
@@ -121,6 +137,8 @@ interface LiveSession {
   frameAt: number;
   frame: Buffer | null;
   stateSavedAt: number;
+  /** v0.6.1: 이 세션에서 가장 최근에 뜬 알림창 */
+  dialog: DialogRecord | null;
 }
 
 /** 브라우저 로그인 세션(쿠키·로컬스토리지)을 보관하는 파일. data/ 안이라 배포해도 유지된다. */
@@ -194,6 +212,73 @@ const live = new Map<string, LiveSession>();
 let connecting: Promise<Browser> | null = null;
 let connectedBrowser: Browser | null = null;
 let lastConnectError: { at: number; message: string } | null = null;
+
+/* ------------------------------------------------------------------ */
+/* 알림창(alert/confirm) 포착 — v0.6.1                                  */
+/* ------------------------------------------------------------------ */
+
+/** 페이지별 최근 알림창(세션 map과 별개로 어떤 페이지에서든 읽을 수 있게) */
+const lastDialogs = new WeakMap<Page, DialogRecord>();
+const watchedPages = new WeakSet<Page>();
+const watchedContexts = new WeakSet<BrowserContext>();
+
+/**
+ * 페이지에 알림창 리스너를 붙인다.
+ *
+ * Playwright는 dialog 리스너가 없으면 알림창을 **자동으로 닫아** 버리므로,
+ * 리스너를 붙여 ① 내용을 기록하고 ② 서버가 직접 닫는다(alert=확인, confirm=취소).
+ * confirm은 삭제·이동 확인처럼 되돌릴 수 없는 동작일 수 있어 누르지 않고 닫는다.
+ */
+function attachDialogWatcher(page: Page): void {
+  if (watchedPages.has(page)) return;
+  watchedPages.add(page);
+  page.on('dialog', (dialog) => {
+    handleDialogEvent(page, dialog);
+  });
+  page.on('close', () => watchedPages.delete(page));
+}
+
+/**
+ * 알림창 한 건을 기록하고 서버가 닫는다(단위 검증도 이 함수를 쓴다).
+ * alert는 '확인', confirm·beforeunload는 '취소' — 되돌릴 수 없는 동작을 대신 누르지 않는다.
+ */
+export function handleDialogEvent(
+  page: Page,
+  dialog: { type(): string; message(): string; accept(): Promise<void>; dismiss(): Promise<void> }
+): DialogRecord {
+  const record: DialogRecord = {
+    type: dialog.type(),
+    message: String(dialog.message() || '').replace(/\s+/g, ' ').trim().slice(0, 500),
+    at: Date.now(),
+    autoAction: dialog.type() === 'confirm' || dialog.type() === 'beforeunload' ? 'dismiss' : 'accept',
+  };
+  lastDialogs.set(page, record);
+  for (const session of live.values()) {
+    if (session.page === page) session.dialog = record;
+  }
+  addLog('info', `브라우저 ${record.type} 알림: ${record.message.slice(0, 140)}`);
+  const done = record.autoAction === 'accept' ? dialog.accept() : dialog.dismiss();
+  void done.catch(() => undefined);
+  return record;
+}
+
+/** 페이지에서 가장 최근에 뜬 알림창(없으면 null) */
+export function lastDialog(page: Page): DialogRecord | null {
+  return lastDialogs.get(page) || null;
+}
+
+/**
+ * 알림창 내용을 AI 응답에 붙일 문장으로 만든다 (3분 이내 것만).
+ * 사이트가 왜 실패했는지(비밀번호 불일치·보안문자 등)는 대부분 alert 안에만 있다.
+ */
+function dialogNote(session: LiveSession | null, windowMs = 180_000): string {
+  const record = session?.dialog || (session ? lastDialogs.get(session.page) : null);
+  if (!record) return '';
+  if (Date.now() - record.at > windowMs) return '';
+  const seconds = Math.max(1, Math.round((Date.now() - record.at) / 1000));
+  const action = record.autoAction === 'accept' ? '확인' : '취소';
+  return `\n\n[브라우저 알림창 · ${record.type}] 사이트가 띄운 메시지: "${record.message}" (${seconds}초 전, 서버가 자동으로 '${action}'를 눌러 닫았습니다). 이 문구가 실패 사유입니다 — 사용자에게 그대로 알려 주세요.`;
+}
 
 /** 브라우저 작업이 영원히 멈추지 않도록 단계마다 상한을 둔다. */
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -453,7 +538,13 @@ async function openContext(id: string): Promise<LiveSession> {
   if (!page) throw new Error('브라우저 화면을 만들지 못했습니다.');
   page.setDefaultTimeout(20_000);
   await page.bringToFront().catch(() => undefined);
-  const session: LiveSession = { browser, context, page, frameAt: 0, frame: null, stateSavedAt: 0 };
+  // v0.6.1: 알림창 내용을 놓치지 않게 페이지·새 탭 모두에 리스너를 붙인다.
+  attachDialogWatcher(page);
+  if (!watchedContexts.has(context)) {
+    watchedContexts.add(context);
+    context.on('page', (newPage) => attachDialogWatcher(newPage));
+  }
+  const session: LiveSession = { browser, context, page, frameAt: 0, frame: null, stateSavedAt: 0, dialog: lastDialogs.get(page) || null };
   live.set(id, session);
   if (state) addLog('info', '저장된 브라우저 로그인 세션을 불러왔습니다');
   return session;
@@ -719,7 +810,7 @@ export async function openUrl(url: string, convId?: string): Promise<OpenResult>
   const suffix = notes.length ? `\n\n${notes.join('\n')}` : '';
   return {
     sessionId: session.id,
-    snapshot: formatSnapshot(data, session.id) + suffix,
+    snapshot: formatSnapshot(data, session.id) + suffix + dialogNote(s),
     policy: policyNote(verdict.level, verdict.host, verdict.note),
   };
 }
@@ -734,27 +825,104 @@ export async function snapshot(sessionId?: string): Promise<{ sessionId: string;
   const data = await takeSnapshot(s.page);
   touch(session.id, { url: data.url, title: data.title });
   logAction(session.id, 'agent', 'browser.snapshot', {}, data.title, data.url);
-  return { sessionId: session.id, snapshot: formatSnapshot(data, session.id) };
+  return { sessionId: session.id, snapshot: formatSnapshot(data, session.id) + dialogNote(s) };
 }
 
-export async function click(args: { ref?: string; text?: string; sessionId?: string }): Promise<{ sessionId: string; snapshot: string }> {
+export interface ClickResult {
+  sessionId: string;
+  snapshot: string;
+  /** 실제로 눌렀는지 (요소를 못 찾거나 시간이 넘으면 false — 예외를 던지지 않고 최신 화면을 돌려준다) */
+  clicked: boolean;
+}
+
+/** v0.6.1: 클릭 대기 시간(예전 15초) — 모달이 바뀐 뒤 엉뚱한 ref를 누르려다 15초씩 멈추지 않게 6초로 줄였다. */
+export const CLICK_TIMEOUT_MS = 6_000;
+
+/** 클릭 대상의 글자(위험도 판정과 안내 문구에 쓴다). */
+async function describeTarget(page: Page, args: { ref?: string; text?: string }): Promise<string> {
+  if (args.text && !args.ref) return String(args.text).trim().slice(0, 80);
+  if (!args.ref) return '';
+  const selector = `[data-pomong-ref="${String(args.ref).replace(/[^a-zA-Z0-9_-]/g, '')}"]`;
+  const locator = page.locator(selector).first();
+  // v0.6.1: 없는 ref면 기다리지 않고 바로 빈 글자를 돌려준다(기본 20초 대기 방지)
+  if (!(await locator.count().catch(() => 0))) return `${(args.text || '').trim()}`.trim().slice(0, 120);
+  const label = await withTimeout(
+    locator
+      .evaluate((el) => {
+        const node = el as HTMLElement;
+        return (
+          (node.getAttribute('aria-label') || '').trim() ||
+          (node as HTMLInputElement).value ||
+          (node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim()
+        );
+      })
+      .catch(() => ''),
+    2_500,
+    '클릭 대상 읽기'
+  ).catch(() => '');
+  return `${label || ''} ${(args.text || '').trim()}`.trim().slice(0, 120);
+}
+
+export async function click(args: { ref?: string; text?: string; sessionId?: string; userRequest?: string }): Promise<ClickResult> {
   const session = args.sessionId ? row(args.sessionId) : activeSession();
-  if (!session) throw new Error('열린 브라우저 세션이 없습니다.');
+  if (!session) throw new Error('열린 브라우저 세션이 없습니다. browser_open으로 먼저 페이지를 여세요.');
   guardAgent(session, evaluateUrl(session.url || 'about:blank').level);
-  const verdict = evaluateBrowserAction('browser_click', { text: args.text || '' });
-  if (verdict.confirm) throw new Error(`${verdict.reason || '이 버튼'}은 에이전트가 누를 수 없습니다. browser_handover로 사용자에게 넘기세요.`);
   const s = await ensureLive(session.id);
+  // v0.6.1: ref로 누를 때도 요소의 글자를 읽어 결제·게시·삭제 버튼인지 검사한다.
+  //         (예전에는 글자로 누를 때만 검사해서 ref 클릭이 가드를 그냥 통과했다)
+  const label = await describeTarget(s.page, args);
+  const verdict = evaluateBrowserAction('browser_click', { text: label }, { allowPublish: userRequestedPublish(args.userRequest || '') });
+  if (verdict.confirm) {
+    const hint = userRequestedPublish(args.userRequest || '')
+      ? ''
+      : ' 사용자가 이번 요청에서 전송·답장·게시를 직접 부탁했다면 그 문장을 그대로 전달해 주세요.';
+    throw new Error(
+      `'${label || args.ref || args.text}' 버튼은 되돌릴 수 없는 조작(${verdict.reason || '결제·게시·삭제'})이라 서버가 막았습니다.${hint}`
+    );
+  }
+  const before = s.page.url();
   const target = args.ref
-    ? s.page.locator(`[data-pomong-ref="${args.ref.replace(/[^a-zA-Z0-9_-]/g, '')}"]`)
+    ? s.page.locator(`[data-pomong-ref="${args.ref.replace(/[^a-zA-Z0-9_-]/g, '')}"]`).first()
     : s.page.getByText(String(args.text || ''), { exact: false }).first();
-  if (!(await target.count())) throw new Error(`누를 요소를 찾지 못했습니다: ${args.ref || args.text}`);
-  await target.click({ timeout: 15_000 });
-  await s.page.waitForLoadState('domcontentloaded', { timeout: 15_000 }).catch(() => undefined);
+  const missing = `⚠️ 누를 요소를 찾지 못했습니다: ${args.ref || args.text}. 화면이 이미 바뀌었을 수 있습니다. 아래 최신 화면의 ref로 다시 고르세요. 로그인 모달을 연 직후라면 browser_login_with_vault(vault_id)를 바로 부르면 서버가 입력창·버튼을 스스로 찾습니다.`;
+  if (!(await target.count().catch(() => 0))) {
+    const data = await takeSnapshot(s.page);
+    touch(session.id, { url: data.url, title: data.title });
+    logAction(session.id, 'agent', 'browser.click', { ...args, clicked: false }, '요소 없음', data.url);
+    return { sessionId: session.id, snapshot: `${missing}\n\n${formatSnapshot(data, session.id)}${dialogNote(s)}`, clicked: false };
+  }
+  try {
+    await target.click({ timeout: CLICK_TIMEOUT_MS });
+  } catch (err) {
+    const data = await takeSnapshot(s.page);
+    touch(session.id, { url: data.url, title: data.title });
+    const why = err instanceof Error ? err.message.split('\n')[0].slice(0, 160) : String(err);
+    logAction(session.id, 'agent', 'browser.click', { ...args, clicked: false }, `클릭 실패: ${why}`, data.url);
+    return {
+      sessionId: session.id,
+      snapshot: `⚠️ ${Math.round(
+        CLICK_TIMEOUT_MS / 1000
+      )}초 안에 누르지 못했습니다(${why}). 다른 요소가 위를 덮고 있거나 화면이 바뀌었습니다. 아래 최신 화면에서 다시 고르세요. 로그인 모달이면 바로 browser_login_with_vault(vault_id)를 부르세요.\n\n${formatSnapshot(
+        data,
+        session.id
+      )}${dialogNote(s)}`,
+      clicked: false,
+    };
+  }
+  await s.page.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => undefined);
   const data = await takeSnapshot(s.page);
   touch(session.id, { url: data.url, title: data.title });
-  logAction(session.id, 'agent', 'browser.click', args, data.title, data.url);
+  const note = dialogNote(s);
+  logAction(
+    session.id,
+    'agent',
+    'browser.click',
+    { ...args, clicked: true },
+    `${before !== data.url ? `이동 ${data.url}` : '클릭 완료'}${note ? ` · 알림창: ${s.dialog?.message.slice(0, 160) || ''}` : ''}`,
+    data.url
+  );
   void saveState(s);
-  return { sessionId: session.id, snapshot: formatSnapshot(data, session.id) };
+  return { sessionId: session.id, snapshot: formatSnapshot(data, session.id) + note, clicked: true };
 }
 
 export async function typeInto(args: { ref?: string; text: string; submit?: boolean; sessionId?: string }): Promise<{ sessionId: string; snapshot: string }> {
@@ -794,7 +962,7 @@ export async function typeInto(args: { ref?: string; text: string; submit?: bool
   touch(session.id, { url: data.url, title: data.title });
   logAction(session.id, 'agent', 'browser.type', { ref: args.ref, text: args.text }, data.title, data.url);
   void saveState(s);
-  return { sessionId: session.id, snapshot: formatSnapshot(data, session.id) };
+  return { sessionId: session.id, snapshot: formatSnapshot(data, session.id) + dialogNote(s) };
 }
 
 /**
@@ -1040,7 +1208,15 @@ async function fillRef(page: Page, ref: string, value: string): Promise<boolean>
  *         다만 '회원가입'이나 404가 나는 /login 링크는 누르지 않는다.
  */
 async function openLoginModal(page: Page): Promise<boolean> {
-  const hasPassword = async (): Promise<boolean> => (await page.locator('input[type=password]').count().catch(() => 0)) > 0;
+  // v0.6.1: DOM에만 숨어 있는 비밀번호 칸(모달 안 닫힌 폼)을 '이미 열렸다'고 오인하던 버그 수정
+  const hasPassword = async (): Promise<boolean> => {
+    const loc = page.locator('input[type=password]');
+    const count = await loc.count().catch(() => 0);
+    for (let i = 0; i < count; i += 1) {
+      if (await loc.nth(i).isVisible().catch(() => false)) return true;
+    }
+    return false;
+  };
   if (await hasPassword()) return true;
   const attempt = async (locator: ReturnType<Page['locator']>): Promise<boolean> => {
     const count = await locator.count().catch(() => 0);
@@ -1265,6 +1441,10 @@ export interface LoginWithVaultResult {
   submitNote: string | null;
   /** v0.6.0: 캅차·OTP·패스키를 만나 서버가 noVNC 핸드오버를 자동으로 열었는지 */
   handoverOpened: boolean;
+  /** v0.6.1: 이미 로그인된 상태라 로그인을 건너뛰었는지 */
+  alreadyLoggedIn: boolean;
+  /** v0.6.1: '이미 로그인' 판단 근거(마이페이지·로그아웃 등) */
+  loginHints: string[];
   /** v0.6.0: 원인 파악용 화면 구조(서버 로그·도구 응답에 딸린다) */
   diagnostics: LoginDiagnostics;
 }
@@ -1427,8 +1607,94 @@ export const BLOCKED_HANDOVER_REASON: Record<NonNullable<LoginScreenRead['blocke
   account_locked: 'manual',
 };
 
+/** 페이지가 '이미 로그인된 상태'인지 화면 구조로 판단한다 (v0.6.1). */
+export interface LoginStateRead {
+  /** 로그인된 것으로 보이는가(로그인 입력창도 없고, 로그인 버튼도 없고, 계정 흔적이 보임) */
+  loggedIn: boolean;
+  /** 판단 근거(화면에서 찾은 문구·요소) */
+  hints: string[];
+  /** 화면에 실제로 보이는 로그인 진입 버튼이 있는가 */
+  loginEntryVisible: boolean;
+  passwordField: boolean;
+}
+
 /**
- * 금고 값으로 로그인을 끝낸다 (v0.5.2 → v0.6.0 사이트별 보강).
+ * 이미 로그인된 사이트에서 다시 로그인을 시도해 멈추는 문제(IMG_3605 계열)를 막는다.
+ *
+ * 크몽처럼 헤더에 "마이페이지/로그아웃/메시지함"이 보이고 "로그인" 버튼이 없으면
+ * 로그인된 상태로 본다. 반대로 로그인 버튼이 보이거나 비밀번호 칸이 있으면 아니다.
+ */
+export async function detectLoginState(page?: Page): Promise<LoginStateRead> {
+  let target = page || null;
+  if (!target) {
+    const session = activeSession();
+    if (!session) return { loggedIn: false, hints: [], loginEntryVisible: false, passwordField: false };
+    target = (await ensureLive(session.id)).page;
+  }
+  try {
+    const raw = (await withTimeout(
+      target.evaluate(() => {
+        const visible = (el: Element): boolean => {
+          const rect = (el as HTMLElement).getBoundingClientRect();
+          if (rect.width < 2 || rect.height < 2) return false;
+          const style = window.getComputedStyle(el as HTMLElement);
+          return style.visibility !== 'hidden' && style.display !== 'none' && Number(style.opacity) !== 0;
+        };
+        const flat = (text: string) => text.replace(/\s+/g, ' ').trim();
+        const loginExact = /^(로그인|로그 인|로그인하기|login|log in|sign in|signin)$/i;
+        let loginEntryVisible = false;
+        for (const el of Array.from(document.querySelectorAll<HTMLElement>('a,button,[role=button],[role=link],input[type=submit]'))) {
+          if (!visible(el)) continue;
+          const label = flat(
+            el.getAttribute('aria-label') || (el as HTMLInputElement).value || el.innerText || el.textContent || ''
+          );
+          if (loginExact.test(label)) {
+            loginEntryVisible = true;
+            break;
+          }
+        }
+        const passwordField = Array.from(document.querySelectorAll<HTMLInputElement>('input[type=password]')).some(visible);
+        const body = flat(document.body?.innerText || '').slice(0, 20_000);
+        const candidates: { test: RegExp; label: string }[] = [
+          { test: /(로그아웃|logout|sign out)/i, label: '로그아웃' },
+          { test: /(마이\s*페이지|my ?page|마이페이지)/i, label: '마이페이지' },
+          { test: /(메시지함|쪽지함|메시지\s*관리|받은\s*메시지|대화\s*목록)/i, label: '메시지함' },
+          { test: /(내\s*정보|계정\s*설정|프로필\s*설정|계정\s*관리)/i, label: '내 정보' },
+          { test: /(내\s*주문|주문\s*내역|구매\s*내역|장바구니)/i, label: '주문/장바구니' },
+          { test: /(알림\s*\d|새\s*알림|notification)/i, label: '알림' },
+        ];
+        const hints = candidates.filter((c) => c.test.test(body)).map((c) => c.label);
+        return { loginEntryVisible, passwordField, hints, url: location.href, title: document.title };
+      }),
+      8_000,
+      '로그인 상태 확인'
+    )) as { loginEntryVisible: boolean; passwordField: boolean; hints: string[]; url: string; title: string };
+    const loggedIn = judgeLoginState(raw);
+    return { loggedIn, hints: raw.hints, loginEntryVisible: raw.loginEntryVisible, passwordField: raw.passwordField };
+  } catch {
+    return { loggedIn: false, hints: [], loginEntryVisible: false, passwordField: false };
+  }
+}
+
+/** '이미 로그인' 판단 규칙(단위 검증용으로 분리) */
+export function judgeLoginState(read: { passwordField: boolean; loginEntryVisible: boolean; hints: string[] }): boolean {
+  return !read.passwordField && !read.loginEntryVisible && read.hints.length > 0;
+}
+
+/** 넘겨받은 ref가 실제로 그 종류의 입력창으로 쓸 수 있는지 확인한다. */
+async function refUsable(page: Page, ref: string | undefined, kind: 'username' | 'password' | 'submit'): Promise<boolean> {
+  if (!ref) return false;
+  const selector = `[data-pomong-ref="${String(ref).replace(/[^a-zA-Z0-9_-]/g, '')}"]`;
+  const handle = page.locator(selector).first();
+  if (!(await handle.count().catch(() => 0))) return false;
+  if (!(await handle.isVisible().catch(() => false))) return false;
+  const type = ((await handle.getAttribute('type').catch(() => '')) || '').toLowerCase();
+  if (kind === 'password') return type === 'password';
+  if (kind === 'username') return ['text', 'email', 'tel', 'search', 'number', ''].includes(type);
+  return true;
+}
+
+/** 금고 값으로 로그인을 끝낸다
  *
  * ① 한 화면 로그인: 아이디 → 비밀번호 → (버튼 활성화 대기) → 로그인
  * ② 두 화면 로그인(구글·마이크로소프트): 아이디 → 다음/계속 → 비밀번호 창 대기 → 비밀번호 → 로그인
@@ -1452,18 +1718,55 @@ export async function loginWithVault(input: {
   // ref를 잡기 위해 화면을 한 번 읽는다(스냅샷이 요소에 ref를 붙인다).
   let before = await takeSnapshot(s.page);
   let detected = await detectLoginRefs(s.page);
+  // v0.6.1: 모델이 넘긴 ref가 다른 화면의 것이거나 종류가 맞지 않으면 버리고 다시 찾는다.
+  const givenUsernameRef = (await refUsable(s.page, input.usernameRef, 'username')) ? input.usernameRef : undefined;
+  const givenPasswordRef = (await refUsable(s.page, input.passwordRef, 'password')) ? input.passwordRef : undefined;
+  const givenSubmitRef = (await refUsable(s.page, input.submitRef, 'submit')) ? input.submitRef : undefined;
   // v0.5.3: 로그인 폼이 모달·오버레이 뒤에 숨어 있으면 화면의 로그인 버튼을 한 번 눌러 연다.
-  if (!input.passwordRef && !detected.passwordRef) {
+  if (!givenPasswordRef && !detected.passwordRef) {
     if (await openLoginModal(s.page)) {
       before = await takeSnapshot(s.page);
       detected = await detectLoginRefs(s.page);
     }
   }
 
+  /**
+   * v0.6.1: 이미 로그인된 사이트(크몽·깃허브 등)에 로그인을 다시 시도해
+   * 15초씩 멈추는 일을 막는다. 로그인 칸도 없고 로그인 버튼도 없는데
+   * 마이페이지·로그아웃·메시지함 같은 흔적이 보이면 '이미 로그인'으로 본다.
+   */
+  if (!givenPasswordRef && !detected.passwordRef && !givenUsernameRef && !detected.usernameRef) {
+    const state = await detectLoginState(s.page);
+    if (state.loggedIn) {
+      const data = await takeSnapshot(s.page);
+      touch(session.id, { url: data.url, title: data.title });
+      logAction(session.id, 'agent', 'browser.login_with_vault', { vaultIdOnly: true }, '이미 로그인된 상태 — 건너뜀', data.url);
+      return {
+        sessionId: session.id,
+        snapshot: formatSnapshot(data, session.id) + dialogNote(s),
+        filledUsername: false,
+        filledPassword: false,
+        submitted: 'none',
+        stillOnLogin: false,
+        url: data.url,
+        title: data.title,
+        steps: 'single',
+        notice: null,
+        blocked: null,
+        submitReady: true,
+        submitNote: null,
+        handoverOpened: false,
+        alreadyLoggedIn: true,
+        loginHints: state.hints,
+        diagnostics: await loginDiagnostics(s.page),
+      };
+    }
+  }
+
   let steps: LoginWithVaultResult['steps'] = 'single';
-  let usernameRef = input.usernameRef || detected.usernameRef || '';
-  let passwordRef = input.passwordRef || detected.passwordRef || '';
-  let submitRef = input.submitRef || detected.submitRef || '';
+  let usernameRef = givenUsernameRef || detected.usernameRef || '';
+  let passwordRef = givenPasswordRef || detected.passwordRef || '';
+  let submitRef = givenSubmitRef || detected.submitRef || '';
   let filledUsername = false;
 
   /**
@@ -1490,8 +1793,8 @@ export async function loginWithVault(input: {
         if (appeared) {
           before = await takeSnapshot(s.page);
           detected = await detectLoginRefs(s.page);
-          passwordRef = input.passwordRef || detected.passwordRef || '';
-          submitRef = input.submitRef || detected.submitRef || '';
+          passwordRef = givenPasswordRef || detected.passwordRef || '';
+          submitRef = givenSubmitRef || detected.submitRef || '';
           usernameRef = usernameRef || detected.usernameRef || '';
         }
       }
@@ -1501,13 +1804,14 @@ export async function loginWithVault(input: {
   const screenNow = await readLoginScreen(s.page);
   if (!passwordRef) {
     // 1단계 뒤 패스키·캡차·2차 인증·계정 오류가 나온 경우: 실제 문구와 함께 알린다.
+    const dialog = dialogNote(s);
     const reason = screenNow.blocked
       ? `자동 로그인을 이어갈 수 없습니다(사유: ${LOGIN_BLOCK_LABELS[screenNow.blocked]}${
           screenNow.notice ? ` · 화면 안내: "${screenNow.notice}"` : ''
-        }). browser_handover로 사용자에게 넘기세요.`
+        }). browser_handover로 사용자에게 넘기세요.${dialog}`
       : `로그인 입력창을 찾지 못했습니다(${screenNow.url}).${
           screenNow.notice ? ` 화면 안내: "${screenNow.notice}"` : ' 이 화면에는 아이디·비밀번호 칸이 없습니다.'
-        } 이미 로그인된 세션이거나 로그인 버튼이 없는 화면일 수 있으니 browser_snapshot으로 현재 화면을 확인하고, 그래도 로그인할 곳이 없으면 browser_handover로 사용자에게 넘기세요.`;
+        } 이미 로그인된 세션이거나 로그인 버튼이 없는 화면일 수 있으니 browser_snapshot으로 현재 화면을 확인하고, 그래도 로그인할 곳이 없으면 browser_handover로 사용자에게 넘기세요.${dialog}`;
     throw new Error(reason);
   }
 
@@ -1591,6 +1895,7 @@ export async function loginWithVault(input: {
   }
   touch(session.id, { url: data.url, title: data.title });
   void saveState(s);
+  const note = dialogNote(s);
   logAction(
     session.id,
     'agent',
@@ -1598,13 +1903,13 @@ export async function loginWithVault(input: {
     { usernameRef, passwordRef, submitRef, filledUsername, submitted, steps, submitReady, password: '***' },
     `${stillOnLogin ? '로그인 화면 유지' : '로그인 통과 추정'}${screen.blocked ? ` · ${LOGIN_BLOCK_LABELS[screen.blocked]}` : ''} · ${
       submitted === 'click' ? '로그인 버튼 클릭' : submitted === 'form' ? '폼 제출' : submitted === 'enter' ? 'Enter 전송' : '전송 안 함'
-    }${submitNote ? ` (${submitNote})` : ''}`,
+    }${submitNote ? ` (${submitNote})` : ''}${s.dialog ? ` · 알림창: ${s.dialog.message.slice(0, 140)}` : ''}`,
     data.url
   );
   void before;
   return {
     sessionId: session.id,
-    snapshot: formatSnapshot(data, session.id),
+    snapshot: formatSnapshot(data, session.id) + note,
     filledUsername,
     filledPassword,
     submitted,
@@ -1617,6 +1922,8 @@ export async function loginWithVault(input: {
     submitReady,
     submitNote,
     handoverOpened,
+    alreadyLoggedIn: false,
+    loginHints: [],
     diagnostics: await loginDiagnostics(s.page),
   };
 }
@@ -1638,7 +1945,7 @@ export async function extract(sessionId?: string): Promise<{ url: string; text: 
   const s = await ensureLive(session.id);
   const data = await takeSnapshot(s.page);
   logAction(session.id, 'agent', 'browser.extract', {}, data.title, data.url);
-  return { url: data.url, text: data.text.slice(0, 8000) };
+  return { url: data.url, text: data.text.slice(0, 8000) + dialogNote(s) };
 }
 
 export async function screenshot(sessionId?: string): Promise<{ path: string; url: string; title: string }> {

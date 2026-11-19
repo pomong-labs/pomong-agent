@@ -138,6 +138,20 @@ export function setStatus(id: string, status: LoginRequestStatus, patch: { vault
   }
 }
 
+/** 이 방에서 since 이후에 만든 대기 카드를 모두 취소한다(중복 카드 정리용 · v0.6.1). */
+export function cancelPendingSince(sessionId: string, sinceIso: string, service?: string | null): number {
+  const rows = db
+    .prepare("SELECT id, service FROM login_requests WHERE session_id = ? AND status = 'pending' AND created_at >= ?")
+    .all(sessionId, sinceIso) as { id: string; service: string }[];
+  let cancelled = 0;
+  for (const row of rows) {
+    if (service && row.service.toLowerCase() !== service.toLowerCase()) continue;
+    setStatus(row.id, 'cancelled');
+    cancelled += 1;
+  }
+  return cancelled;
+}
+
 /**
  * 서버 로그인 카드 안전장치 (v0.5.3)
  *
@@ -152,11 +166,22 @@ export function ensureLoginCard(input: {
   reply: string;
   vaultEmptyTerm: string | null;
   cardCreatedThisTurn: boolean;
+  /** v0.6.1: 이번 턴에 금고 PIN 해제 카드가 나갔다면 로그인 카드는 만들지 않는다 */
+  lockedCardThisTurn?: boolean;
+  /** v0.6.1: 금고에 그 사이트 계정이 이미 있는 것으로 확인됐다면 만들지 않는다 */
+  vaultHasAccount?: boolean;
 }): { card: LoginRequestView | null; service: string | null; reply: string } {
   const reply = input.reply;
   if (input.cardCreatedThisTurn) return { card: null, service: null, reply };
+  /**
+   * v0.6.1: 금고 잠금 카드(PIN 입력)와 로그인 카드가 한 턴에 같이 나가던 문제를 막는다.
+   * 금고에 계정이 있는 상황이면 사용자가 채울 것은 PIN 하나뿐이므로 로그인 카드는 만들지 않는다.
+   */
+  if (input.lockedCardThisTurn || input.vaultHasAccount) return { card: null, service: null, reply };
   const wantsLogin = /로그인|연동|계정|연결/.test(input.prompt);
-  const mentionsCard = /로그인\s*카드|카드에[\s\S]{0,25}입력|카드에서[\s\S]{0,15}입력/.test(reply);
+  // '카드에 ... 입력' 문구는 금고 PIN 카드 안내("카드에 금고 PIN을 입력해 주세요")까지 걸리므로
+  // 로그인 카드 문구만 참조하게 좁혔다.
+  const mentionsCard = /로그인\s*카드|계정\s*정보[\s\S]{0,20}입력|아이디[·\s]*비밀번호[\s\S]{0,20}입력/.test(reply);
   if (!mentionsCard && !(input.vaultEmptyTerm && wantsLogin)) return { card: null, service: null, reply };
   const service =
     findServiceInText(input.vaultEmptyTerm || '') || findServiceInText(input.prompt) || findServiceInText(reply);

@@ -114,7 +114,7 @@ async function main(): Promise<void> {
   check('noVNC 토큰 발급', Boolean(token.token) && token.expiresInSec === 60);
 
   /* 5) 버전 ------------------------------------------------------------ */
-  check('버전 0.6.0', APP_VERSION === '0.6.0', APP_VERSION);
+  check('버전 0.6.x', /^0\.6\./.test(APP_VERSION), APP_VERSION);
 
   console.log(failures ? `\n❌ 실패 ${failures}건` : '\n🎉 모든 스모크 통과');
   fs.rmSync(tmp, { recursive: true, force: true });

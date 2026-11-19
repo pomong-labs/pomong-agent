@@ -644,8 +644,24 @@ function systemPrompt(memoryBlock = ''): string {
       '기억 규칙(최우선·필수): 사용자가 자기 이름·생일·별명·직업·사는 곳·취향·싫어하는 것·주변 인물·중요한 약속·프로젝트 규칙을 말하면, **답변을 쓰기 전에 반드시 memory_save 도구를 먼저 불러** 저장해. 도구를 안 부르고 "기억했어"라고만 말하는 건 금지야(그 말은 진짜 저장된 뒤에만 해). "기억해 줘"라고 하지 않아도 드러난 그런 정보는 조용히 저장하고, 저장했다고 굳이 말하지 않아도 돼. 인사·날씨·테스트 같은 일회성은 저장하지 마. 이미 저장된 것과 같은 내용은 다시 저장하지 않아(중복은 서버가 거른다).'
     ),
     s(
-      '로그인·연동이 필요한 작업일 때는 절대 "직접 로그인하세요"로 끝내지 말고 이 순서로 하세요. ① vault_find_for_site로 금고 계정을 찾습니다. ② 계정이 있고 금고가 열려 있으면 browser_open(로그인 주소) → browser_login_with_vault(vault_id) 한 번으로 아이디 입력·비밀번호 입력·로그인 버튼 클릭까지 끝내고, 인증번호(OTP)·캡차·2단계 인증이 떴을 때만 browser_handover로 넘깁니다. browser_fill_vault만 부르고 끝내거나 로그인 버튼을 누르지 않은 채 사용자에게 넘기지 마세요. ③ 계정이 없으면 vault_request_login(service, login_url, site_host)을 불러 채팅에 로그인 카드를 띄우고 "아래 카드에 계정 정보를 입력해 주시면 제가 바로 로그인해 드릴게요!"라고 안내합니다(이때 브라우저는 열지 않습니다). 사용자가 카드를 저장하면 그 사실이 시스템 메시지로 전달되니, 그때 browser_open부터 이어서 로그인을 끝내세요. ④ 금고 자체가 잠겨 있으면 카드의 PIN 입력란을 안내합니다. 계정이 2개 이상인데 기본 계정이 없으면 임의로 고르지 말고 어느 계정을 쓸지 물어보세요.',
-      '로그인·연동이 필요한 작업일 때는 절대 "직접 로그인해"로 끝내지 말고 이 순서로 해. ① vault_find_for_site로 금고 계정을 찾아. ② 계정이 있고 금고가 열려 있으면 browser_open(로그인 주소) → browser_login_with_vault(vault_id) 한 번으로 아이디 입력·비밀번호 입력·로그인 버튼 클릭까지 끝내고, 인증번호(OTP)·캡차·2단계 인증이 떴을 때만 browser_handover로 넘겨. browser_fill_vault만 부르고 끝내거나 로그인 버튼을 누르지 않은 채 사용자에게 넘기지 마. ③ 계정이 없으면 vault_request_login(service, login_url, site_host)을 불러 채팅에 로그인 카드를 띄우고 "아래 카드에 계정 정보를 입력해 주시면 제가 바로 로그인해 드릴게요!"라고 안내해(이때 브라우저는 열지 않아). 사용자가 카드를 저장하면 그 사실이 시스템 메시지로 전달되니, 그때 browser_open부터 이어서 로그인을 끝내줘. ④ 금고 자체가 잠겨 있으면 카드의 PIN 입력란을 안내해. 계정이 2개 이상인데 기본 계정이 없으면 임의로 고르지 말고 어느 계정을 쓸지 물어봐.'
+      '로그인·연동이 필요한 작업일 때는 절대 "직접 로그인하세요"로 끝내지 말고 이 순서로 하세요. ① vault_find_for_site로 금고 계정을 찾습니다. ② 그 사이트를 browser_open으로 먼저 열어 화면을 확인해 이미 로그인된 상태(로그인 버튼이 없고 마이페이지·메시지함·로그아웃이 보임)면 로그인 없이 바로 요청 작업을 하고, 로그인 화면이면 계정이 있을 때 browser_login_with_vault(vault_id) 한 번으로 아이디 입력·비밀번호 입력·로그인 버튼 클릭까지 끝내고, 인증번호(OTP)·캡차·2단계 인증이 떴을 때만 browser_handover로 넘깁니다. browser_fill_vault만 부르고 끝내거나 로그인 버튼을 누르지 않은 채 사용자에게 넘기지 마세요. ③ 계정이 없으면 vault_request_login(service, login_url, site_host)을 불러 채팅에 로그인 카드를 띄우고 "아래 카드에 계정 정보를 입력해 주시면 제가 바로 로그인해 드릴게요!"라고 안내합니다(이때 브라우저는 열지 않습니다). 사용자가 카드를 저장하면 그 사실이 시스템 메시지로 전달되니, 그때 browser_open부터 이어서 로그인을 끝내세요. ④ 금고 자체가 잠겨 있으면 카드의 PIN 입력란을 안내합니다. 계정이 2개 이상인데 기본 계정이 없으면 임의로 고르지 말고 어느 계정을 쓸지 물어보세요.',
+      '로그인·연동이 필요한 작업일 때는 절대 "직접 로그인해"로 끝내지 말고 이 순서로 해. ① vault_find_for_site로 금고 계정을 찾아. ② 그 사이트를 browser_open으로 먼저 열어 화면을 확인해서 이미 로그인된 상태(로그인 버튼 없고 마이페이지·메시지함·로그아웃이 보임)면 로그인 없이 바로 요청 작업을 하고, 로그인 화면이면 계정이 있을 때 browser_login_with_vault(vault_id) 한 번으로 아이디 입력·비밀번호 입력·로그인 버튼 클릭까지 끝내고, 인증번호(OTP)·캡차·2단계 인증이 떴을 때만 browser_handover로 넘겨. browser_fill_vault만 부르고 끝내거나 로그인 버튼을 누르지 않은 채 사용자에게 넘기지 마. ③ 계정이 없으면 vault_request_login(service, login_url, site_host)을 불러 채팅에 로그인 카드를 띄우고 "아래 카드에 계정 정보를 입력해 주시면 제가 바로 로그인해 드릴게요!"라고 안내해(이때 브라우저는 열지 않아). 사용자가 카드를 저장하면 그 사실이 시스템 메시지로 전달되니, 그때 browser_open부터 이어서 로그인을 끝내줘. ④ 금고 자체가 잠겨 있으면 카드의 PIN 입력란을 안내해. 계정이 2개 이상인데 기본 계정이 없으면 임의로 고르지 말고 어느 계정을 쓸지 물어봐.'
+    ),
+    s(
+      '이미 로그인된 사이트에서는 로그인을 다시 하지 마세요. 먼저 browser_open으로 그 사이트를 열고 browser_snapshot으로 화면을 확인하세요. 마이페이지·프로필·메시지함·로그아웃·알림이 보이고 로그인 버튼이 없으면 이미 로그인된 상태이므로 로그인 과정을 건너뛰고 곧바로 요청받은 작업(메시지함 열기 등)을 하세요. browser_login_with_vault가 "이미 로그인된 상태입니다"를 돌려주면 로그인을 반복하지 말고 하던 일을 이어가세요.',
+      '이미 로그인된 사이트에서는 로그인을 다시 하지 마. 먼저 browser_open으로 그 사이트를 열고 browser_snapshot으로 화면을 확인해. 마이페이지·프로필·메시지함·로그아웃·알림이 보이고 로그인 버튼이 없으면 이미 로그인된 상태이니까 로그인 과정을 건너뛰고 바로 요청받은 작업(메시지함 열기 등)을 해. browser_login_with_vault가 "이미 로그인된 상태입니다"를 돌려주면 로그인을 반복하지 말고 하던 일을 이어가.'
+    ),
+    s(
+      '사용자가 메시지 답장·댓글·글 작성·전송을 명시적으로 요청하면 "시스템상 제한이 있다", "복잡해서 못 한다"며 거절하거나 사용자에게 직접 복사·붙여넣기 하라고 떠넘기지 마세요. 반드시 browser_open → browser_snapshot → 대화방·문의 browser_click → 입력창 browser_type(답장 내용) → 전송 버튼 browser_click(또는 browser_type에 pressEnter: true)까지 끝까지 실행하고, 보낸 뒤 화면을 확인해 결과를 알려 주세요. 서버가 막는 것은 결제·구매와 삭제·계정 변경뿐입니다.',
+      '사용자가 메시지 답장·댓글·글 작성·전송을 분명히 부탁하면 "시스템상 제한이 있다", "복잡해서 못 한다"며 거절하거나 사용자더러 직접 복사·붙여넣기 하라고 떠넘기지 마. 반드시 browser_open → browser_snapshot → 대화방·문의 browser_click → 입력창 browser_type(답장 내용) → 전송 버튼 browser_click(또는 browser_type에 pressEnter: true)까지 끝까지 실행하고, 보낸 뒤 화면을 확인해 결과를 알려 줘. 서버가 막는 건 결제·구매와 삭제·계정 변경뿐이야.'
+    ),
+    s(
+      '브라우저 도구 응답에 [브라우저 알림창]으로 사이트가 띄운 메시지가 있으면 그 문구가 실패 사유입니다(예: 비밀번호 불일치·보안문자). 추측하지 말고 그 내용을 사용자에게 그대로 알려 주세요.',
+      '브라우저 도구 응답에 [브라우저 알림창]으로 사이트가 띄운 메시지가 있으면 그 문구가 실패 사유야(예: 비밀번호 불일치·보안문자). 추측하지 말고 그 내용을 사용자에게 그대로 알려 줘.'
+    ),
+    s(
+      '금고에 그 사이트 계정이 이미 있으면(잠겨 있어도 vault_find_for_site로 확인됩니다) 로그인 카드(vault_request_login)를 띄우지 마세요. 금고가 잠겨 있을 때는 PIN 입력 카드 한 장만 뜨는 것이 정상이며, 로그인 카드와 PIN 카드를 함께 안내하지 마세요. 로그인 카드는 금고에 그 서비스 계정이 정말 없을 때만 씁니다.',
+      '금고에 그 사이트 계정이 이미 있으면(잠겨 있어도 vault_find_for_site로 확인돼) 로그인 카드(vault_request_login)를 띄우지 마. 금고가 잠겨 있을 때는 PIN 입력 카드 한 장만 뜨는 게 정상이고, 로그인 카드와 PIN 카드를 같이 안내하지 마. 로그인 카드는 금고에 그 서비스 계정이 진짜 없을 때만 써.'
     ),
     s(
       '쿠팡·무신사처럼 봇을 막는 사이트에서 browser_open이 막히거나 오류가 나면, 곧바로 web_search로 같은 정보를 찾아 답하세요. 사이트 안에서만 볼 수 있는 값(내 주문·장바구니·재고)은 추측하지 말고 그 사실을 알려 주세요.',
@@ -937,6 +953,10 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
   let vaultEmptyTerm: string | null = null;
   let vaultTermArgs: string | null = null;
   let loginCardCreated = false;
+  /** v0.6.1: 금고 잠금 카드·이미 있는 계정 신호(로그인 카드 중복 방지) */
+  let vaultLockedCardCreated = false;
+  let vaultHasAccount = false;
+  const turnStartedAt = new Date().toISOString();
 
   let runId: string | null = null;
   const openSteps = new Map<string, string[]>();
@@ -982,6 +1002,7 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
       tools: TOOL_SPECS,
       maxSteps: MAX_STEPS,
       sessionId: session,
+      userRequest: input.prompt,
       signal: input.signal,
       onStep: (info) => {
         if (info.tools.length) setAgentState('working', info.tools.join(', '));
@@ -1012,6 +1033,8 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
         if (name.startsWith('browser_')) browserUsed = true;
         if (flags?.vaultEmpty) vaultEmptyTerm = vaultTermArgs || input.prompt;
         if (flags?.loginCardCreated) loginCardCreated = true;
+        if (flags?.vaultLockedCardCreated) vaultLockedCardCreated = true;
+        if (flags?.vaultHasAccount) vaultHasAccount = true;
         addLog('info', `도구 실행 · ${name}`);
       },
     });
@@ -1036,11 +1059,24 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
         reply,
         vaultEmptyTerm,
         cardCreatedThisTurn: loginCardCreated,
+        lockedCardThisTurn: vaultLockedCardCreated,
+        vaultHasAccount,
       });
       if (ensured.card) {
         autoCardService = ensured.service;
         reply = ensured.reply;
         addLog('warn', `로그인 카드 자동 생성 · ${ensured.service} (모델이 카드 도구를 빠뜨림)`);
+      }
+    }
+    /**
+     * v0.6.1: 금고 PIN 해제 카드가 나간 턴에 로그인 카드가 같이 만들어졌다면
+     * 로그인 카드는 취소한다. 사용자가 채울 것은 PIN 하나뿐이다(IMG_3605 중복 카드).
+     */
+    if (vaultLockedCardCreated && loginCardCreated) {
+      const removed = loginRequests.cancelPendingSince(session, turnStartedAt);
+      if (removed) {
+        addLog('warn', `중복 로그인 카드 ${removed}장을 취소했습니다(금고 PIN 카드만 유지)`);
+        autoCardService = null;
       }
     }
     if (!reply.trim()) {

@@ -163,7 +163,11 @@ export function evaluateUrl(rawUrl: string): PolicyVerdict {
 
 /** 결제·게시·삭제처럼 되돌릴 수 없는 조작인지 */
 const PAYMENT_WORDS = /(결제|구매|송금|후원|입금|출금|주문\s*완료|pay\s*now|place\s*order|buy\s*now|checkout|purchase|donate|transfer)/i;
-const PUBLISH_WORDS = /(게시|등록하기|올리기|댓글\s*작성|리뷰\s*등록|post|publish|tweet|comment)/i;
+/**
+ * 게시·댓글·리뷰로 나가는 버튼 (v0.6.1: '댓글 등록'·'등록'처럼 실제 화면에 많은 말을 보강했다.
+ * 영어는 단어 경계를 써서 postcode 같은 단어를 잘못 잡지 않는다)
+ */
+const PUBLISH_WORDS = /(게시|등록|올리기|댓글|리뷰|후기|\b(post|publish|tweet|comment|submit)\b)/i;
 const DESTRUCTIVE_WORDS = /(삭제|탈퇴|해지|계정\s*변경|비밀번호\s*변경|delete|remove|unsubscribe|cancel\s*account)/i;
 
 export interface ActionVerdict {
@@ -175,12 +179,32 @@ export interface ActionVerdict {
 }
 
 /**
+ * 사용자가 이번 요청에서 전송·답장·댓글·게시를 **직접 부탁했는지** (v0.6.1)
+ *
+ * 현준 님 지침(11-13)에 따라 게시·댓글 버튼은 기본 차단이지만, 사용자가
+ * "이 문의에 답장 보내 줘"처럼 명시적으로 시키면 AI는 끝까지 실행해야 한다.
+ * 그 판단 근거를 이번 턴의 사용자 문장에서만 찾는다(모델의 추측으로 풀리지 않게).
+ */
+export function userRequestedPublish(userRequest: string): boolean {
+  const text = String(userRequest || '');
+  if (!text.trim()) return false;
+  const action = /(답장|답변|회신|보내|전송|댓글|게시|올려|올리|등록|작성|써서|써\s*줘|달아|남겨|포스팅|reply|send|post|comment)/i;
+  const target = /(메시지|문의|쪽지|댓글|게시글|리뷰|후기|답장|회신|DM|디엠|카톡|채팅|글|답변)/i;
+  return action.test(text) && target.test(text);
+}
+
+/**
  * 브라우저 도구 한 건의 위험도 판정.
  * - 결제·카드 입력: 무조건 사람(하드블록)
- * - 게시·댓글·리뷰: 기본 차단(대표님 11-13 지침), 필요하면 사람이 직접
+ * - 게시·댓글·리뷰: 기본 차단(대표님 11-13 지침). 단 사용자가 이번 턴에 직접
+ *   전송·답장·게시를 부탁했으면(allowPublish) 통과시킨다.
  * - 삭제·계정 변경: 금지
  */
-export function evaluateBrowserAction(tool: string, args: Record<string, unknown>): ActionVerdict {
+export function evaluateBrowserAction(
+  tool: string,
+  args: Record<string, unknown>,
+  options: { allowPublish?: boolean } = {}
+): ActionVerdict {
   const text = [args.text, args.label, args.selector, args.description].filter(Boolean).join(' ');
   if (tool === 'browser_type') {
     const into = String(args.target || args.field || '');
@@ -191,7 +215,7 @@ export function evaluateBrowserAction(tool: string, args: Record<string, unknown
   }
   if (tool === 'browser_click') {
     if (PAYMENT_WORDS.test(text)) return { confirm: true, reason: '결제·구매 버튼' };
-    if (PUBLISH_WORDS.test(text)) return { confirm: true, reason: '게시·댓글 버튼' };
+    if (PUBLISH_WORDS.test(text) && !options.allowPublish) return { confirm: true, reason: '게시·댓글 버튼' };
     if (DESTRUCTIVE_WORDS.test(text)) return { confirm: true, reason: '삭제·계정 변경 버튼' };
   }
   return { confirm: false };

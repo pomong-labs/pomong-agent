@@ -30,6 +30,8 @@ export interface AgentLoopOptions {
   onStep?: (info: { index: number; text: string; tools: string[] }) => void;
   /** v0.5.3: flags에는 '금고 계정 없음'같은 서버 판단용 신호가 들어온다. */
   onToolResult?: (name: string, content: string, flags?: ToolResult['flags']) => void;
+  /** v0.6.1: 이번 턴 사용자의 실제 요청 문장(전송·답장을 직접 부탁했는지 판단) */
+  userRequest?: string;
   /** 도구 실행 직전/직후 (작업 카드 단계 기록용) */
   onToolStart?: (name: string, args: Record<string, unknown>) => void;
   onToolEnd?: (name: string, content: string, durationMs: number, ok: boolean) => void;
@@ -75,6 +77,8 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
   let lastTool: { name: string; content: string } | null = null;
   let lastError: string | null = null;
   let handover = false;
+  /** v0.6.1: "시스템상 제한이라 못 한다"며 포기한 답변을 한 번만 되돌린다 */
+  let nudges = 0;
   const stopped = (): boolean => Boolean(options.signal?.aborted) || Boolean(options.cancelled?.());
 
   const done = (extra: Partial<AgentLoopResult> = {}): AgentLoopResult => ({
@@ -114,6 +118,35 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
 
     if (!result.toolCalls.length) {
       reply = result.text;
+      /**
+       * v0.6.1: 사용자가 전송·답장·댓글을 직접 부탁했는데, 브라우저를 몇 단계만 만져 보고
+       * "시스템상 제한이 있어 어렵습니다 / 직접 복사해서 보내세요"로 끝내는 경우
+       * (IMG_3605 · 3.1 Flash Lite) — 한 번만 같은 조건으로 다시 시켜 끝까지 하게 한다.
+       */
+      const gaveUp = /(시스템\s*상?\s*(제한|오류|문제)|권한이\s*없|보안\s*정책상|불가능|어렵습니다|어려워요|할\s*수\s*없|직접\s*(복사|입력|붙여)|복사해서\s*(보내|전송|붙)|대신\s*직접)/.test(
+        reply
+      );
+      const typedAlready = used.some((name) => name === 'browser_type' || name === 'browser_fill_vault');
+      if (
+        gaveUp &&
+        nudges < 1 &&
+        !handover &&
+        !options.cancelled?.() &&
+        used.some((name) => name.startsWith('browser_')) &&
+        !typedAlready
+      ) {
+        const { userRequestedPublish } = await import('./policy');
+        const explicitSend = userRequestedPublish(options.userRequest || '');
+        if (explicitSend) {
+          nudges += 1;
+          reply = '';
+          conversation.push({
+            role: 'system',
+            content: '[서버 점검] 사용자가 이번 요청에서 메시지·답장 전송을 직접 부탁했습니다. "시스템상 제한", "직접 복사해서 보내세요" 같은 말로 끝내지 말고 지금 바로 이어서 실행하세요: browser_snapshot으로 현재 화면 확인 → 대화방·문의 열기(browser_click) → 입력창에 browser_type(답장 내용) → 전송 버튼 browser_click 또는 browser_type(pressEnter: true). 결제만 하지 말고, 보내기까지 끝낸 뒤 결과를 알려 주세요.',
+          });
+          continue;
+        }
+      }
       break;
     }
 
@@ -163,7 +196,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
       options.onToolStart?.(call.name, call.args);
       let output: ToolResult;
       try {
-        output = await runTool(call.name, call.args, { session: options.sessionId });
+        output = await runTool(call.name, call.args, { session: options.sessionId, userRequest: options.userRequest });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         lastError = message;
