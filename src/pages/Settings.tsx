@@ -1535,7 +1535,7 @@ export default function SettingsPage() {
           <ul className="mt-3 divide-y divide-[#F6F4FB] text-[13.5px]">
             <li className="flex items-center justify-between py-3">
               <span className="text-pomong-sub">버전</span>
-              <span className="font-semibold text-[#3B3947]">v{data?.version || '0.6.13'}</span>
+              <span className="font-semibold text-[#3B3947]">v{data?.version || '0.6.14'}</span>
             </li>
             <li className="flex items-center justify-between py-3">
               <span className="text-pomong-sub">데이터 보관</span>
@@ -1556,7 +1556,7 @@ export default function SettingsPage() {
         ) : null}
 
         <p className="mt-6 flex items-center justify-center gap-1.5 text-[12px] text-[#B4B1C2]">
-          <Sparkles size={12} /> Pomong Agent v{data?.version || '0.6.13'} · Pomong Labs
+          <Sparkles size={12} /> Pomong Agent v{data?.version || '0.6.14'} · Pomong Labs
         </p>
         </div>
       </div>

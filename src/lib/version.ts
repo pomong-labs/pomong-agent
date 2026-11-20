@@ -6,7 +6,7 @@
  * (`?v=0.4.0`) 새로 배포될 때마다 무조건 다시 받아오게 한다.
  * 앱 버전(server/config.ts의 APP_VERSION, public/sw.js의 VERSION)과 함께 올린다.
  */
-export const ASSET_VERSION = '0.6.13';
+export const ASSET_VERSION = '0.6.14';
 
 /** 버전 쿼리가 붙은 정적 에셋 경로 */
 export function assetUrl(path: string): string {

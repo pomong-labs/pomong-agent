@@ -52,7 +52,8 @@ async function main(): Promise<void> {
   /* 1) 버전 --------------------------------------------------------------- */
   const pkg = JSON.parse(read('package.json')) as { version: string };
   const compose = read('docker-compose.yml');
-  check('버전 0.6.13', pkg.version === '0.6.13', pkg.version);
+  // v0.6.14: 버전을 하드코딩하지 않고 "현재 배포본과 서버·화면 표기가 같은지"만 본다(릴리스마다 깨지지 않게).
+  check('버전 표기 일관성(v0.6.13 이후)', /^0\.6\.(1[3-9]|[2-9]\d)$/.test(pkg.version), pkg.version);
   check('server/config 버전', APP_VERSION === pkg.version, APP_VERSION);
   check(
     'docker-compose 이미지 태그',

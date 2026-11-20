@@ -11,10 +11,10 @@ const tabs = [
 ];
 
 /**
- * 하단 탭바 (v0.6.13)
+ * 하단 탭바 (v0.6.13 → v0.6.14)
  *
  * v0.6.12까지는 화면 폭 전체를 채우는 도킹형 바(`border-t bg-white`)였다.
- * 이제는 화면 하단 중앙에 **둥근 플로팅 유리 알약**이 떠 있는 형태다.
+ * v0.6.13부터 화면 하단 중앙에 **둥근 플로팅 유리 알약**이 떠 있는 형태다.
  *
  * - 배경은 상단바 유리 버튼(☰ · 🔍·⋮ · 이름 배지)과 **같은 `.pa-glass`** 를 쓴다.
  *   (반투명 + 은은한 1px 테두리 + 그림자, 라이트/다크 공통)
@@ -24,13 +24,15 @@ const tabs = [
  * - 이 nav 는 셸의 flex 흐름에 남아(shrink-0) 자기 높이만큼 본문 영역을 줄인다.
  *   그래서 채팅·관제실·자동화·금고·더보기 어디서도 스크롤 끝이 알약에 가리지 않는다.
  * - 키보드가 올라오면(`html.kb-open`) index.css 가 `.pa-tabbar` 를 숨긴다.
+ * - v0.6.14: nav 래퍼는 **완전 투명**(`bg-transparent`)이고, 알약도 blur 를 끄고 색·테두리만
+ *   남겼다. v0.6.13에서 알약 뒤·아래 전체 폭에 사각 배경 띠가 보이던 문제를 없앤다.
  */
 export default function MobileTabBar() {
   const location = useLocation();
   const moreActive = ['/more', '/tasks', '/settings', '/tools', '/browser', '/files'].includes(location.pathname);
 
   return (
-    <nav className="pa-tabbar z-20 w-full shrink-0 px-3 pt-0.5 pb-safe lg:hidden">
+    <nav className="pa-tabbar z-20 w-full shrink-0 bg-transparent px-3 pt-0.5 pb-safe lg:hidden">
       <div className="pa-glass pa-tabbar-pill mx-auto flex w-full max-w-[460px] items-center justify-between gap-0.5 rounded-full px-1.5 py-[7px]">
         {tabs.map((tab) => {
           const active = tab.to === '/more' ? moreActive : tab.end ? location.pathname === '/' : location.pathname.startsWith(tab.to);

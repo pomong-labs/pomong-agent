@@ -278,15 +278,37 @@ html.dark {
   }
 
   /*
-   * v0.6.13: 하단 플로팅 알약 탭바 — 상단바 유리 버튼과 같은 글래스 위에
-   * 아주 옅은 바깥 그림자를 한 겹 더해 '떠 있는' 느낌만 준다(광택 없음).
+   * v0.6.14: 알약 뒤 사각 띠 제거.
+   * v0.6.13의 알약은 `pa-glass` 유리(backdrop-filter) + 큰 blur 그림자를 함께 갖고 있었는데,
+   * 알약은 셸의 flex 흐름 안에 있어 **뒤로 지나가는 내용이 없다**(늘 평평한 본문 배경 위에 뜬다).
+   * 그래도 backdrop-filter 가 합성 레이어를 만들면서 그 레이어와 그림자가 알약 상자가 아니라
+   * 탭바 박스 크기(화면 전체 폭)로 그려져, 알약 뒤·아래에 사각 배경 띠가 보였다(IMG_3659).
+   * 평평한 배경 위에서는 blur 가 색을 바꾸지 않으므로 blur 만 끄고(색·테두리는 그대로) 그림자를
+   * 알약에 바짝 붙여, 상단바 유리 버튼과 같은 질감은 유지하면서 띠는 남지 않게 한다.
    */
   .pa-tabbar-pill {
-    box-shadow: 0 10px 30px rgba(60, 50, 110, 0.13), 0 2px 6px rgba(40, 30, 80, 0.05);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    /* v0.6.13의 0 12px 32px(다크 0.45) 그림자는 알약 좌우 여백(12px)을 넘어 하단 전체 폭을
+       덮어 사각 띠처럼 보였다. 아래로 8~10px만 번지는 그림자로 바꾼다. */
+    box-shadow: 0 4px 12px -4px rgba(60, 50, 110, 0.3), 0 1px 2px rgba(40, 30, 80, 0.06);
   }
 
   html.dark .pa-tabbar-pill {
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.25);
+    box-shadow: 0 6px 14px -4px rgba(0, 0, 0, 0.45), 0 1px 2px rgba(0, 0, 0, 0.26);
+  }
+
+  /*
+   * v0.6.14: 탭바 래퍼(`<nav>`)는 **어떤 배경·경계·그림자도 갖지 않는다**.
+   * 색을 갖는 것은 안쪽 알약(`.pa-tabbar-pill`) 하나뿐이고, 그 뒤로는 본문(`--pa-surface`)
+   * 배경이 끊김 없이 이어져야 한다.
+   */
+  .pa-tabbar {
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
   }
 
   .pa-tab-item {
