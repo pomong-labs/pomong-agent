@@ -56,26 +56,29 @@ async function main(): Promise<void> {
   /* 1) 버전 --------------------------------------------------------------- */
   const pkg = JSON.parse(read('package.json')) as { version: string };
   const compose = read('docker-compose.yml');
-  check('버전 0.6.9', pkg.version === '0.6.9', pkg.version);
+  // v0.6.10 이후로 버전 접미사가 올라간다. 이 스모크는 "버전 표기가 한 값으로 모여 있는지"만 본다.
+  check('버전 0.6.x', /^0\.6\.\d+$/.test(pkg.version), pkg.version);
   check('server/config 버전', APP_VERSION === pkg.version, APP_VERSION);
-  check('docker-compose 이미지 태그', compose.includes('image: pomong-agent:0.6.9') && compose.includes('image: pomong-agent-browser:0.6.9'));
-  check('서비스 워커 캐시 버전', read('public/sw.js').includes('pomong-agent-v0.6.9'));
+  check('docker-compose 이미지 태그', compose.includes(`image: pomong-agent:${pkg.version}`) && compose.includes(`image: pomong-agent-browser:${pkg.version}`));
+  check('서비스 워커 캐시 버전', read('public/sw.js').includes(`pomong-agent-v${pkg.version}`));
   check('에셋 캐시 버전', ASSET_VERSION === pkg.version, ASSET_VERSION);
-  check('More·Settings 표시 버전', read('src/pages/More.tsx').includes("useState('0.6.9')") && read('src/pages/Settings.tsx').includes("|| '0.6.9'"));
+  check('More·Settings 표시 버전', read('src/pages/More.tsx').includes(`useState('${pkg.version}')`) && read('src/pages/Settings.tsx').includes(`|| '${pkg.version}'`));
 
   /* 2) 하단 탭바 — 바닥까지 더 내리기 -------------------------------------- */
   const css = read('src/index.css');
   const tabbar = read('src/components/MobileTabBar.tsx');
   const safeBlock = css.slice(css.indexOf('.pb-safe {'), css.indexOf('.pt-safe {'));
+  // v0.6.10: -24px → -30px 로 한 번 더 조였다. 이 스모크는 "세이프 에어리어를 빼는 타이트한 max()" 형태만 본다.
   check(
-    'pb-safe 가 max(6px, safe-bottom - 24px)',
-    /max\(6px,\s*calc\(var\(--safe-bottom\)\s*-\s*24px\)\)/.test(safeBlock),
+    'pb-safe 가 max(2~6px, safe-bottom - 24~30px)',
+    /max\([26]px,\s*calc\(var\(--safe-bottom\)\s*-\s*(24|30)px\)\)/.test(safeBlock),
     safeBlock.replace(/\s+/g, ' ').trim()
   );
   check('pb-safe 에 옛 -14px 여백 없음', !/calc\(var\(--safe-bottom\)\s*-\s*14px\)/.test(css));
   check('pb-safe 에 옛 +8px 여백 없음', !/calc\(var\(--safe-bottom\)\s*\+\s*8px\)/.test(css));
   check('탭바가 pb-safe 사용', /className="[^"]*pb-safe/.test(tabbar));
-  check('탭바 안쪽 위 여백 pt-1', tabbar.includes('px-3 pt-1') && !tabbar.includes('pt-1.5'));
+  // v0.6.10: pt-1 → pt-0.5
+  check('탭바 안쪽 위 여백 pt-1 이하', (tabbar.includes('px-3 pt-1') || tabbar.includes('px-3 pt-0.5')) && !tabbar.includes('pt-1.5'));
   check('탭바는 화면 맨 아래 고정', tabbar.includes('pa-tabbar'));
   check(
     'pb-safe 는 탭바만 사용(다른 화면 영향 없음)',
@@ -87,8 +90,11 @@ async function main(): Promise<void> {
 
   /* 3) 상단 페이드 — 더 투명하게 ------------------------------------------- */
   const header = read('src/components/AppHeader.tsx');
-  check('불투명 구간 40px(키보드 30px)', header.includes('const fadeSolid = compact ? 30 : 40;'));
-  check('페이드 전체 124px(키보드 96px)', header.includes('const fadeHeight = compact ? 96 : 124;'));
+  // v0.6.10: 값을 48/132 로 함께 내렸다. 이 스모크는 "맨 윗줄만 불투명" 형태만 본다.
+  const solid = Number((header.match(/const fadeSolid = compact \? \d+ : (\d+);/) || [])[1] || 0);
+  const fadeH = Number((header.match(/const fadeHeight = compact \? \d+ : (\d+);/) || [])[1] || 0);
+  check('불투명 구간이 맨 윗줄만(36~56px)', solid >= 36 && solid <= 56, String(solid));
+  check('페이드 전체 높이(112~140px)', fadeH >= 112 && fadeH <= 140, String(fadeH));
   check('옛 넓은 불투명 구간(112/168) 없음', !header.includes('compact ? 70 : 112') && !header.includes('compact ? 108 : 168'));
   check(
     '3단 그라데이션 78% → 40% → transparent',
@@ -97,9 +103,11 @@ async function main(): Promise<void> {
       /transparent \$\{fadeHeight\}px/.test(header)
   );
   check('그라데이션 중간 지점 계산', header.includes('fade78') && header.includes('fade40') && header.includes('fadeSpan'));
-  check('이름 가독성 text-shadow', header.includes('textShadow:') && header.includes("0 0 10px color-mix(in srgb, var(--pa-surface) 65%, transparent)"));
-  check('배지 가독성 그림자', header.includes("boxShadow: '0 2px 10px color-mix(in srgb, var(--pa-surface) 40%, transparent)'"));
-  check('HEADER_SPACE 유지(첫 말풍선이 배지에 붙지 않음)', header.includes('HEADER_SPACE = { normal: 122, compact: 86 }'));
+  // v0.6.10: 이름·배지는 하나의 유리 캡슐로 묶여 가독성을 유지한다(헤일로·개별 그림자 대신).
+  check('이름 가독성 — 유리 캡슐', header.includes('pa-glass flex min-w-0 max-w-[76vw]'));
+  check('배지 가독성 — 캡슐 안 알약', header.includes('background: meta.bg, color: meta.text'));
+  const space = (header.match(/HEADER_SPACE = \{ normal: (\d+), compact: (\d+) \}/) || []).slice(1).map(Number);
+  check('HEADER_SPACE 유지(첫 말풍선이 배지에 붙지 않음)', space[0] >= 118 && space[0] <= 140 && space[1] >= 80, space.join('/'));
 
   /* 4) v0.6.8 회귀 — iOS PWA 중복 스플래시 -------------------------------- */
   const app = read('src/App.tsx');

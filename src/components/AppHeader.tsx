@@ -20,6 +20,13 @@ import { AGENT_STATE_META, type AgentState, useAppStore } from '../lib/store';
  *   말풍선이 훨씬 잘 비쳐 보이게 했다(페이드 전체 높이 168 → 124px).
  * - 이름은 표면색 헤일로(text-shadow)로, 배지는 은은한 그림자로 가독성을 유지한다.
  *
+ * v0.6.10에서 바꾼 것
+ * - 이름과 상태 배지를 각각 띄우지 않고 **하나의 반투명 유리 캡슐(`.pa-glass`)** 안에 나란히 묶었다.
+ *   페이드가 옅어진 자리에서도 뒤쪽 채팅 문구와 겹쳐 이름이 뭉개지지 않고, 헤더가 한 덩어리로 정돈된다.
+ *   배지는 캡슐 안의 작은 알약으로 남겨 상태 색·크로스페이드 전환은 그대로 유지된다.
+ * - 상단 요소를 시계·배터리 줄에서 조금 더 내렸다(pt-2 → pt-4, +8px). 그만큼 불투명 구간과
+ *   페이드 높이, 첫 말풍선 여백(HEADER_SPACE)도 함께 내려 겹치지 않게 맞췄다.
+ *
  * - 좌우 버튼은 `absolute` 로 두어 가운데(캐릭터·이름·배지)가 화면 정중앙에 온다.
  * - 헤더 전체는 `pointer-events-none` 이라 그 위에서도 채팅 스크롤이 그대로 먹고,
  *   버튼·캡슐만 `pointer-events-auto` 로 클릭을 받는다.
@@ -32,7 +39,7 @@ const STATE_ORDER: AgentState[] = ['idle', 'thinking', 'working', 'responding', 
  * 헤더가 덮는 높이(px). Chat이 첫 메시지 위쪽 여백으로 쓴다.
  * 배지 아래 끝(약 110px)보다 조금 더 두어 첫 말풍선이 배지에 붙지 않게 한다.
  */
-export const HEADER_SPACE = { normal: 122, compact: 86 };
+export const HEADER_SPACE = { normal: 126, compact: 88 };
 
 export default function AppHeader({
   onMenu,
@@ -53,9 +60,10 @@ export default function AppHeader({
   const buttonSize = compact ? 32 : 36;
   const sideTop = (avatar - buttonSize) / 2;
   const busy = visibleState === 'thinking' || visibleState === 'working' || visibleState === 'responding';
-  // v0.6.9: 페이드 — 맨 윗줄(36~44px)만 불투명하게 덮고, 그 아래는 78% → 40% → 투명으로 푼다.
-  const fadeSolid = compact ? 30 : 40;
-  const fadeHeight = compact ? 96 : 124;
+  // v0.6.10: 상단을 8px 더 내렸으므로(pt-4) 페이드의 불투명 구간도 그만큼 함께 내린다.
+  // 맨 윗줄(16~52px)만 불투명하게 덮고, 그 아래는 78% → 40% → 투명으로 푼다.
+  const fadeSolid = compact ? 34 : 48;
+  const fadeHeight = compact ? 100 : 132;
   const fadeSpan = fadeHeight - fadeSolid;
   const fade78 = Math.round(fadeSolid + fadeSpan * 0.34);
   const fade40 = Math.round(fadeSolid + fadeSpan * 0.72);
@@ -73,7 +81,7 @@ export default function AppHeader({
         aria-hidden
       />
 
-      <div className={`relative mx-auto w-full max-w-[880px] ${compact ? 'pb-1 pt-1' : 'pb-1.5 pt-2'}`}>
+      <div className={`relative mx-auto w-full max-w-[880px] ${compact ? 'pb-1 pt-1' : 'pb-1.5 pt-4'}`}>
         <div className="relative flex items-start justify-center px-3 lg:px-4">
           {/* 좌측: 대화방 드로어 (반투명 유리 원형 버튼) */}
           <div className="absolute left-3 lg:left-4" style={{ top: sideTop }}>
@@ -175,51 +183,59 @@ export default function AppHeader({
               />
             </div>
 
-            <h1
-              className={`max-w-[54vw] truncate text-center font-bold tracking-[-0.01em] sm:max-w-[220px] ${
-                compact ? 'mt-0.5 text-[12.5px]' : 'mt-1.5 text-[15px]'
-              }`}
-              style={{
-                color: 'var(--pa-ink-strong)',
-                // v0.6.9: 배경이 비쳐도 이름이 읽히도록 표면색 헤일로를 준다(라이트·다크 공통).
-                textShadow:
-                  '0 1px 2px color-mix(in srgb, var(--pa-surface) 85%, transparent), 0 0 10px color-mix(in srgb, var(--pa-surface) 65%, transparent)',
-              }}
-            >
-              {profile.agentName || 'Pomong'}
-            </h1>
-
-            {/* 상태 배지 — 대기 중 ↔ 작업 중이 부드럽게 크로스페이드된다 */}
+            {/* v0.6.10: 이름 + 상태 배지를 하나의 반투명 유리 캡슐로 묶는다.
+                페이드가 옅은 자리에서도 뒤쪽 채팅 문구 위에서 이름이 또렷하게 읽힌다. */}
             <div
-              className={`relative flex min-w-0 items-center justify-center rounded-full transition-all duration-300 ease-out ${
-                compact ? 'mt-0.5 gap-1 px-2 py-[1px]' : 'mt-1 gap-1.5 px-2.5 py-[2px]'
+              className={`pa-glass flex min-w-0 max-w-[76vw] items-center gap-2 rounded-full ${
+                compact ? 'mt-1 gap-1.5 px-2.5 py-[3px]' : 'mt-1.5 px-3 py-1'
               }`}
               style={{
-                background: meta.bg,
-                color: meta.text,
-                // v0.6.9: 페이드가 옅어져도 배지가 말풍선 위에서 또렷하게 떠 보이게 은은한 그림자.
-                boxShadow: '0 2px 10px color-mix(in srgb, var(--pa-surface) 40%, transparent)',
+                boxShadow:
+                  '0 6px 18px color-mix(in srgb, var(--pa-surface) 45%, transparent), 0 1px 3px rgba(40,30,80,0.07)',
               }}
-              aria-live="polite"
             >
+              <h1
+                className={`min-w-0 truncate text-center font-bold tracking-[-0.01em] ${
+                  compact ? 'text-[12.5px]' : 'text-[15px]'
+                }`}
+                style={{ color: 'var(--pa-ink-strong)' }}
+              >
+                {profile.agentName || 'Pomong'}
+              </h1>
+
               <span
-                className={`shrink-0 rounded-full transition-colors duration-300 ease-out ${busy ? 'animate-pulse' : ''}`}
-                style={{ width: compact ? 5 : 6, height: compact ? 5 : 6, background: meta.dot }}
+                className="h-3.5 w-px shrink-0"
+                style={{ background: 'color-mix(in srgb, var(--pa-line) 90%, transparent)' }}
                 aria-hidden
               />
-              <span className="relative grid place-items-center">
-                {STATE_ORDER.map((id) => (
-                  <span
-                    key={id}
-                    className={`col-start-1 row-start-1 whitespace-nowrap font-bold leading-none transition-all duration-300 ease-out ${
-                      compact ? 'text-[10px]' : 'text-[11.5px]'
-                    } ${id === visibleState ? 'translate-y-0 opacity-100' : 'translate-y-[3px] opacity-0'}`}
-                    aria-hidden={id !== visibleState}
-                  >
-                    {AGENT_STATE_META[id].label}
-                  </span>
-                ))}
-              </span>
+
+              {/* 상태 배지 — 캡슐 안의 작은 알약. 대기 중 ↔ 작업 중이 부드럽게 크로스페이드된다 */}
+              <div
+                className={`flex shrink-0 items-center justify-center rounded-full transition-colors duration-300 ease-out ${
+                  compact ? 'gap-1 px-1.5 py-[1px]' : 'gap-1.5 px-2 py-[2px]'
+                }`}
+                style={{ background: meta.bg, color: meta.text }}
+                aria-live="polite"
+              >
+                <span
+                  className={`shrink-0 rounded-full transition-colors duration-300 ease-out ${busy ? 'animate-pulse' : ''}`}
+                  style={{ width: compact ? 5 : 6, height: compact ? 5 : 6, background: meta.dot }}
+                  aria-hidden
+                />
+                <span className="relative grid place-items-center">
+                  {STATE_ORDER.map((id) => (
+                    <span
+                      key={id}
+                      className={`col-start-1 row-start-1 whitespace-nowrap font-bold leading-none transition-all duration-300 ease-out ${
+                        compact ? 'text-[10px]' : 'text-[11.5px]'
+                      } ${id === visibleState ? 'translate-y-0 opacity-100' : 'translate-y-[3px] opacity-0'}`}
+                      aria-hidden={id !== visibleState}
+                    >
+                      {AGENT_STATE_META[id].label}
+                    </span>
+                  ))}
+                </span>
+              </div>
             </div>
           </div>
         </div>

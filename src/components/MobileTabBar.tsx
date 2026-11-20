@@ -16,14 +16,14 @@ export default function MobileTabBar() {
 
   return (
     <nav className="pa-tabbar z-20 w-full shrink-0 border-t border-[#F1EFF8] bg-white pb-safe lg:hidden">
-      <div className="flex items-stretch justify-between px-3 pt-1">
+      <div className="flex items-stretch justify-between px-3 pt-0.5">
         {tabs.map((tab) => {
           const active = tab.to === '/more' ? moreActive : tab.end ? location.pathname === '/' : location.pathname.startsWith(tab.to);
           return (
             <NavLink
               key={tab.to}
               to={tab.to}
-              className={`flex flex-1 flex-col items-center gap-1 rounded-[18px] py-2 text-[11px] font-medium transition ${
+              className={`flex flex-1 flex-col items-center gap-1 rounded-[18px] py-1.5 text-[11px] font-medium transition ${
                 active ? 'bg-[#F1ECFF] text-[#7C63F6]' : 'text-[#8A8A9A]'
               }`}
             >

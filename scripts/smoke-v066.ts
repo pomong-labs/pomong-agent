@@ -172,7 +172,8 @@ async function main(): Promise<void> {
   const header = read('src/components/AppHeader.tsx');
   const chat = read('src/pages/Chat.tsx');
   check('캐릭터 아바타 48px(축소)', header.includes('const avatar = compact ? 34 : 48'));
-  check('아이콘–이름 간격 축소', header.includes('mt-1.5 text-[15px]') && !header.includes('mt-2.5 text-[17px]'));
+  // v0.6.10: 이름은 유리 캡슐(mt-1.5) 안으로 들어가며 자리만 유지된다.
+  check('아이콘–이름 간격 축소', header.includes('mt-1.5 px-3 py-1') && header.includes('text-[15px]') && !header.includes('mt-2.5 text-[17px]'));
   check('이름–배지 간격 축소', header.includes("mt-1 text-[15px]") === false || header.includes('mt-1 gap-1.5 px-2.5'));
   check('헤더 높이 상수를 공유', header.includes('export const HEADER_SPACE') && chat.includes('HEADER_SPACE.normal'));
   // v0.6.9: 불투명 구간을 의도적으로 40px(키보드 30px)까지 줄였다. 값은 smoke-v069 가 고정하고,

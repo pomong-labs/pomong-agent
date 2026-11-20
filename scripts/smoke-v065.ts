@@ -107,7 +107,8 @@ async function main(): Promise<void> {
   check('캐릭터 아바타(48px · v0.6.6 축소)', header.includes('const avatar = compact ? 34 : 48'));
   check('은은한 원형 링', header.includes('--pa-line) 45%') && header.includes('radial-gradient('));
   check('우측 하단 상태 점', header.includes('boxShadow: \'0 0 0 2.5px var(--pa-surface)\''));
-  check('아이콘·이름 사이 간격 축소', header.includes('mt-1.5 text-[15px]'));
+  // v0.6.10: 이름과 배지를 하나의 유리 캡슐(mt-1.5)로 묶어 간격을 조였다.
+  check('아이콘·이름 사이 간격 축소', header.includes('mt-1.5 px-3 py-1') && header.includes('text-[15px]'));
   check('채팅 리스트 상단 여백 확보', chat.includes('HEADER_SPACE.normal') && chat.includes('HEADER_SPACE.compact'));
 
   /* 5) 배지 전환 애니메이션 ----------------------------------------------- */
