@@ -206,6 +206,19 @@ function emit(runId: string): void {
   if (view) publish({ type: 'task', title: view.title, body: '', data: { run: view } });
 }
 
+/**
+ * v0.6.4: 그 방에서 지금 돌고 있는 작업 카드(가장 최근 running).
+ * 방을 오갈 때 진행 중 카드를 되살리는 데 쓴다.
+ */
+export function activeRun(sessionId: string): TaskRunView | null {
+  const row = db
+    .prepare(
+      "SELECT id FROM task_runs WHERE session_id = ? AND status = 'running' AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1"
+    )
+    .get(sessionId) as { id: string } | undefined;
+  return row ? getRun(row.id) : null;
+}
+
 /** 화면이 처음 열릴 때 지난 작업 카드를 메시지와 함께 보여 주기 위한 목록 */
 export function listRuns(sessionId: string, limit = 40): TaskRunView[] {
   const rows = db

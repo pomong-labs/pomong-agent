@@ -19,8 +19,12 @@ interface Props {
   interactive: boolean;
   /** 핸드오버 전체화면처럼 화면을 꽉 채울 때 */
   fill?: boolean;
-  /** v0.6.3: 비율을 무시하고 화면 영역을 꽉 채우기(검은 여백 없음) */
-  stretch?: boolean;
+  /**
+   * v0.6.4: 보기 방식.
+   *  - 'fit'(기본): 원본 종횡비를 지킨 채 화면에 맞춘다. 남는 곳은 검은 여백(찌그러짐 없음).
+   *  - 'actual': 원본 픽셀 크기로 그대로 보여 주고, 화면 안에서 스크롤해 본다.
+   */
+  mode?: 'fit' | 'actual';
   onStatus?: (status: 'connecting' | 'connected' | 'closed' | 'error') => void;
   onError?: (message: string) => void;
   /** 연결되면 RFB 인스턴스를 넘겨 준다(바깥에서 sendKey 등을 쓸 수 있게) */
@@ -37,7 +41,7 @@ export interface RFBInstance {
   scaleViewport: boolean;
 }
 
-export default function NoVncViewer({ sessionId, interactive, fill, stretch, onStatus, onError, onReady }: Props) {
+export default function NoVncViewer({ sessionId, interactive, fill, mode = 'fit', onStatus, onError, onReady }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const rfbRef = useRef<RFBInstance | null>(null);
   const [status, setStatus] = useState<'connecting' | 'connected' | 'closed' | 'error'>('connecting');
@@ -75,7 +79,7 @@ export default function NoVncViewer({ sessionId, interactive, fill, stretch, onS
           addEventListener: (type: string, fn: () => void) => void;
           removeEventListener: (type: string, fn: () => void) => void;
         };
-        instance.scaleViewport = !stretch;
+        instance.scaleViewport = mode !== 'actual';
         instance.viewOnly = !interactive;
         rfb = instance;
         rfbRef.current = instance;
@@ -129,10 +133,11 @@ export default function NoVncViewer({ sessionId, interactive, fill, stretch, onS
     if (rfbRef.current) rfbRef.current.viewOnly = !interactive;
   }, [interactive]);
 
-  // v0.6.3: 「꽉 채우기」를 켜면 비율을 맞추지 않고 화면을 채운다.
+  // v0.6.4: 맞춤(fit) ↔ 확대(actual) 전환을 즉시 반영한다. 비율을 늘리는 모드는 없다.
   useEffect(() => {
-    if (rfbRef.current) rfbRef.current.scaleViewport = !stretch;
-  }, [stretch]);
+    if (!rfbRef.current) return;
+    rfbRef.current.scaleViewport = mode !== 'actual';
+  }, [mode]);
 
   /**
    * 손가락 드래그 → 휠 스크롤, 두 손가락은 그대로 둔다.
@@ -141,6 +146,8 @@ export default function NoVncViewer({ sessionId, interactive, fill, stretch, onS
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
+    // 확대(actual) 모드에서는 화면을 직접 스크롤한다(손가락 이동을 가로채지 않는다).
+    if (mode === 'actual') return;
     let startX = 0;
     let startY = 0;
     let lastY = 0;
@@ -181,15 +188,20 @@ export default function NoVncViewer({ sessionId, interactive, fill, stretch, onS
       host.removeEventListener('touchstart', onTouchStart);
       host.removeEventListener('touchmove', onTouchMove);
     };
-  }, []);
+  }, [mode]);
 
   return (
     <div
-      className={`relative w-full overflow-hidden bg-[#0B0B12] ${fill ? 'h-full' : ''} ${stretch ? 'pa-vnc-stretch' : ''}`}
+      className={`relative w-full overflow-hidden bg-[#0B0B12] ${fill ? 'h-full' : ''}`}
       style={fill ? undefined : { aspectRatio: '1280 / 800' }}
       data-pa-viewer=""
+      data-mode={mode}
     >
-      <div ref={hostRef} className="h-full w-full" style={{ touchAction: 'none' }} />
+      <div
+        ref={hostRef}
+        className={mode === 'actual' ? 'h-full w-full overflow-auto' : 'h-full w-full'}
+        style={{ touchAction: mode === 'actual' ? 'auto' : 'none' }}
+      />
       {status !== 'connected' ? (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-[#0B0B12]/90 text-center text-[12.5px] text-[#C9C6D8]">
           {status === 'connecting' ? (

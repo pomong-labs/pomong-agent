@@ -68,6 +68,8 @@ ensureDataDir();
 
 /** v0.5.4: 진행 중인 채팅 틴의 중지 신호 (방 id → AbortController) */
 const liveTurns = new Map<string, AbortController>();
+/** v0.6.4: 방별 턴 시작 시각 — 방을 오가도 작업 경과 시간이 이어진다. */
+const liveTurnStartedAt = new Map<string, string>();
 
 /* ------------------------------------------------------------------ */
 /* App state helpers                                                   */
@@ -141,6 +143,9 @@ export type AccentMode = 'character' | 'purple' | 'custom';
 
 const THEME_MODES: ThemeMode[] = ['light', 'dark', 'system'];
 const ACCENT_MODES: AccentMode[] = ['character', 'purple', 'custom'];
+/** v0.6.4: 앱 글꼴 (기본 · 프리텐다드 · 카카오 큰글씨) */
+export type FontId = 'default' | 'pretendard' | 'kakaobigsans';
+const FONT_IDS: FontId[] = ['default', 'pretendard', 'kakaobigsans'];
 
 const MASCOT_IDS = MASCOTS.map((m) => m.id) as string[];
 
@@ -160,6 +165,8 @@ interface Profile {
   persona: AgentPersona;
   /** persona='custom'일 때 직접 쓴 한 줄 성격 */
   personaCustom: string;
+  /** v0.6.4: 앱 글꼴 */
+  font: FontId;
 }
 
 /** 닉네임을 비워 두었을 때 AI가 쓰는 기본 호칭 */
@@ -178,7 +185,12 @@ function profile(): Profile {
     tone: stored.tone === 'casual' ? 'casual' : 'polite',
     persona: normalizePersona(stored.persona, 'default'),
     personaCustom: typeof stored.personaCustom === 'string' ? stored.personaCustom.slice(0, 200) : '',
+    font: normalizeFont(stored.font, 'default'),
   };
+}
+
+function normalizeFont(value: unknown, fallback: FontId): FontId {
+  return FONT_IDS.includes(value as FontId) ? (value as FontId) : fallback;
 }
 
 function normalizeTone(value: unknown, fallback: AgentTone): AgentTone {
@@ -502,6 +514,7 @@ app.post('/api/setup/preferences', requireSetup, (req, res) => {
     persona: normalizePersona(body.persona, current.persona),
     personaCustom:
       typeof body.personaCustom === 'string' ? body.personaCustom.slice(0, 200) : current.personaCustom,
+    font: normalizeFont(body.font, current.font),
   });
   res.json({ ok: true });
 });
@@ -1394,6 +1407,7 @@ app.post('/api/chat/messages', requireAuth, async (req, res) => {
   // v0.5.4: 사용자가 '■ 중지'를 누를 수 있게 이번 턴의 AbortController를 기억해 둔다.
   const controller = new AbortController();
   liveTurns.set(session, controller);
+  liveTurnStartedAt.set(session, new Date().toISOString());
 
   try {
     const result = await runInLane('chat', `${session.slice(0, 12)} · ${prompt.slice(0, 24)}`, () =>
@@ -1426,8 +1440,25 @@ app.post('/api/chat/messages', requireAuth, async (req, res) => {
     }
     res.status(502).json({ ok: false, code: 'provider_error', message: `AI 응답을 받지 못했습니다. (${message2.slice(0, 200)})` });
   } finally {
-    if (liveTurns.get(session) === controller) liveTurns.delete(session);
+    if (liveTurns.get(session) === controller) {
+      liveTurns.delete(session);
+      liveTurnStartedAt.delete(session);
+    }
   }
+});
+
+/**
+ * v0.6.4: 그 방이 지금 작업 중인지 + 진행 중 작업 카드 + 시작 시각.
+ * 채팅방을 오갈 때 진행 중 카드를 그대로 이어 보여 주는 데 쓴다.
+ */
+app.get('/api/chat/sessions/:id/active', requireAuth, (req, res) => {
+  const id = String(req.params.id || 'default');
+  res.json({
+    ok: true,
+    running: liveTurns.has(id),
+    startedAt: liveTurnStartedAt.get(id) || null,
+    taskRun: taskRuns.activeRun(id),
+  });
 });
 
 /** AI 답변·브라우저 작업 중지 (■ 중지) */
@@ -1438,6 +1469,7 @@ app.post('/api/chat/stop', requireAuth, (req, res) => {
   for (const [key, controller] of targets) {
     controller.abort();
     liveTurns.delete(key as string);
+    liveTurnStartedAt.delete(key as string);
     stopped += 1;
   }
   // 브라우저를 조작 중이었다면 화면 동작도 정지시킨다(진행 중인 클릭·입력이 이어지지 않게).

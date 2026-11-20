@@ -13,6 +13,8 @@ import {
 } from './api';
 import { decideTurnOutcome, isBusyState, isNetworkError } from './network';
 import { applyStoredTheme, applyTheme, watchSystemTheme } from './theme';
+import { applyFont, readStoredFont } from './font';
+import { mergeMessages, mergeTaskRuns } from './chat-merge';
 
 export type AgentState = 'idle' | 'thinking' | 'working' | 'responding' | 'error';
 
@@ -46,6 +48,8 @@ interface AppStoreValue {
   sending: boolean;
   /** 서버 작업이 이어지는 중이라 연결을 다시 붙여 지켜보는 상태 (v0.5.5) */
   recovering: boolean;
+  /** 이번 턴이 시작된 시각(ms) — 채팅방마다 따로 센다 */
+  turnStart: number | null;
   error: string;
   aiReady: boolean;
   /** 채팅에 떠 있는 로그인 카드 (금고에 계정이 없을 때) */
@@ -78,6 +82,12 @@ interface AppStoreValue {
   agent: AgentStatus;
   visibleState: AgentState;
   keyboardOpen: boolean;
+  /**
+   * v0.6.4: 화면을 앱 셸 바깥까지 꽉 채우는 모드(브라우저 VNC 전체화면 등).
+   * 켜져 있으면 하단 탭바를 숨겨 전체화면 위에 겹치지 않게 한다.
+   */
+  immersive: boolean;
+  setImmersive: (value: boolean) => void;
 }
 
 const DEFAULT_PROFILE: Profile = {
@@ -91,7 +101,32 @@ const DEFAULT_PROFILE: Profile = {
   tone: 'polite',
   persona: 'default',
   personaCustom: '',
+  font: 'default',
 };
+
+/**
+ * v0.6.4: 대화방(sessionId)마다 따로 들고 있는 진행 상태.
+ * 예전에는 진행 상태가 전역에 하나뿐이라 A방에서 작업 중 B방으로 옮기면
+ * 작업 카드가 B방에 따라오고, A방으로 돌아오면 사라져 있었다.
+ */
+interface SessionRuntime {
+  sending: boolean;
+  recovering: boolean;
+  liveTask: TaskRun | null;
+  startedAt: number | null;
+  error: string;
+}
+
+const EMPTY_RUNTIME: SessionRuntime = {
+  sending: false,
+  recovering: false,
+  liveTask: null,
+  startedAt: null,
+  error: '',
+};
+
+const EMPTY_MESSAGES: ChatMessage[] = [];
+const EMPTY_RUNS: TaskRun[] = [];
 
 const AppStore = createContext<AppStoreValue | null>(null);
 
@@ -194,9 +229,11 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   const keyboardOpen = useVisualViewport();
   const [profile, setProfile] = useState<Profile>(DEFAULT_PROFILE);
   const [models, setModels] = useState<ModelsResponse | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [taskRuns, setTaskRuns] = useState<TaskRun[]>([]);
-  const [liveTask, setLiveTask] = useState<TaskRun | null>(null);
+  /* v0.6.4: 대화는 방마다 따로 보관한다(방을 오가도 섞이지 않게). */
+  const [messagesBySession, setMessagesBySession] = useState<Record<string, ChatMessage[]>>({});
+  const [taskRunsBySession, setTaskRunsBySession] = useState<Record<string, TaskRun[]>>({});
+  const [loadedBySession, setLoadedBySession] = useState<Record<string, boolean>>({});
+  const [runtimeBySession, setRuntimeBySession] = useState<Record<string, SessionRuntime>>({});
   const [loginRequests, setLoginRequests] = useState<LoginRequest[]>([]);
   const [unlockRequests, setUnlockRequests] = useState<VaultUnlockRequest[]>([]);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -210,18 +247,59 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   const activeSessionRef = useRef(activeSession);
   activeSessionRef.current = activeSession;
   const [vaultState, setVaultState] = useState<{ configured: boolean; unlocked: boolean }>({ configured: false, unlocked: false });
-  const [messagesLoaded, setMessagesLoaded] = useState(false);
-  const [sending, setSending] = useState(false);
-  const [recovering, setRecovering] = useState(false);
-  const [error, setError] = useState('');
+  const [immersive, setImmersiveState] = useState(false);
   const [aiReady, setAiReady] = useState(true);
   const [draft, setDraft] = useState('');
   const [agent, setAgent] = useState<AgentStatus>({ state: 'idle', label: '대기 중', detail: '', startedAt: null, lastError: null });
-  const sendingRef = useRef(false);
-  const messagesRef = useRef<ChatMessage[]>([]);
-  messagesRef.current = messages;
+
+  /* 지금 보고 있는 방의 상태 — 화면은 이 값을 그대로 쓴다. */
+  const messages = messagesBySession[activeSession] ?? EMPTY_MESSAGES;
+  const taskRuns = taskRunsBySession[activeSession] ?? EMPTY_RUNS;
+  const runtime = runtimeBySession[activeSession] ?? EMPTY_RUNTIME;
+  const messagesLoaded = Boolean(loadedBySession[activeSession]);
+  const liveTask = runtime.liveTask;
+  const sending = runtime.sending;
+  const recovering = runtime.recovering;
+  const turnStart = runtime.startedAt;
+  const error = runtime.error;
+
+  const runtimeRef = useRef(runtimeBySession);
+  runtimeRef.current = runtimeBySession;
+  const messagesRef = useRef(messagesBySession);
+  messagesRef.current = messagesBySession;
   /** messagesLoaded의 최신값(이벤트 핸들러에서 읽는다) */
-  const messagesLoadedRef = useRef(false);
+  const messagesLoadedRef = useRef(loadedBySession);
+  messagesLoadedRef.current = loadedBySession;
+
+  /** 그 방의 메시지만 골라 바꾼다(다른 방은 그대로). */
+  const patchMessages = useCallback((session: string, updater: (prev: ChatMessage[]) => ChatMessage[]) => {
+    setMessagesBySession((prev) => {
+      const current = prev[session] ?? EMPTY_MESSAGES;
+      const next = updater(current);
+      return next === current ? prev : { ...prev, [session]: next };
+    });
+  }, []);
+
+  const patchRuns = useCallback((session: string, updater: (prev: TaskRun[]) => TaskRun[]) => {
+    setTaskRunsBySession((prev) => {
+      const current = prev[session] ?? EMPTY_RUNS;
+      const next = updater(current);
+      return next === current ? prev : { ...prev, [session]: next };
+    });
+  }, []);
+
+  const patchRuntime = useCallback((session: string, patch: Partial<SessionRuntime>) => {
+    setRuntimeBySession((prev) => ({ ...prev, [session]: { ...(prev[session] ?? EMPTY_RUNTIME), ...patch } }));
+  }, []);
+
+  const markLoaded = useCallback((session: string) => {
+    setLoadedBySession((prev) => (prev[session] ? prev : { ...prev, [session]: true }));
+  }, []);
+
+  /** 그 방이 지금 작업 중인지(전역 1개가 아니라 방별) */
+  const isSending = useCallback((session: string) => Boolean(runtimeRef.current[session]?.sending), []);
+
+  const setImmersive = useCallback((value: boolean) => setImmersiveState(value), []);
   /** 연결 복구 루프 세대 번호 — 값이 바뀌면 진행 중이던 복구를 버린다 */
   const recoveryTokenRef = useRef(0);
   /** 지금 복구 루프가 진행 UI를 들고 있는지(방을 옮길 때 정리하려고) */
@@ -264,6 +342,11 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     });
   }, [profile.theme, profile.accentMode, profile.accentColor, profile.character]);
 
+  // v0.6.4: 글꼴도 저장된 값을 따르고, 첫 페인트에 이미 칠해 둔 값을 화면과 맞춘다.
+  useEffect(() => {
+    applyFont(profile.font || readStoredFont());
+  }, [profile.font]);
+
   // 첫 로드: 프로필 · 모델 목록 · 지난 대화
   useEffect(() => {
     api
@@ -278,11 +361,12 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         `/api/chat/messages?session=${encodeURIComponent(activeSessionRef.current)}`
       )
       .then((r) => {
-        setMessages(r.messages);
-        setTaskRuns(r.taskRuns || []);
+        const boot = activeSessionRef.current;
+        patchMessages(boot, (prev) => mergeMessages(prev, r.messages || []));
+        patchRuns(boot, (prev) => mergeTaskRuns(prev, r.taskRuns || []));
       })
       .catch(() => undefined)
-      .finally(() => setMessagesLoaded(true));
+      .finally(() => markLoaded(activeSessionRef.current));
     // v0.5.4: 대화방 목록
     api
       .get<{ sessions: ChatSession[] }>('/api/chat/sessions')
@@ -292,7 +376,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       .get<{ aiConfigured: boolean }>('/api/auth/me')
       .then((r) => setAiReady(r.aiConfigured))
       .catch(() => undefined);
-  }, [refreshModels]);
+  }, [refreshModels, patchMessages, patchRuns, markLoaded]);
 
   // AI 상태는 서버가 들고 있으므로 탭을 옮겨도(다른 기기에서도) 그대로 보인다.
   useEffect(() => {
@@ -308,30 +392,33 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       }
     };
     load();
-    const id = window.setInterval(load, sendingRef.current ? 1500 : 6000);
+    const id = window.setInterval(load, sending ? 1500 : 6000);
     return () => {
       alive = false;
       window.clearInterval(id);
     };
   }, [sending]);
 
-  const loadMessages = useCallback(async (sessionId?: string) => {
-    const id = sessionId || activeSessionRef.current;
-    try {
-      const r = await api.get<{ messages: ChatMessage[]; taskRuns?: TaskRun[] }>(
-        `/api/chat/messages?session=${encodeURIComponent(id)}`
-      );
-      // 다른 방으로 빠르게 넘어간 뒤 늦게 도착한 예전 응답이 현재 대화를 덮지 않게 한다.
-      if (id !== activeSessionRef.current) return;
-      setMessages(r.messages);
-      setTaskRuns(r.taskRuns || []);
-    } catch {
-      /* not signed in yet */
-    } finally {
-      setMessagesLoaded(true);
-      messagesLoadedRef.current = true;
-    }
-  }, []);
+  const loadMessages = useCallback(
+    async (sessionId?: string) => {
+      const id = sessionId || activeSessionRef.current;
+      try {
+        const r = await api.get<{ messages: ChatMessage[]; taskRuns?: TaskRun[] }>(
+          `/api/chat/messages?session=${encodeURIComponent(id)}`
+        );
+        // v0.6.4: 늦게 도착한 응답이라도 **그 방의 칸**에만 쌓는다. 보고 있는 방이면 바로 반영되고,
+        // 다른 방이면 그 방으로 돌아올 때 최신 상태로 보인다(다른 방 화면을 덮지 않는다).
+        patchMessages(id, (prev) => mergeMessages(prev, r.messages || []));
+        patchRuns(id, (prev) => mergeTaskRuns(prev, r.taskRuns || []));
+      } catch {
+        /* not signed in yet */
+      } finally {
+        markLoaded(id);
+        messagesLoadedRef.current = { ...messagesLoadedRef.current, [id]: true };
+      }
+    },
+    [markLoaded, patchMessages, patchRuns]
+  );
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -362,41 +449,29 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
 
   const applySnapshot = useCallback(
     (session: string, snapshot: { messages: ChatMessage[]; taskRuns: TaskRun[] }) => {
-      if (session !== activeSessionRef.current) return;
-      setMessages((prev) => {
-        const sameLength = prev.length === snapshot.messages.length;
-        const sameLast = prev[prev.length - 1]?.id === snapshot.messages[snapshot.messages.length - 1]?.id;
-        return sameLength && sameLast ? prev : snapshot.messages;
-      });
-      setTaskRuns(snapshot.taskRuns || []);
-      messagesLoadedRef.current = true;
-      setMessagesLoaded(true);
+      // v0.6.4: 보고 있는 방이 아니어도 그 방의 칸에만 쌓아 둔다(돌아오면 그대로 보인다).
+      patchMessages(session, (prev) => mergeMessages(prev, snapshot.messages || []));
+      patchRuns(session, (prev) => mergeTaskRuns(prev, snapshot.taskRuns || []));
+      markLoaded(session);
+      messagesLoadedRef.current = { ...messagesLoadedRef.current, [session]: true };
     },
-    []
+    [markLoaded, patchMessages, patchRuns]
   );
 
   /** 연결이 끊긴 뒤 서버 작업을 지켜보고, 끝나면 답장을 화면에 붙인다. */
   const watchServerTurn = useCallback(
     async (input: { session: string; sinceId: number; prompt?: string }) => {
       const session = input.session;
-      if (session !== activeSessionRef.current) return;
       const token = ++recoveryTokenRef.current;
-      recoveringRef.current = true;
-      setRecovering(true);
-      setSending(true);
-      sendingRef.current = true;
-      setError('');
+      const active = () => activeSessionRef.current === session;
+      patchRuntime(session, { recovering: true, sending: true, startedAt: Date.now(), error: '' });
 
-      const finish = () => {
+      const finish = (error = '') => {
         if (token !== recoveryTokenRef.current) return;
-        recoveringRef.current = false;
-        sendingRef.current = false;
-        setSending(false);
-        setLiveTask(null);
-        setRecovering(false);
+        patchRuntime(session, { recovering: false, sending: false, liveTask: null, startedAt: null, error });
         void refreshSessions();
       };
-      const stillMine = () => token === recoveryTokenRef.current && session === activeSessionRef.current;
+      const stillMine = () => token === recoveryTokenRef.current;
       const freshReply = (snapshot: { messages: ChatMessage[] }) =>
         snapshot.messages.some((m) => m.role === 'assistant' && m.id > input.sinceId);
 
@@ -405,14 +480,11 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         const snapshot = await fetchSnapshot(session);
         if (!stillMine()) return;
         if (snapshot) {
+          applySnapshot(session, snapshot);
           if (freshReply(snapshot)) {
-            applySnapshot(session, snapshot);
-            setError('');
             finish();
             return;
           }
-          // 내가 보낸 말풍선이 서버에 저장됐으면 임시 말풍선을 실제 것과 바꿔 둔다.
-          applySnapshot(session, snapshot);
         }
 
         const running = await api
@@ -425,7 +497,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
           .get<AgentStatus & { ok: true }>('/api/agent/status')
           .catch(() => null);
         if (!stillMine()) return;
-        if (status) {
+        if (status && active()) {
           setAgent({ state: status.state, label: status.label, detail: status.detail, startedAt: status.startedAt, lastError: status.lastError });
         }
 
@@ -442,8 +514,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         }
         if (decision === 'error' && status?.state === 'error' && status.lastError) {
           // 진짜 서버 오류(API 키 오류·제공자 오류 등)만 오류 카드로 보여 준다.
-          setError(status.lastError);
-          finish();
+          finish(status.lastError);
           return;
         }
 
@@ -453,13 +524,11 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         const again = await fetchSnapshot(session);
         if (!stillMine()) return;
         if (again) {
+          applySnapshot(session, again);
           if (freshReply(again)) {
-            applySnapshot(session, again);
-            setError('');
             finish();
             return;
           }
-          applySnapshot(session, again);
         }
 
         const ended = decideTurnOutcome({
@@ -471,28 +540,24 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         });
         if (ended === 'lost') {
           // 연결이 끊겨 요청 자체가 서버에 닿지 않았다 → 입력한 글을 되살려 준다.
-          if (input.prompt) setDraft(input.prompt);
-          setError('연결이 잠시 끊겨 메시지가 서버에 도착하지 않았어요. 방금 쓴 내용을 되살려 두었으니 다시 보내 주세요.');
-          finish();
+          if (input.prompt && active()) setDraft(input.prompt);
+          finish('연결이 잠시 끊겨 메시지가 서버에 도착하지 않았어요. 방금 쓴 내용을 되살려 두었으니 다시 보내 주세요.');
           return;
         }
         if (ended === 'error') {
-          setError(status?.lastError || 'AI 응답을 받지 못했어요. 잠시 뒤 다시 시도해 주세요.');
-          finish();
+          finish(status?.lastError || 'AI 응답을 받지 못했어요. 잠시 뒤 다시 시도해 주세요.');
           return;
         }
         // 서버는 처리를 마쳤고 답장은 없는 상태(사용자가 중지했거나 빈 응답) — 조용히 맞춘다.
-        setError('');
         finish();
         return;
       }
 
       if (!stillMine()) return;
       // 제한 시간 안에 끝나지 않았다. 화면은 진행 상태로 두지 않고 안내만 남긴다.
-      setError('서버가 아직 이어서 작업하고 있어요. 잠시 뒤 대화를 다시 열면 결과가 나타나요.');
-      finish();
+      finish('서버가 아직 이어서 작업하고 있어요. 잠시 뒤 대화를 다시 열면 결과가 나타나요.');
     },
-    [applySnapshot, fetchSnapshot, refreshSessions]
+    [applySnapshot, fetchSnapshot, patchRuntime, refreshSessions, setDraft]
   );
 
   /**
@@ -510,22 +575,56 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       const snapshot = await fetchSnapshot(session);
       if (session !== activeSessionRef.current) return;
       let watermark = 0;
+      const local = messagesRef.current[session] ?? EMPTY_MESSAGES;
       if (snapshot) {
-        const localMax = messagesRef.current.reduce((max, m) => Math.max(max, m.id > 0 ? m.id : 0), 0);
+        const localMax = local.reduce((max, m) => Math.max(max, m.id > 0 ? m.id : 0), 0);
         const serverMax = snapshot.messages.reduce((max, m) => Math.max(max, m.id), 0);
         watermark = serverMax;
-        if (serverMax > localMax || !messagesLoadedRef.current) applySnapshot(session, snapshot);
+        if (serverMax > localMax || !messagesLoadedRef.current[session]) applySnapshot(session, snapshot);
       }
-      if (sendingRef.current) return;
+      if (isSending(session)) return;
       const running = await api
         .get<{ running: boolean }>(`/api/chat/running?session=${encodeURIComponent(session)}`)
         .catch(() => null);
-      if (!running?.running || session !== activeSessionRef.current || sendingRef.current) return;
+      if (!running?.running || session !== activeSessionRef.current || isSending(session)) return;
       void watchServerTurn({ session, sinceId: watermark });
     } finally {
       reconcilingRef.current = false;
     }
-  }, [applySnapshot, fetchSnapshot, watchServerTurn]);
+  }, [applySnapshot, fetchSnapshot, isSending, watchServerTurn]);
+
+  /**
+   * v0.6.4: 방을 옮길 때 그 방의 진행 상태를 서버에서 다시 확인한다.
+   * A방에서 작업을 걸어두고 B방으로 갔다가 돌아오면, 진행 중 작업 카드가 그대로 이어진다.
+   */
+  const syncSessionRuntime = useCallback(
+    async (id: string) => {
+      try {
+        const r = await api.get<{ running: boolean; startedAt: string | null; taskRun: TaskRun | null }>(
+          `/api/chat/sessions/${encodeURIComponent(id)}/active`
+        );
+        if (r.running) {
+          const started = r.startedAt ? new Date(r.startedAt).getTime() : null;
+          patchRuntime(id, {
+            sending: true,
+            recovering: false,
+            liveTask: r.taskRun || runtimeRef.current[id]?.liveTask || null,
+            startedAt: started && Number.isFinite(started) ? started : Date.now(),
+            error: '',
+          });
+        } else {
+          const current = runtimeRef.current[id];
+          // 서버가 이미 끝났으면 남아 있던 진행 표시를 정리한다(멈춘 점 3개 방지).
+          if (current?.sending && !current.recovering) {
+            patchRuntime(id, { sending: false, liveTask: null, startedAt: null });
+          }
+        }
+      } catch {
+        /* 오래된 서버(0.6.3 이하)면 이 확인을 건너뛴다 */
+      }
+    },
+    [patchRuntime]
+  );
 
   const switchSession = useCallback(
     async (id: string) => {
@@ -537,25 +636,15 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       } catch {
         /* ignore */
       }
-      setMessages([]);
-      setTaskRuns([]);
-      setLiveTask(null);
+      // v0.6.4: 방마다 들고 있는 메시지·작업 카드·진행 상태를 그대로 살린다.
+      // (예전처럼 [] 로 비우지 않는다 → 돌아오면 보던 그대로)
       setLoginRequests([]);
       setUnlockRequests([]);
-      setError('');
-      recoveryTokenRef.current += 1;
-      if (recoveringRef.current) {
-        // 복구 대기 중에 방을 옮기면 그 화면의 진행 표시도 함께 정리한다(멈춘 점 3개 방지).
-        recoveringRef.current = false;
-        sendingRef.current = false;
-        setSending(false);
-        setLiveTask(null);
-      }
-      setRecovering(false);
       await loadMessages(id);
+      void syncSessionRuntime(id);
       void refreshSessions();
     },
-    [loadMessages, refreshSessions]
+    [loadMessages, refreshSessions, syncSessionRuntime]
   );
 
   const newSession = useCallback(async (): Promise<string | null> => {
@@ -565,10 +654,12 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       await switchSession(r.session.id);
       return r.session.id;
     } catch (err) {
-      setError(err instanceof Error ? err.message : '새 대화를 만들지 못했습니다.');
+      patchRuntime(activeSessionRef.current, {
+        error: err instanceof Error ? err.message : '새 대화를 만들지 못했습니다.',
+      });
       return null;
     }
-  }, [refreshSessions, switchSession]);
+  }, [patchRuntime, refreshSessions, switchSession]);
 
   const renameSession = useCallback(
     async (id: string, title: string) => {
@@ -654,16 +745,22 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         const event = JSON.parse(ev.data) as { type?: string; data?: Record<string, unknown> };
         if (event.type === 'task') {
           const run = event.data?.run as TaskRun | undefined;
-          if (run) setLiveTask(run);
+          if (run) {
+            // v0.6.4: 작업 카드도 그 방(sessionId)의 칸에만 붙인다.
+            const runSession = run.sessionId || activeSessionRef.current;
+            patchRuntime(runSession, { liveTask: run });
+            if (run.endedAt || run.status !== 'running') {
+              patchRuns(runSession, (prev) => mergeTaskRuns(prev, [run]));
+            }
+          }
           return;
         }
         if (event.type === 'chat_message' || event.type === 'chat') {
           const message = event.data?.message as ChatMessage | undefined;
           if (!message || typeof message.id !== 'number') return;
-          // 다른 대화방의 메시지가 지금 보는 방에 섮이지 않게 한다.
-          const eventSession = event.data?.session ? String(event.data.session) : null;
-          if (eventSession && eventSession !== activeSessionRef.current) return;
-          setMessages((prev) => (prev.some((m) => m.id === message.id) ? prev : [...prev, message].sort((a, b) => a.id - b.id)));
+          // 다른 대화방의 메시지는 그 방의 칸에만 쌓는다(보고 있는 방을 덮지 않는다).
+          const eventSession = event.data?.session ? String(event.data.session) : activeSessionRef.current;
+          patchMessages(eventSession, (prev) => (prev.some((m) => m.id === message.id) ? prev : mergeMessages(prev, [message])));
           return;
         }
         if (event.type === 'vault_unlock_request') {
@@ -711,7 +808,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       source?.removeEventListener('message', onMessage as EventListener);
       source?.close();
     };
-  }, []);
+  }, [loadLoginCards, patchMessages, patchRuns, patchRuntime]);
 
   /** 앱을 보고 있는지 서버에 알려 준다(보고 있으면 푸시를 보내지 않는다). */
   useEffect(() => {
@@ -754,115 +851,110 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       try {
         const r = await api.post<{ active: { provider: string; model: string } }>('/api/models/select', { provider, model });
         await refreshModels();
-        setError('');
+        patchRuntime(activeSessionRef.current, { error: '' });
         return { ok: true, message: `${r.active.model}` };
       } catch (err) {
         const needsKey = err instanceof ApiError && err.code === 'provider_not_connected';
         return { ok: false, message: err instanceof Error ? err.message : '모델을 바꾸지 못했습니다.', needsKey };
       }
     },
-    [refreshModels]
+    [patchRuntime, refreshModels]
   );
 
-  const send = useCallback(async (text: string, attachmentIds?: string[], replyTo?: ReplyTarget | null) => {
-    const content = text.trim();
-    const ids = (attachmentIds || []).filter(Boolean);
-    if ((!content && !ids.length) || sendingRef.current) return;
-    sendingRef.current = true;
-    setSending(true);
-    setError('');
-    setDraft('');
-    // 끊겼을 때 "이 요청 전에 있던 마지막 메시지"를 기준점으로 삼아 새 답장을 가려낸다.
-    const watermark = messagesRef.current.reduce((max, m) => Math.max(max, m.id > 0 ? m.id : 0), 0);
-    const session = activeSessionRef.current;
-    const optimistic: ChatMessage = {
-      id: -Date.now(),
-      role: 'user',
-      content,
-      meta: null,
-      attachments: [],
-      replyTo: replyTo ? { id: replyTo.id, role: replyTo.role, content: replyTo.content, createdAt: replyTo.createdAt } : null,
-      createdAt: new Date().toISOString(),
-    };
-    setMessages((prev) => [...prev, optimistic]);
-    // 네트워크 단절로 복구 모드에 넘겼는지(그때는 finally가 진행 상태를 끄지 않는다)
-    let handedOff = false;
-    try {
-      const res = await api.post<{ message: ChatMessage; userMessage?: ChatMessage; taskRun?: TaskRun | null }>('/api/chat/messages', {
-        message: content,
-        session,
-        attachmentIds: ids.length ? ids : undefined,
-        replyToId: replyTo ? replyTo.id : undefined,
-      });
-      // 서버가 저장한 내 메시지(userMessage)로 임시 메시지를 바꾸고, AI 답변을 뒤에 붙인다.
-      // 예전에는 응답에 AI 답변만 담겨 와서 내 메시지가 화면에서 사라졌다.
-      const mine: ChatMessage = res.userMessage ?? { ...optimistic, id: res.message.id - 1 };
-      setMessages((prev) => {
-        const next = prev.filter((m) => m.id !== optimistic.id && m.id !== mine.id && m.id !== res.message.id);
-        next.push(mine);
-        next.push(res.message);
-        return next.sort((a, b) => a.id - b.id);
-      });
-      if (res.taskRun) {
-        setTaskRuns((prev) => [res.taskRun as TaskRun, ...prev.filter((r) => r.id !== (res.taskRun as TaskRun).id)]);
+  const send = useCallback(
+    async (text: string, attachmentIds?: string[], replyTo?: ReplyTarget | null) => {
+      const content = text.trim();
+      const ids = (attachmentIds || []).filter(Boolean);
+      const session = activeSessionRef.current;
+      if ((!content && !ids.length) || isSending(session)) return;
+      patchRuntime(session, { sending: true, recovering: false, startedAt: Date.now(), error: '' });
+      setDraft('');
+      // 끊겼을 때 "이 요청 전에 있던 마지막 메시지"를 기준점으로 삼아 새 답장을 가려낸다.
+      const sessionMessages = messagesRef.current[session] ?? EMPTY_MESSAGES;
+      const watermark = sessionMessages.reduce((max, m) => Math.max(max, m.id > 0 ? m.id : 0), 0);
+      const optimistic: ChatMessage = {
+        id: -Date.now(),
+        role: 'user',
+        content,
+        meta: null,
+        attachments: [],
+        replyTo: replyTo ? { id: replyTo.id, role: replyTo.role, content: replyTo.content, createdAt: replyTo.createdAt } : null,
+        createdAt: new Date().toISOString(),
+      };
+      patchMessages(session, (prev) => [...prev, optimistic]);
+      // 네트워크 단절로 복구 모드에 넘겼는지(그때는 finally가 진행 상태를 끄지 않는다)
+      let handedOff = false;
+      try {
+        const res = await api.post<{ message: ChatMessage; userMessage?: ChatMessage; taskRun?: TaskRun | null }>('/api/chat/messages', {
+          message: content,
+          session,
+          attachmentIds: ids.length ? ids : undefined,
+          replyToId: replyTo ? replyTo.id : undefined,
+        });
+        // 서버가 저장한 내 메시지(userMessage)로 임시 메시지를 바꾸고, AI 답변을 뒤에 붙인다.
+        // v0.6.4: 통째로 비우고 다시 붙이지 않고 id 기준으로 합친다(말풍선이 잠깐 사라지는 깜빡임 방지).
+        const mine: ChatMessage = res.userMessage ?? { ...optimistic, id: res.message.id - 1 };
+        patchMessages(session, (prev) => mergeMessages(prev.filter((m) => m.id !== optimistic.id), [mine, res.message]));
+        if (res.taskRun) {
+          const run = res.taskRun;
+          patchRuns(session, (prev) => mergeTaskRuns(prev, [run]));
+          // 끝난 작업 카드로 바꿔치기되는 순간 카드가 사라지지 않게 진행 카드를 곧바로 내린다.
+          if (run.endedAt || run.status !== 'running') patchRuntime(session, { liveTask: null });
+        }
+        setAiReady(true);
+      } catch (err) {
+        if (err instanceof ApiError && err.code === 'cancelled') {
+          // 사용자가 '■ 중지'를 누른 경우는 오류가 아니다.
+          void loadMessages(session);
+          return;
+        }
+        // v0.5.5: 아이폰에서 앱을 나가면 iOS가 fetch를 끊는다(Load failed). 서버는 계속 작업 중이므로
+        // 오류 카드를 띄우지 않고, 서버가 끝낼 때까지 진행 UI를 유지하며 답장을 이어 받는다.
+        if (isNetworkError(err)) {
+          handedOff = true;
+          patchRuntime(session, { sending: true });
+          void watchServerTurn({ session, sinceId: watermark, prompt: content });
+          return;
+        }
+        if (err instanceof ApiError && err.code === 'no_provider') {
+          setAiReady(false);
+          await refreshModels();
+        }
+        patchRuntime(session, { error: err instanceof Error ? err.message : '응답을 받지 못했습니다.' });
+        // 서버에는 내 메시지가 이미 저장돼 있을 수 있으니 실제 저장본으로 맞춘다.
+        void loadMessages(session);
+      } finally {
+        if (!handedOff) {
+          patchRuntime(session, { sending: false, recovering: false, liveTask: null, startedAt: null });
+        }
+        void refreshSessions();
+        window.setTimeout(() => {
+          api.get<AgentStatus & { ok: true }>('/api/agent/status').then((r) => setAgent({ state: r.state, label: r.label, detail: r.detail, startedAt: r.startedAt, lastError: r.lastError })).catch(() => undefined);
+        }, 600);
       }
-      setAiReady(true);
-    } catch (err) {
-      if (err instanceof ApiError && err.code === 'cancelled') {
-        // 사용자가 '■ 중지'를 누른 경우는 오류가 아니다.
-        void loadMessages();
-        return;
-      }
-      // v0.5.5: 아이폰에서 앱을 나가면 iOS가 fetch를 끊는다(Load failed). 서버는 계속 작업 중이므로
-      // 오류 카드를 띄우지 않고, 서버가 끝낼 때까지 진행 UI를 유지하며 답장을 이어 받는다.
-      if (isNetworkError(err)) {
-        handedOff = true;
-        setSending(true);
-        void watchServerTurn({ session, sinceId: watermark, prompt: content });
-        return;
-      }
-      if (err instanceof ApiError && err.code === 'no_provider') {
-        setAiReady(false);
-        await refreshModels();
-      }
-      setError(err instanceof Error ? err.message : '응답을 받지 못했습니다.');
-      // 서버에는 내 메시지가 이미 저장돼 있을 수 있으니 실제 저장본으로 맞춘다.
-      void loadMessages();
-    } finally {
-      if (!handedOff) {
-        sendingRef.current = false;
-        setSending(false);
-        setLiveTask(null);
-      }
-      void refreshSessions();
-      window.setTimeout(() => {
-        api.get<AgentStatus & { ok: true }>('/api/agent/status').then((r) => setAgent({ state: r.state, label: r.label, detail: r.detail, startedAt: r.startedAt, lastError: r.lastError })).catch(() => undefined);
-      }, 600);
-    }
-  }, [refreshModels, loadMessages, refreshSessions, watchServerTurn]);
+    },
+    [isSending, loadMessages, patchMessages, patchRuns, patchRuntime, refreshModels, refreshSessions, setDraft, watchServerTurn]
+  );
 
   const clearChat = useCallback(async () => {
-    await api.del(`/api/chat/messages?session=${encodeURIComponent(activeSessionRef.current)}`).catch(() => undefined);
-    setMessages([]);
-    setError('');
+    const session = activeSessionRef.current;
+    await api.del(`/api/chat/messages?session=${encodeURIComponent(session)}`).catch(() => undefined);
+    patchMessages(session, () => EMPTY_MESSAGES);
+    patchRuns(session, () => EMPTY_RUNS);
+    patchRuntime(session, { error: '', liveTask: null, sending: false, startedAt: null });
     void refreshSessions();
-  }, [refreshSessions]);
+  }, [patchMessages, patchRuns, patchRuntime, refreshSessions]);
 
   /** AI 답변·브라우저 작업 중지 (■ 중지) */
   const stop = useCallback(async () => {
     const id = activeSessionRef.current;
     // 복구 대기 중이었다면 그 루프부터 멈춘다(사용자가 중지했으니 더 기다리지 않는다).
     recoveryTokenRef.current += 1;
-    recoveringRef.current = false;
-    setRecovering(false);
+    patchRuntime(id, { sending: false, recovering: false, liveTask: null, startedAt: null, error: '' });
     await api.post('/api/chat/stop', { session: id }).catch(() => undefined);
-    sendingRef.current = false;
-    setSending(false);
-    setLiveTask(null);
-    setError('');
     window.setTimeout(() => void loadMessages(id), 500);
     void refreshSessions();
-  }, [loadMessages, refreshSessions]);
+  }, [loadMessages, patchRuntime, refreshSessions]);
 
   /** 로그인 카드: 아이디·비밀번호(필요하면 금고 PIN)를 서버로 보낸다. 값은 이 화면 밖으로 남지 않는다. */
   const submitLoginCard = useCallback(
@@ -926,6 +1018,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       taskRuns,
       sending,
       recovering,
+      turnStart,
       error,
       aiReady,
       loginRequests,
@@ -950,6 +1043,8 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       agent,
       visibleState,
       keyboardOpen,
+      immersive,
+      setImmersive,
     }),
     [
       profile,
@@ -964,6 +1059,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       taskRuns,
       sending,
       recovering,
+      turnStart,
       error,
       aiReady,
       loginRequests,
@@ -987,6 +1083,8 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       agent,
       visibleState,
       keyboardOpen,
+      immersive,
+      setImmersive,
     ]
   );
 

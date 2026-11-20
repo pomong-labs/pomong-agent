@@ -26,7 +26,7 @@ async function main() {
     accounts: { openai: { apiKeyEnc: encrypt('sk-demo-key-for-ui', serverKey()), connectedAt: now } },
   });
   setJson('profile', {
-    nickname: '현준',
+    nickname: '홍길동',
     theme: 'light',
     language: 'ko',
     agentName: '피몽',
@@ -44,7 +44,7 @@ async function main() {
     .run(
       'default',
       'assistant',
-      '현준 님, 금고에 깃허브 계정 정보가 아직 없어요. 아래 카드에 계정 정보를 입력해 주시면 제가 바로 로그인해 드릴게요!',
+      '홍길동 님, 금고에 깃허브 계정 정보가 아직 없어요. 아래 카드에 계정 정보를 입력해 주시면 제가 바로 로그인해 드릴게요!',
       null,
       now
     );

@@ -254,11 +254,11 @@ async function personaTests() {
     for (const id of ['default', 'calm', 'bright', 'concise', 'witty', 'custom'] as const) {
       assert.ok(ids.includes(id), `${id} 프리셋 존재`);
     }
-    const preview = client.personaExample('calm', { callName: '현준', agentName: '포몽', polite: true });
+    const preview = client.personaExample('calm', { callName: '홍길동', agentName: '포몽', polite: true });
     assert.match(preview, /포몽:/, '미리보기에 AI 이름');
     assert.match(preview, /확인했습니다/, '차분한 예시 문구');
     const customPreview = client.personaExample('custom', {
-      callName: '현준',
+      callName: '홍길동',
       agentName: '포몽',
       polite: false,
       custom: '말수 적은 비서',
@@ -337,7 +337,7 @@ async function httpTests() {
       method: 'PUT',
       headers: auth,
       body: JSON.stringify({
-        nickname: '현준',
+        nickname: '홍길동',
         agentName: '포몽',
         character: 'lamong',
         tone: 'casual',

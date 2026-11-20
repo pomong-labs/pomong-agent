@@ -119,7 +119,7 @@ async function main(): Promise<void> {
   const vault = await import('../server/vault');
   const tools = await import('../server/tools');
   vault.initVault('1234');
-  vault.createItem({ title: '크몽', type: 'login', username: 'hyunjun5216@naver.com', secret: 'dummy-pass', notes: 'kmong.com' });
+  vault.createItem({ title: '크몽', type: 'login', username: 'you@naver.com', secret: 'dummy-pass', notes: 'kmong.com' });
   vault.lockVault();
   const loginCardsBefore = (db.prepare('SELECT COUNT(*) AS n FROM login_requests').get() as { n: number }).n;
   const result = await tools.runTool(

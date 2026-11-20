@@ -14,7 +14,7 @@ J=$D/cookies.txt
 TOKEN=$(cat $D/setup-token.txt)
 curl -s -c $J -X POST $B/api/setup/verify-token -H 'Content-Type: application/json' -d "{\"token\":\"$TOKEN\"}" >/dev/null
 curl -s -b $J -c $J -X POST $B/api/setup/account -H 'Content-Type: application/json' -d '{"username":"e2e","password":"e2e-test-pass"}' >/dev/null
-curl -s -b $J -c $J -X POST $B/api/setup/preferences -H 'Content-Type: application/json' -d '{"nickname":"현준","agentName":"포몽","character":"poding","tone":"polite"}' >/dev/null
+curl -s -b $J -c $J -X POST $B/api/setup/preferences -H 'Content-Type: application/json' -d '{"nickname":"홍길동","agentName":"포몽","character":"poding","tone":"polite"}' >/dev/null
 curl -s -b $J -c $J -X POST $B/api/setup/complete -H 'Content-Type: application/json' -d '{}' >/dev/null
 
 echo "== version"; curl -s $B/api/version

@@ -22,7 +22,7 @@ for i in $(seq 1 40); do curl -s -m 2 $BASE/api/health | grep -q '"ok":true' && 
 TOKEN=$(sudo -n cat $VOL/setup-token.txt)
 curl -s -o /dev/null -c $J -X POST $BASE/api/setup/verify-token -H 'Content-Type: application/json' -d "{\"token\":\"$TOKEN\"}"
 curl -s -o /dev/null -b $J -c $J -X POST $BASE/api/setup/account -H 'Content-Type: application/json' -d '{"username":"e2e","password":"e2e-test-pass"}'
-curl -s -o /dev/null -b $J -c $J -X POST $BASE/api/setup/preferences -H 'Content-Type: application/json' -d '{"nickname":"현준","agentName":"루아","character":"lamong","tone":"polite"}'
+curl -s -o /dev/null -b $J -c $J -X POST $BASE/api/setup/preferences -H 'Content-Type: application/json' -d '{"nickname":"홍길동","agentName":"루아","character":"lamong","tone":"polite"}'
 curl -s -o /dev/null -b $J -c $J -X POST $BASE/api/setup/complete -H 'Content-Type: application/json' -d '{}'
 say "account ready"
 
@@ -42,7 +42,7 @@ curl -s -o /dev/null -b $J -X POST "$BASE/api/browser/sessions/$SID/handover" -H
 curl -s -o /dev/null -b $J -X POST "$BASE/api/browser/sessions/$SID/input" -H 'Content-Type: application/json' -d '{"type":"goto","url":"https://github.com/login"}'
 sleep 5
 curl -s -o /dev/null -b $J -X POST "$BASE/api/browser/sessions/$SID/input" -H 'Content-Type: application/json' -d '{"type":"click","x":640,"y":420}'
-curl -s -o /dev/null -b $J -X POST "$BASE/api/browser/sessions/$SID/input" -H 'Content-Type: application/json' -d '{"type":"text","text":"hyunjun"}'
+curl -s -o /dev/null -b $J -X POST "$BASE/api/browser/sessions/$SID/input" -H 'Content-Type: application/json' -d '{"type":"text","text":"example"}'
 sleep 1
 
 say "user action audit"

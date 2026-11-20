@@ -22,7 +22,7 @@ const nav = [
 ];
 
 export default function AppShell() {
-  const { profile, keyboardOpen } = useAppStore();
+  const { profile, keyboardOpen, immersive } = useAppStore();
   const location = useLocation();
   const onChat = location.pathname === '/';
 
@@ -84,7 +84,8 @@ export default function AppShell() {
               <Outlet context={{ profile: { nickname: profile.nickname, agentName: profile.agentName } } satisfies ShellContext} />
             </div>
           </div>
-          <MobileTabBar />
+          {/* v0.6.4: 브라우저 VNC 전체화면처럼 화면을 다 쓰는 동안은 하단 탭바를 숨긴다 */}
+          {immersive ? null : <MobileTabBar />}
         </main>
       </div>
     </div>

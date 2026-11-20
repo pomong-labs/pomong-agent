@@ -111,6 +111,7 @@ export default function Chat() {
 
   const {
     messages,
+    messagesLoaded,
     sending,
     recovering,
     error,
@@ -138,6 +139,7 @@ export default function Chat() {
     renameSession,
     deleteSession,
     stop,
+    turnStart,
   } = useAppStore();
   const navigate = useNavigate();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -151,9 +153,10 @@ export default function Chat() {
   const [drawer, setDrawer] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [highlight, setHighlight] = useState<number | null>(null);
-  /** v0.6.3: 이번 턴이 시작된 시각(대기 시간까지 포함한 실제 소요 시간 표시용) */
-  const [turnStart, setTurnStart] = useState<number | null>(null);
+  /* v0.6.4: 이번 턴 시작 시각은 방마다 따로 센다(store가 들고 있다). */
   const [turnSeconds, setTurnSeconds] = useState(0);
+  /** v0.6.4: 파일을 끌어다 놓는 동안 입력창을 표시한다 */
+  const [dragOver, setDragOver] = useState(false);
 
   /** v0.6.3: 답장(인용) 대상 — 입력창 위에 미리보기를 띄운다 */
   const [replyTo, setReplyTo] = useState<ReplyTarget | null>(null);
@@ -161,7 +164,7 @@ export default function Chat() {
   const MAX_FILES = 6;
   const MAX_BYTES = 15 * 1024 * 1024;
 
-  const uploadFiles = useCallback(async (files: FileList | null) => {
+  const uploadFiles = useCallback(async (files: FileList | File[] | null) => {
     if (!files || !files.length) return;
     setAttachError('');
     const picked = Array.from(files);
@@ -308,12 +311,7 @@ export default function Chat() {
 
   /** v0.6.3: 응답을 기다리는 동안 실제 경과 시간을 센다(작업 카드·대기 말풍선에 표시). */
   useEffect(() => {
-    if (!sending) {
-      setTurnStart(null);
-      setTurnSeconds(0);
-      return;
-    }
-    setTurnStart((prev) => prev ?? Date.now());
+    if (!sending) setTurnSeconds(0);
   }, [sending]);
 
   useEffect(() => {
@@ -400,7 +398,18 @@ export default function Chat() {
             </div>
           ) : null}
 
-          {messages.length === 0 ? <EmptyState agentName={profile.agentName} character={profile.character} onPick={(t) => void send(t)} /> : null}
+          {/* v0.6.4: 대화를 아직 받아오는 중이면 빈 화면 대신 부드러운 로딩 자리표시자를 보여 준다 */}
+          {messages.length === 0 && !messagesLoaded ? (
+            <div className="space-y-3 pt-2" aria-hidden>
+              <div className="h-14 w-[62%] animate-pulse rounded-[22px] bg-[#F3F1FA] dark:bg-[#242130]" />
+              <div className="ml-auto h-11 w-[46%] animate-pulse rounded-[22px] bg-[#F3F1FA] dark:bg-[#242130]" />
+              <div className="h-20 w-[70%] animate-pulse rounded-[22px] bg-[#F3F1FA] dark:bg-[#242130]" />
+            </div>
+          ) : null}
+
+          {messages.length === 0 && messagesLoaded ? (
+            <EmptyState agentName={profile.agentName} character={profile.character} onPick={(t) => void send(t)} />
+          ) : null}
 
           {messages.map((m) => (
             <div
@@ -563,18 +572,104 @@ export default function Chat() {
               </button>
             </div>
           ) : null}
+          {(pending.length || uploading > 0 || attachError) && (
+            <div className="mb-1.5 rounded-[18px] border border-[#EFEDF6] bg-[#FBFAFF] px-2.5 py-2 dark:bg-[#1E1B29]">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {pending.map((p) => (
+                  <div key={p.id} className="relative">
+                    {p.preview ? (
+                      <img
+                        src={p.preview}
+                        alt={p.view.filename}
+                        className="h-14 w-14 rounded-xl object-cover ring-1 ring-[#EAE6F6]"
+                      />
+                    ) : (
+                      <div className="flex h-14 max-w-[190px] items-center gap-2 rounded-xl bg-white px-2.5 ring-1 ring-[#EAE6F6]">
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#F5F1FF] text-[#7C63F6]">
+                          <FileText size={15} />
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block max-w-[120px] truncate text-[11.5px] font-semibold text-[#3B3947]">
+                            {p.view.filename}
+                          </span>
+                          <span className="block text-[10px] text-[#A8A5B8]">{fileSize(p.view.size)}</span>
+                        </span>
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => removePending(p.id)}
+                      className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-[#3B3947] text-white shadow-sm transition active:scale-90"
+                      aria-label={`${p.view.filename} 빼기`}
+                      title="빼기"
+                    >
+                      <X size={11} strokeWidth={3} />
+                    </button>
+                  </div>
+                ))}
+                {uploading > 0 ? (
+                  <span className="flex h-14 items-center gap-1.5 rounded-xl bg-white px-3 text-[11.5px] font-semibold text-[#7C63F6] ring-1 ring-[#EAE6F6]">
+                    <Loader2 size={13} className="animate-spin" /> 올리는 중…
+                  </span>
+                ) : null}
+                <span className="ml-auto self-end pb-0.5 text-[10.5px] text-[#B4B1C2]">
+                  {pending.length}/{MAX_FILES}
+                </span>
+              </div>
+              {attachError ? (
+                <p className="mt-1.5 flex items-start gap-1 text-[11.5px] font-medium text-[#E5484D]" role="alert">
+                  <AlertCircleIcon />
+                  <span className="min-w-0 flex-1">{attachError}</span>
+                </p>
+              ) : null}
+            </div>
+          )}
           <div className="mb-1.5 px-0.5">
             <ModelBar />
           </div>
-          <div className={`rounded-[24px] border border-[#EEEDF5] bg-white shadow-[0_10px_30px_rgba(90,80,160,0.08)] ${keyboardOpen ? 'p-1.5' : 'p-2.5 lg:p-3'}`}>
+          <div
+            className={`rounded-[24px] border bg-white shadow-[0_10px_30px_rgba(90,80,160,0.08)] transition ${
+              dragOver ? 'border-[#B9A8FF] ring-2 ring-[#E4DBFF]' : 'border-[#EEEDF5]'
+            } ${keyboardOpen ? 'p-1.5' : 'p-2.5 lg:p-3'}`}
+            onDragOver={(e) => {
+              if (!e.dataTransfer?.types.includes('Files')) return;
+              e.preventDefault();
+              setDragOver(true);
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => {
+              if (!e.dataTransfer?.files?.length) return;
+              e.preventDefault();
+              setDragOver(false);
+              void uploadFiles(e.dataTransfer.files);
+            }}
+          >
             <div className="flex items-end gap-2">
               <button
-                className="mb-0.5 hidden h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#EFEDF6] text-[#8A8A9A] transition hover:bg-[#FAF9FF] sm:flex"
-                title="파일 첨부 (준비 중)"
-                aria-label="첨부"
+                type="button"
+                className="relative mb-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#EFEDF6] text-[#8A8A9A] transition hover:bg-[#FAF9FF] active:scale-95"
+                title="사진·파일 첨부"
+                aria-label="사진·파일 첨부"
+                onClick={() => fileRef.current?.click()}
               >
                 <Paperclip size={19} />
+                {pending.length ? (
+                  <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-[#7C63F6] px-1 text-[10px] font-bold text-white">
+                    {pending.length}
+                  </span>
+                ) : null}
               </button>
+              <input
+                ref={fileRef}
+                type="file"
+                multiple
+                accept="image/*,.pdf,.txt,.md,.json,.csv,.log,.ts,.tsx,.js,.jsx,.py,.html,.css,.xml,.yaml,.yml"
+                className="hidden"
+                onChange={(e) => {
+                  void uploadFiles(e.target.files);
+                  e.target.value = '';
+                }}
+              />
               <textarea
                 rows={1}
                 value={draft}
@@ -585,6 +680,13 @@ export default function Chat() {
                   el.style.height = `${Math.min(140, el.scrollHeight)}px`;
                 }}
                 onKeyDown={onKeyDown}
+                onPaste={(e) => {
+                  // 클립보드에 복사한 이미지는 바로 첨부한다(스크린숫·사진 복붙).
+                  const files = Array.from(e.clipboardData?.files || []);
+                  if (!files.length) return;
+                  e.preventDefault();
+                  void uploadFiles(files);
+                }}
                 onFocus={() => {
                   // 키보드가 올라오기 시작한 직후에도 최신 메시지가 가려지지 않게
                   pinToBottom('auto');
@@ -1228,6 +1330,28 @@ function TaskCard({ run, live = false, startMs }: { run: TaskRun; live?: boolean
         </div>
       ) : null}
     </div>
+  );
+}
+
+/** 첨부 오류 줄 앞의 작은 경고 아이콘 (lucide 아이콘을 추가로 들이지 않는다) */
+function AlertCircleIcon() {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="mt-[3px] shrink-0"
+      aria-hidden
+    >
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 8v5" />
+      <path d="M12 16.5h.01" />
+    </svg>
   );
 }
 

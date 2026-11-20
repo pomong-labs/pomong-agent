@@ -157,9 +157,9 @@ async function main(): Promise<void> {
   check('계정 없이 초안을 만들면 안내', /메일 계정/.test(draftError), draftError);
 
   /* 7) 버전 --------------------------------------------------------------- */
-  check('버전 0.6.3', APP_VERSION === '0.6.3', APP_VERSION);
   const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')) as { version: string };
-  check('package.json 0.6.3', pkg.version === '0.6.3', pkg.version);
+  check('버전이 package.json 과 같다', APP_VERSION === pkg.version, APP_VERSION);
+  check('package.json 0.6.4', pkg.version === '0.6.4', pkg.version);
 
   console.log(`\n${failures ? `❌ 실패 ${failures}건` : '✅ 전부 통과'}`);
   process.exit(failures ? 1 : 0);

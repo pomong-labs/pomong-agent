@@ -52,6 +52,9 @@ export type ExaoneEffort = 'low' | 'medium' | 'high';
 /** AI 성격·말투 프리셋 (v0.5.6) */
 export type PersonaId = 'default' | 'calm' | 'bright' | 'concise' | 'witty' | 'custom';
 
+import type { FontId } from './font';
+
+export type { FontId };
 export type ThemeMode = 'light' | 'dark' | 'system';
 export type AccentMode = 'character' | 'purple' | 'custom';
 
@@ -71,6 +74,8 @@ export interface Profile {
   persona: PersonaId;
   /** persona='custom'일 때 직접 쓴 한 줄 성격 */
   personaCustom: string;
+  /** v0.6.4: 앱 글꼴 (기본 · 프리텐다드 · 카카오 큰글씨) */
+  font: FontId;
 }
 
 export interface ProcessInfo {

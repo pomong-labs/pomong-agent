@@ -160,7 +160,7 @@ async function main() {
   /* 5. 카드 제출 → 금고 저장 + 후속 턴 */
   const submit = await api(`/api/vault/login-card/${card.id}/submit`, {
     method: 'POST',
-    body: JSON.stringify({ username: 'hyunjun@example.com', password: 'p@ssw0rd-very-secret', masterPin: '5216' }),
+    body: JSON.stringify({ username: 'you@example.com', password: 'p@ssw0rd-very-secret', masterPin: '1234' }),
   });
   check('card submit ok', submit.status === 200 && Boolean(submit.body?.vaultId), JSON.stringify(submit.body).slice(0, 160));
   const afterSubmit = await api('/api/vault/login-cards');

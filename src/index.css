@@ -2,6 +2,32 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ------------------------------------------------------------------ */
+/* v0.6.4 — 글꼴 선택 (기본 · 프리텐다드 · 카카오 큰글씨)               */
+/* ------------------------------------------------------------------ */
+/* 카카오 큰글씨는 저장소에 함께 넣은 woff2(public/fonts)로 불러온다. */
+@font-face {
+  font-family: 'Kakao Big Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/kakao-bigsans/KakaoBigSans-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Kakao Big Sans';
+  font-style: normal;
+  font-weight: 500 700;
+  font-display: swap;
+  src: url('/fonts/kakao-bigsans/KakaoBigSans-Bold.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Kakao Big Sans';
+  font-style: normal;
+  font-weight: 800 900;
+  font-display: swap;
+  src: url('/fonts/kakao-bigsans/KakaoBigSans-ExtraBold.woff2') format('woff2');
+}
+
 /*
  * 테마 변수 (v0.5.6)
  * - 라이트/다크 표면·글자·선은 --pa-* 로 모았다.
@@ -40,6 +66,21 @@
   --accent-grad: linear-gradient(135deg, #a88bff 0%, #8b72f8 100%);
   --accent-contrast: #ffffff;
   --bubble-user: linear-gradient(135deg, #efe8ff, #e7dffc);
+  --pa-font: 'Spoqa Han Sans Neo', 'Apple SD Gothic Neo', system-ui, -apple-system, sans-serif;
+}
+
+/* v0.6.4: 설정에서 고른 글꼴 — html 클래스로 한 번에 바꾼다. */
+html.font-pretendard {
+  --pa-font: 'Pretendard Variable', Pretendard, 'Apple SD Gothic Neo', system-ui, -apple-system, sans-serif;
+}
+
+html.font-kakaobigsans {
+  --pa-font: 'Kakao Big Sans', 'Apple SD Gothic Neo', system-ui, -apple-system, sans-serif;
+}
+
+html.font-pretendard body,
+html.font-kakaobigsans body {
+  font-family: var(--pa-font);
 }
 
 html.dark {
@@ -84,7 +125,7 @@ html.dark {
     @apply antialiased;
     background: var(--pa-bg);
     color: var(--pa-ink);
-    font-family: 'Spoqa Han Sans Neo', 'Apple SD Gothic Neo', system-ui, -apple-system, sans-serif;
+    font-family: var(--pa-font, 'Spoqa Han Sans Neo', 'Apple SD Gothic Neo', system-ui, -apple-system, sans-serif);
     -webkit-tap-highlight-color: transparent;
     overscroll-behavior-y: none;
     overflow: hidden;
@@ -361,11 +402,26 @@ svg {
   user-drag: none;
 }
 
-/* v0.6.3: noVNC 「꽉 채우기」 — 브라우저 화면 비율(1280x800)을 무시하고 영역을 채운다 */
-.pa-vnc-stretch canvas {
-  width: 100% !important;
-  height: 100% !important;
-  max-width: none !important;
-  max-height: none !important;
-  object-fit: fill;
+/*
+ * v0.6.4: noVNC 화면은 원본 종횡비를 절대 왜곡하지 않는다.
+ *  - 맞춤(fit): scaleViewport 로 비율을 지킨 채 화면에 맞춘다(남는 곳은 검은 여백).
+ *  - 확대(actual): 원본 픽셀 크기로 그려 두고 화면 안에서 스크롤해 본다.
+ * 예전 '꽉 채우기'는 캔버스를 강제로 늘려 글자를 세로로 찌그러뜨렸으므로 없앴다.
+ */
+[data-pa-viewer] canvas {
+  display: block;
+  margin: 0 auto;
+  object-fit: contain;
+}
+
+[data-pa-viewer][data-mode='actual'] {
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  touch-action: auto;
+}
+
+[data-pa-viewer][data-mode='fit'] {
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }

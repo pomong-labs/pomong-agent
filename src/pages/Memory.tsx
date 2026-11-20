@@ -210,7 +210,7 @@ function MemoryModal({
         <div className="mt-4 space-y-3">
           <textarea
             className="pa-input min-h-[96px] resize-none"
-            placeholder="예) 아침 브리핑은 강원도 인제 날씨로 받고 싶어 한다"
+            placeholder="예) 아침 브리핑은 서울 날씨로 받고 싶어 한다"
             value={content}
             onChange={(e) => setContent(e.target.value)}
           />

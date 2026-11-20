@@ -103,7 +103,7 @@ async function main() {
     assert.equal(parsed.length, 1);
     assert.equal(parsed[0].category, 'profile');
     assert.equal(parsed[0].importance, 4);
-    const existing = ['군 복무 중인 취사병이다', '아침 브리핑은 강원도 인제 날씨로 받는다'];
+    const existing = ['아침 7시에 일어난다', '아침 브리핑은 서울 날씨로 받는다'];
     assert.equal(mx.isDuplicate('군 복무 중인 취사병이다', existing), true);
     assert.equal(mx.isDuplicate('군 복무 중인 취사병이다!', existing), true);
     assert.equal(mx.isDuplicate('서든어택을 즐겨 한다', existing), false);

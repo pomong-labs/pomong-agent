@@ -4,6 +4,7 @@ import {
   Bell,
   BellOff,
   Check,
+  ChevronDown,
   Clock,
   Download,
   ExternalLink,
@@ -18,6 +19,7 @@ import {
   Sparkles,
   Sun,
   Trash2,
+  Type,
 } from 'lucide-react';
 import BackButton from '../components/BackButton';
 import MascotFace from '../components/MascotFace';
@@ -38,6 +40,7 @@ import {
 import { useAppStore } from '../lib/store';
 import { PERSONA_OPTIONS, personaExample } from '../lib/persona';
 import { ACCENT_CHOICES, CHARACTER_ACCENTS, applyTheme, normalizeHex } from '../lib/theme';
+import { FONT_OPTIONS, applyFont, type FontId } from '../lib/font';
 import PolicySection from '../components/PolicySection';
 
 /** VAPID 공개키(base64url) → Uint8Array (PushManager.subscribe에 필요) */
@@ -59,13 +62,13 @@ function toneOptions(callName: string, agentName: string) {
       id: 'polite' as const,
       label: '존댓말',
       hint: '정중하게',
-      example: `나: 오늘 날씨 어때?\n${agent}: ${politeName}, 인제는 지금 흐리고 3도예요. 오후에 비 소식이 있으니 우산을 챙기시는 게 좋겠어요.`,
+      example: `나: 오늘 날씨 어때?\n${agent}: ${politeName}, 서울은 지금 흐리고 3도예요. 오후에 비 소식이 있으니 우산을 챙기시는 게 좋겠어요.`,
     },
     {
       id: 'casual' as const,
       label: '편한 반말',
       hint: '친구처럼',
-      example: `나: 오늘 날씨 어때?\n${agent}: ${callName}아, 인제는 지금 흐리고 3도야. 오후에 비 온대, 우산 챙겨!`,
+      example: `나: 오늘 날씨 어때?\n${agent}: ${callName}아, 서울은 지금 흐리고 3도야. 오후에 비 온대, 우산 챙겨!`,
     },
   ];
 }
@@ -83,6 +86,14 @@ export default function SettingsPage() {
   const [theme, setTheme] = useState<ThemeMode>('light');
   const [accentMode, setAccentMode] = useState<AccentMode>('purple');
   const [accentColor, setAccentColor] = useState('#8B72F8');
+  /** v0.6.4: 앱 글꼴 */
+  const [font, setFont] = useState<FontId>('default');
+  /** v0.6.4: 설정 카테고리 탭 — 긴 스크롤 대신 한 묶음씩 보여 준다. */
+  const [tab, setTab] = useState<'look' | 'ai' | 'mail' | 'system'>('look');
+  /** v0.6.4: AI 프로바이더는 평소 1줄로 접어 두고 필요할 때 펼친다. */
+  const [openProvider, setOpenProvider] = useState<ProviderId | null>(null);
+  const savedFlashTimer = useRef<number | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const [savedFlash, setSavedFlash] = useState('');
   const themeSaveTimer = useRef<number | null>(null);
   const profileSaveTimer = useRef<number | null>(null);
@@ -131,6 +142,7 @@ export default function SettingsPage() {
         setTheme(r.profile.theme || 'light');
         setAccentMode(r.profile.accentMode || 'purple');
         setAccentColor(r.profile.accentColor || '#8B72F8');
+        setFont(r.profile.font || 'default');
         setProvider(r.active.provider);
         setModel(r.active.model);
         setEffort(r.providers.find((p) => p.id === 'exaone')?.reasoningEffort || 'low');
@@ -145,6 +157,11 @@ export default function SettingsPage() {
   useEffect(() => {
     load();
   }, []);
+
+  // v0.6.4: 탭을 바꾸면 그 묶음의 처음부터 보이게 맨 위로 올린다.
+  useEffect(() => {
+    panelRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [tab]);
 
   const loadPush = async () => {
     const status = await api.get<PushStatus>('/api/push/status').catch(() => null);
@@ -266,6 +283,7 @@ export default function SettingsPage() {
           theme,
           accentMode,
           accentColor,
+          font,
         })
         .then(() => refreshProfile())
         .then(() => {
@@ -274,6 +292,30 @@ export default function SettingsPage() {
         })
         .catch(() => undefined);
     }, 250);
+  };
+
+  /** v0.6.4: 글꼴은 고르는 즉시 화면에 적용하고 서버에도 저장한다(새로고침·다른 기기에서도 유지). */
+  const pickFont = (next: FontId) => {
+    setFont(next);
+    applyFont(next);
+    setSavedFlash('글꼴을 바꿨어요');
+    if (savedFlashTimer.current) window.clearTimeout(savedFlashTimer.current);
+    savedFlashTimer.current = window.setTimeout(() => setSavedFlash(''), 1800);
+    void api
+      .put('/api/settings/profile', {
+        nickname,
+        agentName,
+        character,
+        tone,
+        persona,
+        personaCustom,
+        theme,
+        accentMode,
+        accentColor,
+        font: next,
+      })
+      .then(() => refreshProfile())
+      .catch(() => undefined);
   };
 
   const saveProfile = async () => {
@@ -287,8 +329,10 @@ export default function SettingsPage() {
       theme,
       accentMode,
       accentColor,
+      font,
     });
     applyTheme({ theme, accentMode, accentColor, character });
+    applyFont(font);
     setSavedFlash('저장했습니다');
     window.setTimeout(() => setSavedFlash(''), 1800);
     await load();
@@ -321,6 +365,7 @@ export default function SettingsPage() {
           theme: themeNext,
           accentMode: modeNext,
           accentColor: colorNext,
+          font,
         })
         .then(() => refreshProfile())
         .catch(() => undefined);
@@ -471,6 +516,16 @@ export default function SettingsPage() {
     }
   };
 
+  /** v0.6.4: 프로바이더 줄을 눌렀을 때 상세(모델·키)를 연다. */
+  const toggleProvider = (id: ProviderId) => {
+    setOpenProvider((prev) => (prev === id ? null : id));
+    setProvider(id);
+    const target = data?.providers.find((p) => p.id === id);
+    setModel(id === data?.active.provider ? data?.active.model || '' : target?.defaultModel || '');
+    setApiKey('');
+    setKeyMsg(null);
+  };
+
   const themeChoices: { id: ThemeMode; label: string; hint: string; icon: typeof Sun }[] = [
     { id: 'light', label: '라이트', hint: '밝은 화면', icon: Sun },
     { id: 'dark', label: '다크', hint: '어두운 화면', icon: Moon },
@@ -491,7 +546,7 @@ export default function SettingsPage() {
   ];
 
   return (
-    <div className="pa-scroll h-full min-h-0 overflow-y-auto px-4 pb-8 pt-5 lg:px-10 lg:pt-9">
+    <div ref={panelRef} className="pa-scroll h-full min-h-0 overflow-y-auto px-4 pb-8 pt-5 lg:px-10 lg:pt-9">
       <div className="mx-auto w-full max-w-[720px]">
         <header className="flex items-center gap-2">
           <BackButton />
@@ -502,6 +557,42 @@ export default function SettingsPage() {
           <MascotFace character={character} size={56} className="ml-auto lg:hidden" />
         </header>
 
+        {/* v0.6.4: 카테고리 탭 — 한 번에 한 묶음만 보여 줘 긴 스크롤을 줄인다 */}
+        <div
+          className="sticky top-0 z-20 -mx-4 mt-4 px-4 py-2 backdrop-blur lg:-mx-10 lg:px-10"
+          style={{ background: 'color-mix(in srgb, var(--pa-surface) 88%, transparent)' }}
+        >
+          <div className="no-scrollbar flex gap-1.5 overflow-x-auto rounded-2xl bg-[#F6F4FB] p-1 dark:bg-[#232030]">
+            {([
+              { id: 'look' as const, label: '캐릭터·테마', icon: Palette },
+              { id: 'ai' as const, label: 'AI·자동선택', icon: Sparkles },
+              { id: 'mail' as const, label: '이메일·알림', icon: Mail },
+              { id: 'system' as const, label: '백업·시스템', icon: ShieldCheck },
+            ]).map((item) => {
+              const active = tab === item.id;
+              const Icon = item.icon;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setTab(item.id)}
+                  className={`flex flex-1 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl px-2.5 py-2 text-[12.5px] font-semibold transition ${
+                    active
+                      ? 'bg-white text-[#7C63F6] shadow-[0_2px_8px_rgba(90,80,160,0.10)] dark:bg-[#1B1923]'
+                      : 'text-[#8A8A9A] hover:text-[#5B5866]'
+                  }`}
+                  aria-pressed={active}
+                >
+                  <Icon size={14} />
+                  {item.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {tab === 'look' ? (
+          <>
         {/* profile */}
         <section className="mt-5 rounded-[24px] bg-white p-5 shadow-card ring-1 ring-[#F6F4FB] lg:p-6">
           <h2 className="text-[16px] font-bold text-[#1F1D2B]">프로필</h2>
@@ -770,9 +861,61 @@ export default function SettingsPage() {
               캐릭터 맞춤은 지금 고른 마스코트의 색을 그대로 따라가요. 마스코트를 바꾸면 포인트 컬러도 함께 바뀝니다.
             </p>
           </div>
+
+          {/* v0.6.4: 글꼴 선택 (기본 · 프리텐다드 · 카카오 큰글씨) */}
+          <div className="mt-5 border-t border-[#F1EFF8] pt-4 dark:border-[#2A2636]">
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="flex items-center gap-1.5 text-[13px] font-semibold text-[#5B5866]">
+                <Type size={13} /> 글꼴
+              </span>
+              <span className="text-[11.5px] text-[#B4B1C2]">누르면 바로 앱 전체에 적용돼요</span>
+            </div>
+            <div className="mt-2.5 grid gap-2 sm:grid-cols-3">
+              {FONT_OPTIONS.map((opt) => {
+                const active = font === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => pickFont(opt.id)}
+                    className={`rounded-2xl border-[1.5px] px-3 py-2.5 text-left transition ${
+                      active ? 'border-[#C9B8FF] bg-[#F8F5FF] dark:bg-[#241F33]' : 'border-[#EFEDF6] bg-white hover:bg-[#FBFAFF] dark:bg-transparent'
+                    }`}
+                    aria-pressed={active}
+                  >
+                    <span className="flex items-center gap-1.5">
+                      <span className={`text-[12.5px] font-semibold ${active ? 'text-[#7C63F6]' : 'text-[#4B4856]'}`}>
+                        {opt.label}
+                      </span>
+                      {active ? (
+                        <span className="ml-auto flex h-4 w-4 items-center justify-center rounded-full bg-[#8B72F8] text-white">
+                          <Check size={10} strokeWidth={4} />
+                        </span>
+                      ) : null}
+                    </span>
+                    <span
+                      className={`mt-1.5 block truncate text-[15px] ${active ? 'text-[#3A2F7A]' : 'text-[#5B5866]'}`}
+                      style={{ fontFamily: opt.family }}
+                    >
+                      {opt.sample}
+                    </span>
+                    <span className="mt-0.5 block truncate text-[10.5px] text-[#B4B1C2]">{opt.hint}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-2 text-[11.5px] leading-[1.6] text-[#B4B1C2]">
+              카카오 큰글씨는 앱에 함께 들어 있어 인터넷이 느려도 바로 보여요. 프리텐다드는 처음 고를 때만 내려받습니다.
+            </p>
+          </div>
         </section>
 
-        {/* AI provider */}
+          </>
+        ) : null}
+
+        {tab === 'ai' ? (
+          <>
+        {/* AI provider — v0.6.4: 연결된 AI는 1줄 요약으로 접고, 누르면 상세를 펼친다 */}
         <section className="mt-4 rounded-[24px] bg-white p-5 shadow-card ring-1 ring-[#F6F4FB] lg:p-6">
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -782,167 +925,189 @@ export default function SettingsPage() {
               </p>
             </div>
             {selected?.connected ? (
-              <span className="flex items-center gap-1 rounded-full bg-[#EAFBF1] px-3 py-1.5 text-[12px] font-semibold text-[#12B886]">
+              <span className="flex shrink-0 items-center gap-1 rounded-full bg-[#EAFBF1] px-3 py-1.5 text-[12px] font-semibold text-[#12B886]">
                 <Check size={12} strokeWidth={3} /> 연결됨
               </span>
             ) : (
-              <span className="rounded-full bg-[#FFF6E7] px-3 py-1.5 text-[12px] font-semibold text-[#E49B18]">키 필요</span>
+              <span className="shrink-0 rounded-full bg-[#FFF6E7] px-3 py-1.5 text-[12px] font-semibold text-[#E49B18]">키 필요</span>
             )}
           </div>
 
-          <div className="mt-4 grid grid-cols-3 gap-2">
-            {(data?.providers || []).map((p) => (
-              <button
-                key={p.id}
-                onClick={() => {
-                  setProvider(p.id);
-                  setModel(p.id === data?.active.provider ? data.active.model : p.defaultModel);
-                  setKeyMsg(null);
-                }}
-                className={`relative rounded-2xl border-[1.5px] py-3 text-[14px] font-semibold transition ${
-                  provider === p.id ? 'border-[#C9B8FF] bg-[#F8F5FF] text-[#7C63F6]' : 'border-[#EFEDF6] bg-white text-[#5B5866]'
-                }`}
-              >
-                {p.label}
-                {p.id === 'exaone' ? (
-                  <span className="ml-1 rounded-md bg-[#EAFBF1] px-1.5 py-0.5 align-middle text-[10px] font-bold text-[#12B886]">무료</span>
-                ) : null}
-                <span
-                  className={`absolute right-2 top-2 h-1.5 w-1.5 rounded-full ${p.connected ? 'bg-[#22C55E]' : 'bg-[#DAD6E6]'}`}
-                  aria-hidden
-                />
-              </button>
-            ))}
-          </div>
-
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            <label className="block">
-              <span className="mb-1.5 block text-[13px] font-semibold text-[#5B5866]">모델</span>
-              <select className="pa-input" value={model} onChange={(e) => setModel(e.target.value)}>
-                {(selected?.models || []).map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-                {selected && !selected.models.includes(model) && model ? <option value={model}>{model}</option> : null}
-              </select>
-            </label>
-            <label className="block">
-              <span className="mb-1.5 block text-[13px] font-semibold text-[#5B5866]">API 키</span>
-              <input
-                className="pa-input font-mono text-[13px]"
-                type="password"
-                placeholder={selected?.connected ? '새 키로 교체하려면 입력' : 'API 키 입력'}
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-              />
-            </label>
-          </div>
-
-          {provider === 'exaone' ? (
-            <div className="mt-3 rounded-2xl px-3.5 py-3 ring-1" style={{ background: 'var(--pa-surface-3)', borderColor: 'var(--pa-line)' }}>
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-[13px] font-semibold" style={{ color: 'var(--pa-ink)' }}>
-                  추론 강도
-                </span>
-                <span className="text-[11px]" style={{ color: 'var(--pa-mute)' }}>
-                  높을수록 정확하지만 느려요
-                </span>
-              </div>
-              <div className="mt-2 grid grid-cols-3 gap-2">
-                {effortChoices.map((choice) => (
-                  <button
-                    key={choice.id}
-                    type="button"
-                    onClick={() => void pickEffort(choice.id)}
-                    className="rounded-xl border-[1.5px] px-2 py-2 text-center transition active:scale-[0.98]"
-                    style={
-                      effort === choice.id
-                        ? { background: 'var(--accent-soft)', borderColor: 'var(--accent-line)', color: 'var(--accent-ink)' }
-                        : { background: 'var(--pa-surface)', borderColor: 'var(--pa-line)', color: 'var(--pa-ink)' }
-                    }
-                    aria-pressed={effort === choice.id}
-                  >
-                    <span className="block text-[13px] font-bold">{choice.label}</span>
-                    <span className="block text-[10.5px]" style={{ color: 'var(--pa-mute)' }}>
-                      {choice.hint}
-                    </span>
-                  </button>
-                ))}
-              </div>
-              <p className="mt-2 text-[11px] leading-[1.55]" style={{ color: 'var(--pa-mute)' }}>
-                K-EXAONE 2.5는 답하기 전에 항상 추론해요. 사진은 볼 수 없는 텍스트 모델이고, 무료 키는 30일마다
-                재발급이 필요해요.
-              </p>
-              {exaoneConnected && exaoneExpiry?.label ? (
-                <p
-                  className={`mt-1.5 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-bold ${
-                    exaoneExpiry.expired
-                      ? 'bg-[#FFF1F1] text-[#E5484D]'
-                      : exaoneExpiry.warn
-                        ? 'bg-[#FFF6E7] text-[#C77A12]'
-                        : 'bg-[#EAFBF1] text-[#12B886]'
+          <ul className="mt-4 space-y-2">
+            {(data?.providers || []).map((p) => {
+              const opened = openProvider === p.id;
+              const isActive = data?.active.provider === p.id;
+              return (
+                <li
+                  key={p.id}
+                  className={`overflow-hidden rounded-2xl border-[1.5px] transition ${
+                    opened ? 'border-[#D6C9FF] bg-[#FBFAFF] dark:bg-[#1E1B29]' : 'border-[#EFEDF6] bg-white dark:bg-transparent'
                   }`}
                 >
-                  <Clock size={11} /> 무료 키 {exaoneExpiry.label}
-                  {exaoneExpiry.daysLeft !== null && !exaoneExpiry.expired ? ` · ${exaoneExpiry.daysLeft}일 남음` : ''}
-                  {exaoneExpiry.warn ? ' · docs.exaone.ai에서 재발급' : ''}
-                </p>
-              ) : null}
-            </div>
-          ) : null}
-
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <button className="pa-btn-primary px-4 py-2.5" onClick={saveKey} disabled={keyBusy || !apiKey.trim()}>
-              {keyBusy ? '확인 중…' : '키 연결'}
-            </button>
-            <button
-              className="pa-btn-ghost px-4 py-2.5"
-              onClick={() => useModel(provider, model)}
-              disabled={!selected?.connected}
-              title={selected?.connected ? '이 모델로 대화하기' : '먼저 키를 연결해 주세요'}
-            >
-              이 모델 사용
-            </button>
-            {selected ? (
-              <a
-                href={selected.console}
-                target="_blank"
-                rel="noreferrer"
-                className="flex items-center gap-1 text-[12.5px] text-[#8B72F6] hover:underline"
-              >
-                키 발급 페이지 <ExternalLink size={12} />
-              </a>
-            ) : null}
-          </div>
-          {keyMsg ? (
-            <p className={`mt-3 rounded-xl px-3 py-2.5 text-[13px] font-medium ${keyMsg.ok ? 'bg-[#EAFBF1] text-[#12B886]' : 'bg-[#FFF1F1] text-[#E5484D]'}`}>
-              {keyMsg.text}
-            </p>
-          ) : null}
-          {data?.providers.some((p) => p.connected) ? (
-            <div className="mt-4 rounded-2xl bg-[#FAF8FF] px-4 py-3">
-              <p className="text-[12px] font-semibold text-[#8A8A9A]">연결된 AI</p>
-              <ul className="mt-1.5 space-y-1">
-                {data.providers
-                  .filter((p) => p.connected)
-                  .map((p) => (
-                    <li key={p.id} className="flex items-center justify-between text-[13px]">
-                      <span className="font-medium text-[#4B4856]">
-                        {p.label} {p.active ? <span className="ml-1 rounded-md bg-[#F3EEFF] px-1.5 py-0.5 text-[10.5px] font-semibold text-[#7C63F6]">사용 중</span> : null}
+                  <div className="flex items-center gap-2 px-3 py-2.5">
+                    <button
+                      type="button"
+                      onClick={() => toggleProvider(p.id)}
+                      className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                      aria-expanded={opened}
+                      aria-label={`${p.label} 설정 열기`}
+                    >
+                      <span className={`h-2 w-2 shrink-0 rounded-full ${p.connected ? 'bg-[#22C55E]' : 'bg-[#DAD6E6]'}`} aria-hidden />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center gap-1.5">
+                          <span className={`text-[14px] font-semibold ${isActive ? 'text-[#7C63F6]' : 'text-[#3B3947]'}`}>{p.label}</span>
+                          {p.id === 'exaone' ? (
+                            <span className="rounded-md bg-[#EAFBF1] px-1.5 py-0.5 text-[10px] font-bold text-[#12B886]">무료</span>
+                          ) : null}
+                          {isActive ? (
+                            <span className="rounded-md bg-[#F3EEFF] px-1.5 py-0.5 text-[10px] font-semibold text-[#7C63F6]">사용 중</span>
+                          ) : null}
+                        </span>
+                        <span className="mt-0.5 block truncate text-[11.5px] text-[#8A8A9A]">
+                          {p.connected
+                            ? `연결됨 · ${isActive ? data?.active.model || p.defaultModel : p.defaultModel}`
+                            : '키를 연결하면 바로 쓸 수 있어요'}
+                        </span>
                       </span>
+                    </button>
+                    {p.connected && !isActive ? (
                       <button
-                        className="text-[12px] font-semibold text-[#8B72F6] disabled:text-[#C9C5D6]"
-                        disabled={p.active}
-                        onClick={() => useModel(p.id, p.id === data.active.provider ? data.active.model : p.defaultModel)}
+                        type="button"
+                        className="shrink-0 rounded-full bg-[#F3EEFF] px-2.5 py-1 text-[11.5px] font-semibold text-[#7C63F6] transition active:scale-95"
+                        onClick={() => void useModel(p.id, p.defaultModel)}
                       >
                         전환
                       </button>
-                    </li>
-                  ))}
-              </ul>
-            </div>
-          ) : null}
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => toggleProvider(p.id)}
+                      className="flex shrink-0 items-center gap-0.5 rounded-full border border-[#EFEDF6] px-2.5 py-1 text-[11.5px] font-semibold text-[#6B677A] transition active:scale-95"
+                      aria-label={opened ? `${p.label} 접기` : `${p.label} 수정`}
+                    >
+                      {p.connected ? '수정' : '연결'}
+                      <ChevronDown size={12} className={`transition ${opened ? 'rotate-180' : ''}`} />
+                    </button>
+                  </div>
+
+                  {opened ? (
+                    <div className="space-y-3 border-t border-[#EFE9FF] px-3 py-3 dark:border-[#2A2636]">
+                      <label className="block">
+                        <span className="mb-1.5 block text-[12.5px] font-semibold text-[#5B5866]">모델</span>
+                        <select className="pa-input" value={model} onChange={(e) => setModel(e.target.value)}>
+                          {(p.models || []).map((m) => (
+                            <option key={m} value={m}>
+                              {m}
+                            </option>
+                          ))}
+                          {p.models && !p.models.includes(model) && model ? <option value={model}>{model}</option> : null}
+                        </select>
+                      </label>
+                      <label className="block">
+                        <span className="mb-1.5 block text-[12.5px] font-semibold text-[#5B5866]">API 키</span>
+                        <input
+                          className="pa-input font-mono text-[13px]"
+                          type="password"
+                          placeholder={p.connected ? '새 키로 교체하려면 입력' : 'API 키 입력'}
+                          value={apiKey}
+                          onChange={(e) => setApiKey(e.target.value)}
+                          autoComplete="off"
+                          spellCheck={false}
+                        />
+                      </label>
+
+                      {p.id === 'exaone' ? (
+                        <div className="rounded-2xl px-3.5 py-3 ring-1" style={{ background: 'var(--pa-surface-3)', borderColor: 'var(--pa-line)' }}>
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="text-[13px] font-semibold" style={{ color: 'var(--pa-ink)' }}>
+                              추론 강도
+                            </span>
+                            <span className="text-[11px]" style={{ color: 'var(--pa-mute)' }}>
+                              높을수록 정확하지만 느려요
+                            </span>
+                          </div>
+                          <div className="mt-2 grid grid-cols-3 gap-2">
+                            {effortChoices.map((choice) => (
+                              <button
+                                key={choice.id}
+                                type="button"
+                                onClick={() => void pickEffort(choice.id)}
+                                className="rounded-xl border-[1.5px] px-2 py-2 text-center transition active:scale-[0.98]"
+                                style={
+                                  effort === choice.id
+                                    ? { background: 'var(--accent-soft)', borderColor: 'var(--accent-line)', color: 'var(--accent-ink)' }
+                                    : { background: 'var(--pa-surface)', borderColor: 'var(--pa-line)', color: 'var(--pa-ink)' }
+                                }
+                                aria-pressed={effort === choice.id}
+                              >
+                                <span className="block text-[13px] font-bold">{choice.label}</span>
+                                <span className="block text-[10.5px]" style={{ color: 'var(--pa-mute)' }}>
+                                  {choice.hint}
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                          <p className="mt-2 text-[11px] leading-[1.55]" style={{ color: 'var(--pa-mute)' }}>
+                            K-EXAONE 2.5는 답하기 전에 항상 추론해요. 사진은 볼 수 없는 텍스트 모델이고, 무료 키는 30일마다
+                            재발급이 필요해요.
+                          </p>
+                          {exaoneConnected && exaoneExpiry?.label ? (
+                            <p
+                              className={`mt-1.5 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-bold ${
+                                exaoneExpiry.expired
+                                  ? 'bg-[#FFF1F1] text-[#E5484D]'
+                                  : exaoneExpiry.warn
+                                    ? 'bg-[#FFF6E7] text-[#C77A12]'
+                                    : 'bg-[#EAFBF1] text-[#12B886]'
+                              }`}
+                            >
+                              <Clock size={11} /> 무료 키 {exaoneExpiry.label}
+                              {exaoneExpiry.daysLeft !== null && !exaoneExpiry.expired ? ` · ${exaoneExpiry.daysLeft}일 남음` : ''}
+                              {exaoneExpiry.warn ? ' · docs.exaone.ai에서 재발급' : ''}
+                            </p>
+                          ) : null}
+                        </div>
+                      ) : null}
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button className="pa-btn-primary px-4 py-2.5" onClick={saveKey} disabled={keyBusy || !apiKey.trim()}>
+                          {keyBusy ? '확인 중…' : '키 연결'}
+                        </button>
+                        <button
+                          className="pa-btn-ghost px-4 py-2.5"
+                          onClick={() => void useModel(p.id, model)}
+                          disabled={!p.connected}
+                          title={p.connected ? '이 모델로 대화하기' : '먼저 키를 연결해 주세요'}
+                        >
+                          이 모델 사용
+                        </button>
+                        <a
+                          href={p.console}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex items-center gap-1 text-[12.5px] text-[#8B72F6] hover:underline"
+                        >
+                          키 발급 페이지 <ExternalLink size={12} />
+                        </a>
+                      </div>
+                      {openProvider === p.id && keyMsg ? (
+                        <p
+                          className={`rounded-xl px-3 py-2.5 text-[13px] font-medium ${
+                            keyMsg.ok ? 'bg-[#EAFBF1] text-[#12B886]' : 'bg-[#FFF1F1] text-[#E5484D]'
+                          }`}
+                        >
+                          {keyMsg.text}
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+          <p className="mt-3 rounded-xl bg-[#FAF8FF] px-3 py-2 text-[11.5px] leading-[1.55] text-[#7C6FB0] dark:bg-[#1E1B29]">
+            연결한 AI는 한 줄로 접혀 있어요. 「수정」을 누르면 모델·키를 바꿀 수 있고, 키는 서버에서 암호화해 보관합니다.
+          </p>
         </section>
 
         {/* v0.6.3: 작업별 모델 자동 선택 */}
@@ -996,6 +1161,11 @@ export default function SettingsPage() {
           </p>
         </section>
 
+          </>
+        ) : null}
+
+        {tab === 'mail' ? (
+          <>
         {/* v0.6.3: 이메일(IMAP/SMTP) */}
         <section className="mt-4 rounded-[24px] bg-white p-5 shadow-card ring-1 ring-[#F6F4FB] lg:p-6">
           <div className="flex items-start justify-between gap-3">
@@ -1066,7 +1236,7 @@ export default function SettingsPage() {
                 type="email"
                 inputMode="email"
                 autoComplete="email"
-                placeholder="hyunjun5216@naver.com"
+                placeholder="you@naver.com"
                 value={mailForm.email}
                 onChange={(e) => setMailForm((prev) => ({ ...prev, email: e.target.value }))}
               />
@@ -1086,7 +1256,7 @@ export default function SettingsPage() {
               <span className="mb-1.5 block text-[13px] font-semibold text-[#5B5866]">보내는 사람 이름</span>
               <input
                 className="pa-input"
-                placeholder="김현준"
+                placeholder="홍길동"
                 value={mailForm.senderName}
                 onChange={(e) => setMailForm((prev) => ({ ...prev, senderName: e.target.value }))}
               />
@@ -1171,6 +1341,11 @@ export default function SettingsPage() {
           </p>
         </section>
 
+          </>
+        ) : null}
+
+        {tab === 'system' ? (
+          <>
         <PolicySection />
 
         {/* 데이터 백업 (v0.5.4) */}
@@ -1212,6 +1387,8 @@ export default function SettingsPage() {
             <LogOut size={16} /> 로그아웃
           </button>
         </section>
+          </>
+        ) : null}
 
         <p className="mt-6 flex items-center justify-center gap-1.5 text-[12px] text-[#B4B1C2]">
           <Sparkles size={12} /> Pomong Agent v{data?.version || '0.6.0'} · Pomong Labs

@@ -16,6 +16,7 @@ import {
   RotateCw,
   Sparkles,
   X,
+  ZoomIn,
 } from 'lucide-react';
 import Mascot, { type MascotName } from '../components/Mascot';
 import NoVncViewer, { type RFBInstance } from '../components/NoVncViewer';
@@ -46,7 +47,7 @@ const KEY = {
 };
 
 export default function Browser() {
-  const { profile } = useAppStore();
+  const { profile, setImmersive } = useAppStore();
   const navigate = useNavigate();
   const [session, setSession] = useState<BrowserSession | null>(null);
   const [status, setStatus] = useState<{ enabled: boolean; connected: boolean } | null>(null);
@@ -68,8 +69,12 @@ export default function Browser() {
   }, [editingAddress]);
   const [vncStatus, setVncStatus] = useState<'connecting' | 'connected' | 'closed' | 'error'>('connecting');
   const [viewerFull, setViewerFull] = useState(false);
-  /** v0.6.3: 모바일 전체화면에서 검은 여백 없이 꽉 채우기 */
-  const [fillScreen, setFillScreen] = useState(true);
+  /**
+   * v0.6.4: 전체화면 보기 방식. 예전 '꽉 채우기'(object-fit: fill)는 데스크톱 화면을
+   * 세로로 찌그러뜨려 글자가 길쭉해 보였다. 이제 기본은 원본 비율 유지(fit)이고,
+   * 필요하면 '확대'(actual)로 원본 크기 그대로 스크롤해서 본다.
+   */
+  const [zoomMode, setZoomMode] = useState<'fit' | 'actual'>('fit');
   const rfbRef = useRef<RFBInstance | null>(null);
   const imeRef = useRef<HTMLInputElement>(null);
 
@@ -97,6 +102,12 @@ export default function Browser() {
   useAppEvents((event) => {
     if (event.type === 'handover' || event.type === 'browser') void loadStatus();
   });
+
+  // v0.6.4: 전체화면 동안 하단 탭바(채팅/관제실/자동화/금고/더보기)를 숨겨 화면 위에 겹치지 않게 한다.
+  useEffect(() => {
+    setImmersive(viewerFull);
+    return () => setImmersive(false);
+  }, [viewerFull, setImmersive]);
 
   /** 핸드오버가 열리면 화면을 한눈에 꽉 차게(전체화면) 보여 준다. */
   const controlOwner = session?.controlOwner || 'agent';
@@ -271,7 +282,7 @@ export default function Browser() {
         sessionId={session.id}
         interactive={userControl}
         fill={viewerFull}
-        stretch={viewerFull && fillScreen}
+        mode={viewerFull ? zoomMode : 'fit'}
         onStatus={setVncStatus}
         onError={(message) => setHint(message)}
         onReady={(rfb) => {
@@ -292,7 +303,12 @@ export default function Browser() {
   ) : null;
 
   return (
-    <div className="pa-scroll flex h-full min-h-0 flex-col overflow-y-auto px-4 pb-28 pt-4 lg:px-10 lg:pt-7 lg:pb-8">
+    <div
+      className={`pa-scroll flex h-full min-h-0 flex-col overflow-y-auto px-4 pt-4 lg:px-10 lg:pt-7 lg:pb-8 ${
+        // v0.6.4: 하단 고정 CTA가 '마지막 조작 · 액션 N회' 줄을 덮지 않도록 아래 여백을 넉넉히 둔다.
+        session && userControl && !viewerFull ? 'pb-44' : 'pb-28'
+      }`}
+    >
       <div className="mx-auto flex w-full max-w-[1180px] flex-1 flex-col">
         {/* ---------- 모바일 헤더 ---------- */}
         <header className="flex items-center gap-2.5 lg:hidden">
@@ -619,15 +635,18 @@ export default function Browser() {
               </p>
             </div>
             <button
-              className={`flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1.5 text-[11.5px] font-bold ${
-                fillScreen ? 'bg-white/15 text-white' : 'bg-white/5 text-white/70'
-              }`}
-              onClick={() => setFillScreen((v) => !v)}
-              aria-pressed={fillScreen}
-              title={fillScreen ? '원래 비율로 보기' : '화면을 꽉 채워 보기'}
+              className="flex shrink-0 items-center gap-1 rounded-full bg-white/15 px-2.5 py-1.5 text-[11.5px] font-bold text-white"
+              onClick={() => setZoomMode((v) => (v === 'fit' ? 'actual' : 'fit'))}
+              aria-pressed={zoomMode === 'actual'}
+              aria-label={zoomMode === 'fit' ? '원본 크기로 확대해서 보기' : '화면에 맞추기'}
+              title={
+                zoomMode === 'fit'
+                  ? '원본 크기로 확대해서 보기'
+                  : '화면에 맞추기(비율 그대로)'
+              }
             >
-              {fillScreen ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
-              <span className="hidden sm:inline">{fillScreen ? '맞춤' : '채우기'}</span>
+              {zoomMode === 'fit' ? <ZoomIn size={12} /> : <Minimize2 size={12} />}
+              <span className="hidden sm:inline">{zoomMode === 'fit' ? '확대' : '맞춤'}</span>
             </button>
             {userControl ? (
               <button
@@ -677,10 +696,17 @@ export default function Browser() {
 
       {/* 모바일 고정 CTA (하단 탭 위) */}
       {session && userControl && !viewerFull ? (
-        <div className="fixed inset-x-0 bottom-[calc(var(--safe-bottom)+58px)] z-10 px-4 lg:hidden">
+        <div
+          className="fixed inset-x-0 bottom-[calc(var(--safe-bottom)+58px)] z-10 px-4 pb-2 pt-8 lg:hidden"
+          style={{ backgroundImage: 'linear-gradient(to top, var(--pa-bg) 58%, transparent)' }}
+        >
           <button
-            className="flex w-full items-center justify-center gap-2 rounded-[18px] py-3.5 text-[15px] font-bold text-[#2F2A4A] shadow-float"
-            style={{ backgroundImage: 'linear-gradient(120deg,#CFF6E7 0%,#E3D9FF 100%)' }}
+            className="flex w-full items-center justify-center gap-2 rounded-[18px] py-3.5 text-[15px] font-bold shadow-float ring-1 ring-white/70 transition active:scale-[0.99] disabled:opacity-60"
+            /*
+             * v0.6.4: 다크모드에서 글자색이 테마 변수로 바뀌어 밝은 그라데이션 위에 흰 글씨처럼 보이던 문제.
+             * 배경과 글자를 모두 인라인으로 고정해 어떤 테마에서도 진한 글자로 선명하게 보이게 한다.
+             */
+            style={{ backgroundImage: 'linear-gradient(120deg,#CFF6E7 0%,#E3D9FF 100%)', color: '#1F1D2B' }}
             onClick={giveBack}
             disabled={busy}
           >

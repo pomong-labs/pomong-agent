@@ -45,7 +45,7 @@ export const SERVICES: ServiceEntry[] = [
     tint: '#F1F3F8',
     color: '#1F2328',
     emoji: '🐙',
-    examples: ['내 깃허브 레포 중에 마지막 커밋이 오래된 것 알려줘', 'khjkr/pomong-agent 열린 이슈 확인해줘', '이번 주 커밋 요약해줘'],
+    examples: ['내 깃허브 레포 중에 마지막 커밋이 오래된 것 알려줘', 'pomong-labs/pomong-agent 열린 이슈 확인해줘', '이번 주 커밋 요약해줘'],
   },
   {
     id: 'notion',
@@ -119,7 +119,7 @@ export const SERVICES: ServiceEntry[] = [
     tint: '#F3EEFF',
     color: '#7C63F6',
     emoji: '🏨',
-    examples: ['이번 주말 인제 근처 숙소 가격 비교해줘', '내 야놀자 예약 확인해줘', '춘천 호텔 최저가 알려줘'],
+    examples: ['이번 주말 서울 근처 숙소 가격 비교해줘', '내 야놀자 예약 확인해줘', '춘천 호텔 최저가 알려줘'],
   },
   {
     id: 'srt',
@@ -141,7 +141,7 @@ export const SERVICES: ServiceEntry[] = [
     tint: '#FFEFF3',
     color: '#F2568B',
     emoji: '🍽️',
-    examples: ['이번 주말 저녁 예약 가능한 식당 찾아줘', '내 예약 확인해줘', '인제 맛집 예약 가능한 곳 알려줘'],
+    examples: ['이번 주말 저녁 예약 가능한 식당 찾아줘', '내 예약 확인해줘', '서울 맛집 예약 가능한 곳 알려줘'],
   },
   {
     id: 'kurly',
