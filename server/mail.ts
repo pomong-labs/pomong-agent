@@ -548,15 +548,35 @@ export async function listMessages(
   const row = accountOrThrow(options.accountId);
   const limit = Math.max(1, Math.min(30, Number(options.limit) || 10));
   const messages = await withImap(row, async (client) => {
+    await client.mailboxOpen('INBOX');
     const out: MailSummary[] = [];
+    /**
+     * v0.6.3: 수십만 통의 메일함을 전부 훑지 않는다.
+     * - 안 읽은 메일만: UNSEEN 검색 결과의 최근 60통
+     * - 전체: 마지막 60통
+     */
+    if (options.unreadOnly) {
+      const uids = (await client.search({ seen: false }, { uid: true })) || [];
+      const recent = uids.slice(-60);
+      if (!recent.length) return out;
+      for await (const message of client.fetch(
+        recent.join(','),
+        { uid: true, envelope: true, flags: true, size: true },
+        { uid: true }
+      )) {
+        out.push(envelopeSummary(message as never));
+      }
+      return out;
+    }
+    const total = client.mailbox ? client.mailbox.exists : 0;
+    if (!total) return out;
+    const start = Math.max(1, total - 59);
     for await (const message of client.fetch(
-      '1:*',
+      `${start}:*`,
       { uid: true, envelope: true, flags: true, size: true },
       { uid: false }
     )) {
-      const summary = envelopeSummary(message as never);
-      if (options.unreadOnly && summary.seen) continue;
-      out.push(summary);
+      out.push(envelopeSummary(message as never));
     }
     return out;
   });

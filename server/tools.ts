@@ -1323,7 +1323,7 @@ async function runToolInner(name: string, args: Record<string, unknown>, ctx: To
           `${i + 1}. [uid ${m.uid}] ${m.seen ? '' : '(안 읽음) '}${m.subject}\n   · 보낸사람: ${m.fromName} <${m.from}> · ${formatMailDate(m.date)}`
         );
         return {
-          content: `${result.account} 메일함 · 최근 ${result.messages.length}통 (전체 ${result.total}통)\n${lines.join('\n')}\n\n본문은 mail_read(uid)로 읽으세요.`,
+          content: `${result.account} 메일함 · 최근 ${result.messages.length}통\n${lines.join('\n')}\n\n본문은 mail_read(uid)로 읽으세요.`,
         };
       } catch (err) {
         return { content: `메일함을 열지 못했습니다: ${err instanceof Error ? err.message : String(err)}` };
