@@ -116,6 +116,7 @@ async function main(): Promise<void> {
   check('RFC2047 base64 제목', mail.decodeMimeWords('=?UTF-8?B?7JWE7J207JWE?=') === '아이아');
   check('RFC2047 Q 인코딩', mail.decodeMimeWords('=?UTF-8?Q?=ED=95=9C=EA=B8=80?=') === '한글');
   check('quoted-printable', mail.decodeCharset(Buffer.from(mail.decodeQuotedPrintable('=ED=95=9C=EA=B8=80'), 'latin1'), 'utf-8') === '한글');
+  check('EUC-KR 본문 디코딩', mail.decodeCharset(Buffer.from([0xc7, 0xd1, 0xb1, 0xdb]), 'euc-kr') === '한글');
   check('HTML→텍스트', mail.htmlToText('<p>안녕<br>하세요</p><script>x()</script>').includes('안녕\n하세요'));
   const raw = Buffer.from(
     [

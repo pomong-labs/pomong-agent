@@ -1,7 +1,6 @@
 import crypto from 'node:crypto';
 import { ImapFlow } from 'imapflow';
 import nodemailer from 'nodemailer';
-import iconv from 'iconv-lite';
 import { addLog, getJson, setJson } from './db';
 import { decrypt, encrypt, serverKey } from './crypto';
 
@@ -355,16 +354,15 @@ export function decodeMimeWords(value: string): string {
     });
 }
 
-/** charset 버퍼 → 문자열(UTF-8 외에는 iconv) */
+/** charset 버퍼 → 문자열(Node의 TextDecoder가 UTF-8·EUC-KR 등을 처리, 외부 의존성 없음) */
 export function decodeCharset(buf: Buffer, charset: string): string {
   const name = (charset || 'utf-8').trim().toLowerCase().replace(/^"|"$/g, '');
   if (name === 'utf-8' || name === 'utf8' || name === 'us-ascii' || name === 'ascii') return buf.toString('utf8');
   try {
-    if (iconv.encodingExists(name)) return iconv.decode(buf, name);
+    return new TextDecoder(name).decode(buf);
   } catch {
-    /* 아래 기본값 */
+    return buf.toString('utf8');
   }
-  return buf.toString('utf8');
 }
 
 /** quoted-printable 풀기 */
@@ -440,13 +438,6 @@ function splitEntity(raw: string): { head: string; body: string } {
   const match = raw.match(/\r?\n\r?\n/);
   if (!match || match.index === undefined) return { head: raw, body: '' };
   return { head: raw.slice(0, match.index), body: raw.slice(match.index + match[0].length) };
-}
-
-function decodeBody(body: string, encoding: string): string {
-  const enc = (encoding || '').toLowerCase();
-  let buf = Buffer.from(body, 'latin1');
-  if (enc === 'base64') return buf.toString('base64').replace(/\s+/g, '');
-  return body;
 }
 
 function toBytes(body: string, encoding: string): Buffer {
