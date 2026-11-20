@@ -73,10 +73,10 @@ export default function AppShell() {
         <main
           className="relative flex min-w-0 flex-1 flex-col bg-[#FCFCFE]"
           style={{
-            // v0.6.6: 상단 상태바(노치) 높이만큼은 앱 맨 위 색(--pa-top)으로 칠하고,
-            // 그 아래부터는 표면색(--pa-surface)으로 이어진다. theme-color·html/body 배경도 같은 색이다.
+            // v0.6.6: 상태바(노치) 높이는 앱 맨 위 색(--pa-top)으로 칠하고, 그 아래 60px에 걸쳐 표면색으로
+            // 부드럽게 넘어간다. 상태바·html 배경·채팅 페이드 시작색이 모두 --pa-top 한 값이라 색 띄가 없다.
             background:
-              'linear-gradient(to bottom, var(--pa-top) 0, var(--pa-top) env(safe-area-inset-top, 0px), var(--pa-surface) env(safe-area-inset-top, 0px))',
+              'linear-gradient(to bottom, var(--pa-top) 0, var(--pa-top) env(safe-area-inset-top, 0px), var(--pa-surface) calc(env(safe-area-inset-top, 0px) + 60px))',
           }}
         >
           <div

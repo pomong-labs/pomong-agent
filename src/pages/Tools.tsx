@@ -67,7 +67,7 @@ function Switch({
 function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
   return (
     <section
-      className={`rounded-[22px] p-4 ring-1 lg:p-5 ${className}`}
+      className={`rounded-[22px] border p-4 lg:p-5 ${className}`}
       style={{ background: 'var(--pa-surface)', borderColor: 'var(--pa-line)', boxShadow: '0 4px 16px rgba(90,80,160,0.05)' }}
     >
       {children}
