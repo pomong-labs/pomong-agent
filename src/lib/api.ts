@@ -125,12 +125,14 @@ export interface TaskCounts {
 }
 
 export interface ChatMeta {
-  type: 'server_stats' | 'tasks' | 'browser' | 'notice';
+  type: 'server_stats' | 'tasks' | 'browser' | 'notice' | 'mail';
   stats?: SystemStats;
   tasks?: Task[];
   tools?: string[];
   browserSession?: string | null;
   taskRunId?: string;
+  /** v0.6.3: 메일 발송 확인 카드 */
+  mailDraft?: MailDraftCard;
   /** v0.5.2: 예약·워치 결과가 채팅방에 선톡으로 올 때 */
   automation?: 'job' | 'watch';
   badge?: string;
@@ -225,6 +227,26 @@ export interface ChatMessage {
   attachments?: ChatAttachment[];
   createdAt: string;
   model?: string | null;
+  /** v0.6.3: 답장(인용)한 원본 메시지 */
+  replyTo?: { id: number; role: string; content: string; createdAt: string } | null;
+}
+
+/** v0.6.3: 답장할 때 입력창 위에 보여 주는 인용 정보 */
+export interface ReplyTarget {
+  id: number;
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt: string;
+}
+
+/** v0.6.3: 메일 발송 확인 카드 내용(답변 meta.mailDraft) */
+export interface MailDraftCard {
+  id: string;
+  to: string[];
+  cc: string[];
+  subject: string;
+  text: string;
+  accountEmail: string;
 }
 
 export interface VaultItem {
@@ -307,6 +329,52 @@ export interface ProviderInfo {
   active: boolean;
   /** v0.6.2: EXAONE 추론 강도(다른 프로바이더는 null) */
   reasoningEffort?: ExaoneEffort | null;
+  /** v0.6.3: 키를 마지막으로 넣은 시각 */
+  keyUpdatedAt?: string | null;
+  /** v0.6.3: EXAONE 무료 키 30일 만료 표시 */
+  keyExpiry?: KeyExpiry | null;
+}
+
+export interface KeyExpiry {
+  updatedAt: string | null;
+  daysLeft: number | null;
+  label: string;
+  warn: boolean;
+  expired: boolean;
+}
+
+/** v0.6.3: 작업별 모델 자동 라우팅 */
+export type TaskKind = 'chat' | 'browser' | 'vision' | 'writing';
+export type RouteChoice = 'inherit' | ProviderId;
+export interface RoutingSettings {
+  chat: RouteChoice;
+  browser: RouteChoice;
+  vision: RouteChoice;
+  writing: RouteChoice;
+}
+
+/** v0.6.3: 이메일(IMAP/SMTP) 계정 */
+export interface MailAccount {
+  id: string;
+  provider: 'naver' | 'gmail' | 'custom';
+  label: string;
+  email: string;
+  senderName: string;
+  imapHost: string;
+  imapPort: number;
+  smtpHost: string;
+  smtpPort: number;
+  createdAt: string;
+  lastTestAt: string | null;
+  lastError: string | null;
+}
+
+export interface MailPreset {
+  id: string;
+  label: string;
+  imap: { host: string; port: number; secure: boolean };
+  smtp: { host: string; port: number; secure: boolean };
+  help: string;
 }
 
 export interface ModelsResponse {
@@ -331,7 +399,12 @@ export interface SettingsResponse {
   provider: { provider: ProviderId; label: string; model: string; connectedAt: string; reasoningEffort?: ExaoneEffort } | null;
   providers: ProviderInfo[];
   /** v0.6.2: EXAONE 추론 강도 선택지 */
-  exaone?: { efforts: ExaoneEffort[] };
+  exaone?: { efforts: ExaoneEffort[]; expiry?: KeyExpiry };
+  /** v0.6.3: 작업별 모델 라우팅 */
+  routing?: RoutingSettings;
+  routingOptions?: { kind: TaskKind; label: string; hint: string }[];
+  /** v0.6.3: 이메일 계정 */
+  mail?: { accounts: MailAccount[]; presets: MailPreset[] };
 }
 
 export interface ToolCatalogEntry {

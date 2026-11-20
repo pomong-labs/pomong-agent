@@ -59,6 +59,9 @@ import { attachVncProxy, issueVncToken } from './vnc-proxy';
 import * as attachments from './attachments';
 import * as filesBox from './files';
 import { postAutomationMessage } from './automation-chat';
+import * as mail from './mail';
+import { DEFAULT_ROUTING, TASK_KIND_META, TASK_KINDS, detectTaskKind, exaoneKeyStatus, normalizeRouting, resolveRoute, type RoutingSettings, type TaskKind } from './routing';
+import { selectToolNames } from './tool-filter';
 import type { TaskRunView } from './task-runs';
 
 ensureDataDir();
@@ -202,6 +205,8 @@ function normalizeCharacter(value: unknown, fallback: MascotId): MascotId {
 interface ProviderAccount {
   apiKeyEnc: string;
   connectedAt: string;
+  /** v0.6.3: 키를 마지막으로 넣은 시각(EXAONE 30일 만료 안내용) */
+  keyUpdatedAt?: string;
   /** v0.6.2: EXAONE 추론 강도(low·medium·high) */
   reasoningEffort?: ExaoneEffort;
 }
@@ -228,6 +233,43 @@ function llmState(): LlmState {
 
 function saveLlmState(state: LlmState): void {
   setJson('llm.state', state);
+}
+
+/* ------------------- v0.6.3: 작업별 모델 라우팅 -------------------- */
+
+/** 사용자가 고른 작업별 모델 설정(저장값) */
+function routingSettings(): RoutingSettings {
+  return normalizeRouting(getJson<unknown>('llm.routing', DEFAULT_ROUTING));
+}
+
+function saveRoutingSettings(next: RoutingSettings): void {
+  setJson('llm.routing', next);
+}
+
+/** 지금 연결된 프로바이더(라우팅 가능 여부 판단용) */
+function connectedMap(): Partial<Record<ProviderId, boolean>> {
+  const state = llmState();
+  const out: Partial<Record<ProviderId, boolean>> = {};
+  for (const id of Object.keys(PROVIDERS) as ProviderId[]) out[id] = Boolean(state.accounts[id]?.apiKeyEnc);
+  return out;
+}
+
+/** 이번 요청에 맞는 프로바이더·모델·API 키 */
+function routeFor(prompt: string, hasImage: boolean) {
+  const state = llmState();
+  const taskKind = detectTaskKind(prompt, { hasImage });
+  const route = resolveRoute({
+    taskKind,
+    routing: routingSettings(),
+    active: { provider: state.active.provider, model: normalizeModel(state.active.provider, state.active.model) },
+    connected: connectedMap(),
+  });
+  const account = state.accounts[route.provider];
+  return {
+    ...route,
+    apiKeyEnc: account?.apiKeyEnc || null,
+    reasoningEffort: exaoneEffort(account?.reasoningEffort),
+  };
 }
 
 /** 구버전(단일 provider + provider.backup.*) 설정을 다중 계정 설정으로 옮긴다. */
@@ -293,6 +335,9 @@ function providerSummary() {
     active: state.active.provider === id,
     // v0.6.2: EXAONE 추론 강도 선택값(다른 프로바이더는 null)
     reasoningEffort: id === 'exaone' ? exaoneEffort(state.accounts.exaone?.reasoningEffort) : null,
+    // v0.6.3: EXAONE 무료 키 30일 만료 표시
+    keyUpdatedAt: state.accounts[id]?.keyUpdatedAt || state.accounts[id]?.connectedAt || null,
+    keyExpiry: id === 'exaone' ? exaoneKeyStatus(state.accounts.exaone?.keyUpdatedAt || state.accounts.exaone?.connectedAt) : null,
   }));
 }
 
@@ -719,7 +764,7 @@ function systemPrompt(memoryBlock = ''): string {
 }
 
 interface ChatMeta {
-  type: 'server_stats' | 'tasks' | 'browser';
+  type: 'server_stats' | 'tasks' | 'browser' | 'mail';
   tools?: string[];
   /** 브라우저 도구를 썼을 때 화면으로 바로 갈 수 있게 세션 id를 함께 내려준다 */
   browserSession?: string | null;
@@ -739,22 +784,44 @@ function detectMeta(text: string): ChatMeta | null {
 app.get('/api/chat/messages', requireAuth, (req, res) => {
   const session = String(req.query.session || 'default');
   const rows = db
-    .prepare('SELECT id, role, content, meta, model, created_at FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT 100')
-    .all(session) as { id: number; role: string; content: string; meta: string | null; model: string | null; created_at: string }[];
+    .prepare('SELECT id, role, content, meta, model, created_at, reply_to_id FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT 100')
+    .all(session) as {
+    id: number;
+    role: string;
+    content: string;
+    meta: string | null;
+    model: string | null;
+    created_at: string;
+    reply_to_id: number | null;
+  }[];
   const ordered = rows.reverse();
   // v0.5.2: 말풍선에 붙은 사진·파일도 함께 내려준다.
   const files = attachments.listForMessages(ordered.map((r) => r.id));
+  // v0.6.3: 답장(인용) 원본을 함께 내려준다.
+  const replyIds = [...new Set(ordered.map((r) => r.reply_to_id).filter((v): v is number => Boolean(v)))];
+  const replyRows = replyIds.length
+    ? (db
+        .prepare(`SELECT id, role, content, created_at FROM messages WHERE id IN (${replyIds.map(() => '?').join(',')})`)
+        .all(...replyIds) as { id: number; role: string; content: string; created_at: string }[])
+    : [];
+  const replyMap = new Map(replyRows.map((r) => [r.id, r]));
   res.json({
     ok: true,
-    messages: ordered.map((r) => ({
-      id: r.id,
-      role: r.role,
-      content: r.content,
-      meta: r.meta ? JSON.parse(r.meta) : null,
-      model: r.model,
-      attachments: files[r.id] || [],
-      createdAt: r.created_at,
-    })),
+    messages: ordered.map((r) => {
+      const quoted = r.reply_to_id ? replyMap.get(r.reply_to_id) : null;
+      return {
+        id: r.id,
+        role: r.role,
+        content: r.content,
+        meta: r.meta ? JSON.parse(r.meta) : null,
+        model: r.model,
+        attachments: files[r.id] || [],
+        replyTo: quoted
+          ? { id: quoted.id, role: quoted.role, content: quoted.content.slice(0, 400), createdAt: quoted.created_at }
+          : null,
+        createdAt: r.created_at,
+      };
+    }),
     // 지난 대화의 작업 카드(단계 로그 포함)도 함께 준다.
     taskRuns: taskRuns.listRuns(session, 40),
   });
@@ -953,10 +1020,36 @@ interface ChatTurnResult {
  */
 async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
   const { session } = input;
-  const config = activeConfig();
+  // v0.6.3: 이번 요청의 성격(대화·브라우저·사진·글쓰기)에 맞춰 모델을 자동으로 고른다.
+  const hasImage = input.history.some(
+    (m) => m.role === 'user' && Boolean(m.parts?.some((p) => p.type === 'image'))
+  );
+  const route = routeFor(input.prompt, hasImage);
+  const config = {
+    provider: route.provider,
+    model: route.model,
+    apiKeyEnc: route.apiKeyEnc ?? activeConfig().apiKeyEnc,
+    connectedAt: null as string | null,
+    reasoningEffort: route.reasoningEffort,
+  };
+  if (route.reason === 'task_route' || route.reason === 'vision_fallback') {
+    addLog(
+      'info',
+      `작업별 모델 자동 선택 · ${TASK_KIND_META[route.taskKind].label} → ${PROVIDERS[route.provider].label} ${route.model}`
+    );
+  }
   const { decrypt, serverKey } = await import('./crypto');
   const apiKey = decrypt(String(config.apiKeyEnc), serverKey());
-  const MAX_STEPS = 6;
+  // v0.6.3: 도구가 40개를 넘어 필요할 것만 골라 넘긴다(진 의도는 전체 허용).
+  const toolSelection = selectToolNames({
+    userRequest: input.prompt,
+    hasImage,
+    browserActive: Boolean(browser.activeSession()),
+  });
+  const turnTools = toolSelection.tools
+    ? TOOL_SPECS.filter((spec) => toolSelection.tools?.includes(spec.name))
+    : TOOL_SPECS;
+  const MAX_STEPS = 20;
   const usedTools: string[] = [];
   let browserUsed = false;
   /** v0.5.3: 로그인 카드 서버 폴백 판단에 쓰는 흔적 */
@@ -1009,7 +1102,7 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
       model: config.model,
       system: systemPrompt(memory.memoryPromptBlock(input.prompt)),
       history: input.history,
-      tools: TOOL_SPECS,
+      tools: turnTools,
       maxSteps: MAX_STEPS,
       sessionId: session,
       userRequest: input.prompt,
@@ -1114,6 +1207,22 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
       meta = { type: 'browser', browserSession: active ? active.id : null };
     }
     if (meta && usedTools.length) meta.tools = usedTools;
+    // v0.6.3: 이번 턴에 만든 메일 초안은 답변 말풍선에 확인 카드로 붙인다(새로고침해도 유지).
+    const pendingDraft = mail.pendingDraftForSession(session);
+    if (pendingDraft) {
+      meta = {
+        ...(meta || { type: 'mail' }),
+        type: meta?.type || 'mail',
+        mailDraft: {
+          id: pendingDraft.id,
+          to: pendingDraft.to,
+          cc: pendingDraft.cc,
+          subject: pendingDraft.subject,
+          text: pendingDraft.text,
+          accountEmail: pendingDraft.accountEmail,
+        },
+      };
+    }
     const payload = meta ? JSON.stringify(meta) : null;
     const info = db
       .prepare('INSERT INTO messages(session_id, role, content, meta, model, created_at) VALUES(?,?,?,?,?,?)')
@@ -1232,6 +1341,7 @@ app.post('/api/chat/messages', requireAuth, async (req, res) => {
     message?: string;
     session?: string;
     attachmentIds?: string[];
+    replyToId?: number;
   };
   const session = String((req.body as { session?: string })?.session || 'default');
   const text = String(message || '').trim();
@@ -1261,9 +1371,20 @@ app.post('/api/chat/messages', requireAuth, async (req, res) => {
   chatSessions.ensureSession(session);
   chatSessions.autoTitle(session, text || '첨부 파일');
   chatSessions.touchSession(session);
+  // v0.6.3: 특정 메시지에 대한 답장(인용) — 원본을 확인하고 id를 함께 저장한다.
+  const replyToId = Number((req.body as { replyToId?: number })?.replyToId);
+  let replyTo: { id: number; role: string; content: string; createdAt: string } | null = null;
+  if (Number.isFinite(replyToId) && replyToId > 0) {
+    const row = db
+      .prepare('SELECT id, role, content, created_at FROM messages WHERE id = ? AND session_id = ?')
+      .get(replyToId, session) as { id: number; role: string; content: string; created_at: string } | undefined;
+    if (row) {
+      replyTo = { id: row.id, role: row.role, content: row.content.slice(0, 400), createdAt: row.created_at };
+    }
+  }
   const userInfo = db
-    .prepare('INSERT INTO messages(session_id, role, content, meta, created_at) VALUES(?,?,?,?,?)')
-    .run(session, 'user', text, null, now);
+    .prepare('INSERT INTO messages(session_id, role, content, meta, created_at, reply_to_id) VALUES(?,?,?,?,?,?)')
+    .run(session, 'user', text, null, now, replyTo ? replyTo.id : null);
   const userMessageId = Number(userInfo.lastInsertRowid);
   const savedAttachments = ids.length ? attachments.attachToMessage(ids, userMessageId, session) : [];
   // 첨부만 보냈으면 모델에게는 그 사실을 알려 준다.
@@ -1288,6 +1409,7 @@ app.post('/api/chat/messages', requireAuth, async (req, res) => {
         content: text,
         meta: null,
         attachments: savedAttachments,
+        replyTo,
         createdAt: now,
       },
       model: result.model,
@@ -1338,9 +1460,28 @@ app.get('/api/chat/running', requireAuth, (req, res) => {
  */
 function buildModelHistory(session: string): { role: 'user' | 'assistant'; content: string; parts?: AgentPart[] }[] {
   const rows = db
-    .prepare('SELECT id, role, content FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT 20')
-    .all(session) as { id: number; role: string; content: string }[];
+    .prepare('SELECT id, role, content, reply_to_id FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT 20')
+    .all(session) as { id: number; role: string; content: string; reply_to_id: number | null }[];
   const ordered = rows.reverse();
+  // v0.6.3: 답장(인용)이면 어떤 메시지에 대한 답인지 문맥으로 함께 넣는다.
+  const replyIds = [...new Set(ordered.map((r) => r.reply_to_id).filter((v): v is number => Boolean(v)))];
+  const quoted =
+    replyIds.length > 0
+      ? new Map(
+          (
+            db
+              .prepare(`SELECT id, role, content FROM messages WHERE id IN (${replyIds.map(() => '?').join(',')})`)
+              .all(...replyIds) as { id: number; role: string; content: string }[]
+          ).map((r) => [r.id, r])
+        )
+      : new Map<number, { id: number; role: string; content: string }>();
+  const withQuote = (row: { role: string; content: string; reply_to_id: number | null }): string => {
+    if (!row.reply_to_id) return row.content;
+    const target = quoted.get(row.reply_to_id);
+    if (!target) return row.content;
+    const who = target.role === 'assistant' ? '내(AI) 답변' : '사용자';
+    return `[답장 대상 메시지 · ${who}: "${target.content.replace(/\s+/g, ' ').slice(0, 300)}"]\n${row.content}`;
+  };
   const files = attachments.listForMessages(ordered.map((r) => r.id));
   const imageRows = ordered
     .filter((r) => r.role === 'user' && (files[r.id] || []).some((a) => a.kind === 'image'))
@@ -1351,13 +1492,14 @@ function buildModelHistory(session: string): { role: 'user' | 'assistant'; conte
   return ordered.map((row) => {
     const role = row.role === 'assistant' ? ('assistant' as const) : ('user' as const);
     const list = files[row.id] || [];
-    if (!list.length) return { role, content: row.content };
+    const rawContent = withQuote(row);
+    if (!list.length) return { role, content: rawContent };
     const block = attachments.buildPromptBlock(
       list.map((a) => a.id),
       { images: inlineRows.has(row.id), maxChars: textBudget > 6000 ? 6000 : Math.max(800, textBudget) }
     );
     textBudget = Math.max(0, textBudget - block.text.length);
-    const content = `${row.content}${block.text ? `\n\n[첨부]\n${block.text}` : ''}`;
+    const content = `${rawContent}${block.text ? `\n\n[첨부]\n${block.text}` : ''}`;
     if (!block.images.length) return { role, content };
     return {
       role,
@@ -1875,8 +2017,71 @@ app.get('/api/settings', requireAuth, (_req, res) => {
       : null,
     providers: providerSummary(),
     // v0.6.2: EXAONE 추론 강도 선택지
-    exaone: { efforts: EXAONE_EFFORTS },
+    exaone: { efforts: EXAONE_EFFORTS, expiry: exaoneKeyStatus(llmState().accounts.exaone?.keyUpdatedAt || llmState().accounts.exaone?.connectedAt) },
+    // v0.6.3: 작업별 모델 자동 라우팅 설정과 선택지
+    routing: routingSettings(),
+    routingOptions: TASK_KINDS.map((kind) => ({ kind, ...TASK_KIND_META[kind] })),
+    // v0.6.3: 이메일(IMAP/SMTP) 계정 현황
+    mail: mail.mailStatus(),
   });
+});
+
+/** v0.6.3: 작업별 모델 자동 라우팅 저장 */
+app.post('/api/settings/routing', requireAuth, (req, res) => {
+  const patch = (req.body || {}) as Partial<Record<TaskKind, unknown>>;
+  const current = routingSettings();
+  const next = normalizeRouting({ ...current, ...patch });
+  saveRoutingSettings(next);
+  addLog('info', `작업별 모델 라우팅 · ${TASK_KINDS.map((k) => `${TASK_KIND_META[k].label}:${next[k]}`).join(' / ')}`);
+  res.json({ ok: true, routing: next });
+});
+
+/* ------------------ v0.6.3: 이메일(IMAP/SMTP) 연결 ------------------ */
+
+app.get('/api/mail/accounts', requireAuth, (_req, res) => {
+  res.json({ ok: true, ...mail.mailStatus() });
+});
+
+app.post('/api/mail/test', requireAuth, async (req, res) => {
+  const body = req.body as mail.MailAccountInput;
+  const result = await mail.testConnection(body);
+  res.status(result.ok ? 200 : 400).json({ ok: result.ok, message: result.message });
+});
+
+app.post('/api/mail/accounts', requireAuth, async (req, res) => {
+  try {
+    const account = await mail.saveAccount(req.body as mail.MailAccountInput);
+    res.json({ ok: true, account, accounts: mail.listAccounts() });
+  } catch (err) {
+    res.status(400).json({ ok: false, code: 'mail_connect_failed', message: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.delete('/api/mail/accounts/:id', requireAuth, (req, res) => {
+  const removed = mail.removeAccount(req.params.id);
+  res.json({ ok: removed, accounts: mail.listAccounts() });
+});
+
+/** 사용자가 확인 카드에서 "보내기"를 누를 때만 실제로 발송한다. */
+app.post('/api/mail/send', requireAuth, async (req, res) => {
+  const id = String((req.body as { draftId?: string })?.draftId || '').trim();
+  if (!id) {
+    res.status(400).json({ ok: false, code: 'invalid_draft', message: '메일 초안을 찾지 못했습니다.' });
+    return;
+  }
+  try {
+    const draft = await mail.sendDraft(id);
+    addLog('success', `메일 발송 · ${draft.to.join(', ')}`);
+    res.json({ ok: true, draft });
+  } catch (err) {
+    res.status(400).json({ ok: false, code: 'mail_send_failed', message: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post('/api/mail/discard', requireAuth, (req, res) => {
+  const id = String((req.body as { draftId?: string })?.draftId || '').trim();
+  const cancelled = id ? mail.cancelDraft(id) : false;
+  res.json({ ok: cancelled });
 });
 
 app.put('/api/settings/profile', requireAuth, (req, res) => {
@@ -1966,6 +2171,8 @@ app.post('/api/settings/api-key', requireAuth, async (req, res) => {
   const account: ProviderAccount = {
     apiKeyEnc: encrypt(apiKey.trim(), serverKey()),
     connectedAt: new Date().toISOString(),
+    // v0.6.3: 키를 새로 넣을 때마다 등록 시각을 기록한다(EXAONE 30일 만료 계산 기준).
+    keyUpdatedAt: new Date().toISOString(),
   };
   // v0.6.2: EXAONE 추론 강도도 함께 저장한다(없으면 기존 값 유지).
   const effort = reasoningEffort ? exaoneEffort(reasoningEffort) : state.accounts[provider]?.reasoningEffort;
@@ -2531,6 +2738,56 @@ activeConfig();
 // 지난번에 실제로 응답한 Gemini 모델을 기억해 두고 우선 시도한다.
 setLastGoodGeminiModel(getJson<string | null>('gemini.lastGoodModel', null));
 
+/**
+ * v0.6.3: EXAONE 무료 키(30일) 만료 안내.
+ * - 키를 등록한 시각(keyUpdatedAt)을 기준으로 남은 일수를 센다.
+ * - D-3 이내가 되면 기본 채팅방에 한 번만 선톡하고 푸시를 보낸다(같은 키로 반복하지 않는다).
+ * - 키를 새로 넣으면 keyUpdatedAt 이 바뀌므로 다음 만료 때는 다시 안내한다.
+ */
+const EXAONE_WATCH_INTERVAL_MS = 6 * 60 * 60 * 1000;
+let exaoneTimer: NodeJS.Timeout | null = null;
+
+function checkExaoneKeyExpiry(): void {
+  try {
+    const state = llmState();
+    const account = state.accounts.exaone;
+    if (!account?.apiKeyEnc) return;
+    const updatedAt = account.keyUpdatedAt || account.connectedAt || null;
+    const status = exaoneKeyStatus(updatedAt);
+    if (!status.warn || !updatedAt) return;
+    if (getJson<string | null>('exaone.expiryNotifiedFor', null) === updatedAt) return;
+    setJson('exaone.expiryNotifiedFor', updatedAt);
+    const body = status.expired
+      ? `EXAONE 무료 키가 만료됐어요(${status.label}). docs.exaone.ai에서 새 키를 발급해 설정에 넣어 주세요.`
+      : `EXAONE 무료 키가 곧 만료돼요! (${status.label}) docs.exaone.ai에서 재발급해 주세요.`;
+    const posted = postAutomationMessage({
+      kind: 'monitor',
+      badge: 'EXAONE 키 만료 안내',
+      body,
+      notifyTitle: status.expired ? 'EXAONE 키가 만료됐어요' : `EXAONE 키가 곧 만료돼요 (${status.label})`,
+      notifyBody: body,
+    });
+    addLog('warn', `EXAONE 키 만료 안내(${status.label})를 보냈습니다`);
+    if (!posted) {
+      publish({
+        type: 'info',
+        title: 'EXAONE 키 만료 안내',
+        body,
+        data: { exaone: status },
+      });
+    }
+  } catch (err) {
+    addLog('warn', `EXAONE 키 만료 확인 실패: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+function startExaoneExpiryWatch(): void {
+  if (exaoneTimer) return;
+  setTimeout(() => checkExaoneKeyExpiry(), 20_000).unref?.();
+  exaoneTimer = setInterval(() => checkExaoneKeyExpiry(), EXAONE_WATCH_INTERVAL_MS);
+  exaoneTimer.unref?.();
+}
+
 const server = app.listen(PORT, HOST, () => {
   startSampler(3000);
   addLog('success', `Pomong Agent v${APP_VERSION} 가동`);
@@ -2543,17 +2800,33 @@ const server = app.listen(PORT, HOST, () => {
   jobs.startScheduler(
     async (job, { deadline }) =>
       runInLane('automation', job.name, async () => {
-        const config = activeConfig();
+        // v0.6.3: 예약 지시문의 성격에 맞춰 모델을 자동으로 고른다.
+        const route = routeFor(job.prompt, false);
+        const fallback = activeConfig();
+        const config = {
+          provider: route.provider,
+          model: route.model,
+          apiKeyEnc: route.apiKeyEnc ?? fallback.apiKeyEnc,
+          reasoningEffort: route.reasoningEffort,
+        };
       if (!config.apiKeyEnc) throw new Error('AI 키가 연결되어 있지 않습니다. 설정에서 키를 연결해 주세요.');
       const { decrypt, serverKey } = await import('./crypto');
       const apiKey = decrypt(config.apiKeyEnc, serverKey());
+      // v0.6.3: 예약 실행에도 필요한 도구만 넘긴다(허용 목록이 있으면 그 안에서).
+      const selection = selectToolNames({ userRequest: job.prompt });
+      const allowedByJob = job.toolsAllow && job.toolsAllow.length ? job.toolsAllow : null;
+      const jobTools = TOOL_SPECS.filter((spec) => {
+        if (allowedByJob && !allowedByJob.includes(spec.name)) return false;
+        if (selection.tools && !selection.tools.includes(spec.name)) return false;
+        return true;
+      });
       const loop = await runAgentLoop({
         provider: config.provider,
         apiKey,
         model: config.model,
         system: `${systemPrompt()}\n\n[예약 실행]\n지금은 사용자가 대화하지 않은 채 깨어난 예약 실행입니다. 지시를 스스로 처리하고, 결과를 사용자가 바로 읽을 수 있게 3줄 이내로 요약하세요. 결제·게시·로그인처럼 사람이 해야 할 일은 하지 말고 "사람이 필요하다"고 적으세요.`,
         history: [{ role: 'user', content: job.prompt }],
-        tools: TOOL_SPECS,
+        tools: jobTools,
         maxSteps: job.maxSteps,
         toolsAllow: job.toolsAllow,
         unattended: true,
@@ -2627,6 +2900,8 @@ const server = app.listen(PORT, HOST, () => {
   browser.startIdleReaper();
   // v0.6.0: 호스트 보안·장애 감시(3분마다, 이상할 때만 알림)
   monitorAlert.startMonitor();
+  // v0.6.3: EXAONE 무료 키 30일 만료 D-3 알림(부팅 직후 + 6시간마다, 중복 없이)
+  startExaoneExpiryWatch();
   // 웹 푸시 VAPID 키를 첫 기동에 자동으로 만들어 data/ 에 보관한다.
   const vapid = push.ensureVapid();
   if (vapid) addLog('info', '웹 푸시가 준비되었습니다(data/vapid.json)');

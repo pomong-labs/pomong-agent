@@ -3,6 +3,7 @@ import {
   api,
   ApiError,
   type ChatMessage,
+  type ReplyTarget,
   type ChatSession,
   type LoginRequest,
   type ModelsResponse,
@@ -70,7 +71,7 @@ interface AppStoreValue {
   deleteSession: (id: string) => Promise<void>;
   /** AI 답변·작업 중지 */
   stop: () => Promise<void>;
-  send: (text: string, attachmentIds?: string[]) => Promise<void>;
+  send: (text: string, attachmentIds?: string[], replyTo?: ReplyTarget | null) => Promise<void>;
   clearChat: () => Promise<void>;
   draft: string;
   setDraft: (value: string) => void;
@@ -763,7 +764,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     [refreshModels]
   );
 
-  const send = useCallback(async (text: string, attachmentIds?: string[]) => {
+  const send = useCallback(async (text: string, attachmentIds?: string[], replyTo?: ReplyTarget | null) => {
     const content = text.trim();
     const ids = (attachmentIds || []).filter(Boolean);
     if ((!content && !ids.length) || sendingRef.current) return;
@@ -780,6 +781,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       content,
       meta: null,
       attachments: [],
+      replyTo: replyTo ? { id: replyTo.id, role: replyTo.role, content: replyTo.content, createdAt: replyTo.createdAt } : null,
       createdAt: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, optimistic]);
@@ -790,6 +792,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         message: content,
         session,
         attachmentIds: ids.length ? ids : undefined,
+        replyToId: replyTo ? replyTo.id : undefined,
       });
       // 서버가 저장한 내 메시지(userMessage)로 임시 메시지를 바꾸고, AI 답변을 뒤에 붙인다.
       // 예전에는 응답에 AI 답변만 담겨 와서 내 메시지가 화면에서 사라졌다.

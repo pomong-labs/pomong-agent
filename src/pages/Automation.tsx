@@ -15,6 +15,7 @@ import {
   X,
 } from 'lucide-react';
 import MascotFace from '../components/MascotFace';
+import { keepFieldVisible, modalMaxHeight, useVisualViewportHeight } from '../lib/useKeyboardModal';
 import {
   api,
   type AutomationJob,
@@ -646,11 +647,21 @@ function JobSection({
 }
 
 function Sheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  // v0.6.3: iOS 가상 키보드가 올라오면 visualViewport 높이에 맞춰 시트를 줄이고 내부 스크롤을 살린다.
+  const viewportHeight = useVisualViewportHeight(true);
+  const maxH = modalMaxHeight(viewportHeight);
   return (
-    <div className="fixed inset-0 z-40 flex items-end justify-center bg-[#1F1D2B]/30 p-0 backdrop-blur-sm lg:items-center lg:p-6" onClick={onClose}>
+    <div className="pa-fade-in fixed inset-0 z-40 flex items-end justify-center bg-[#1F1D2B]/30 p-0 backdrop-blur-sm lg:items-center lg:p-6" onClick={onClose}>
       <div
-        className="pa-scroll max-h-[88vh] w-full max-w-[520px] overflow-y-auto rounded-t-[26px] bg-white p-5 shadow-soft lg:rounded-[26px]"
+        className="pa-sheet-in pa-scroll w-full max-w-[520px] overflow-y-auto rounded-t-[26px] bg-white p-5 shadow-soft lg:rounded-[26px]"
+        style={{
+          maxHeight: typeof maxH === 'number' ? `${maxH}px` : maxH,
+          paddingBottom: 'calc(1.25rem + var(--safe-bottom))',
+          overscrollBehavior: 'contain',
+          WebkitOverflowScrolling: 'touch',
+        }}
         onClick={(e) => e.stopPropagation()}
+        onFocus={keepFieldVisible}
       >
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-[18px] font-bold text-[#1F1D2B]">{title}</h2>
@@ -668,7 +679,7 @@ function JobEditor({ job, onClose, onSaved }: { job?: AutomationJob; onClose: ()
   const [name, setName] = useState(job?.name || '');
   const [prompt, setPrompt] = useState(job?.prompt || '');
   const [cron, setCron] = useState(job?.cron || '0 8 * * *');
-  const [maxSteps, setMaxSteps] = useState(job?.maxSteps || 6);
+  const [maxSteps, setMaxSteps] = useState(job?.maxSteps || 12);
   const [preview, setPreview] = useState<{ runs: string[]; label: string; error?: string }>({ runs: [], label: '' });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -735,7 +746,7 @@ function JobEditor({ job, onClose, onSaved }: { job?: AutomationJob; onClose: ()
         <label className="flex items-center gap-2 text-[12.5px] text-[#6B677A]">
           최대 단계
           <select className="rounded-xl border border-[#E9E7F2] bg-white px-2 py-1.5 text-[13px]" value={maxSteps} onChange={(e) => setMaxSteps(Number(e.target.value))}>
-            {[3, 4, 6, 8, 10, 12].map((n) => (
+            {[6, 8, 10, 12, 15, 20].map((n) => (
               <option key={n} value={n}>
                 {n}단계
               </option>

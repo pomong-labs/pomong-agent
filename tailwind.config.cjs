@@ -1,6 +1,8 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
   content: ['./index.html', './src/**/*.{ts,tsx}'],
+  // v0.6.3: html.dark 클래스로 테마를 바꾸므로 dark: 유틸리티를 쓸 수 있게 한다.
+  darkMode: 'class',
   theme: {
     extend: {
       colors: {

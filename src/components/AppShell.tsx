@@ -31,11 +31,15 @@ export default function AppShell() {
       className="fixed inset-x-0 top-0 w-full bg-[#F6F6FA] lg:p-4"
       style={{
         height: 'var(--app-height, 100%)',
+        background: 'var(--pa-bg)',
         // iOS가 키보드 때문에 화면을 밀어 올린 만큼(visualViewport.offsetTop) 셸도 따라 올린다.
         transform: 'translate3d(var(--app-offset-x, 0px), var(--app-offset, 0px), 0)',
       }}
     >
-      <div className="mx-auto flex h-full w-full max-w-[1600px] overflow-hidden bg-white lg:rounded-[30px] lg:shadow-soft">
+      <div
+        className="mx-auto flex h-full w-full max-w-[1600px] overflow-hidden bg-white lg:rounded-[30px] lg:shadow-soft"
+        style={{ background: 'var(--pa-surface)' }}
+      >
         <aside className="hidden w-[300px] shrink-0 flex-col border-r border-[#F0EFF6] px-6 py-8 lg:flex">
           <div className="px-1">
             <Logo />
@@ -66,12 +70,19 @@ export default function AppShell() {
           </div>
         </aside>
 
-        <main className="relative flex min-w-0 flex-1 flex-col bg-[#FCFCFE]">
+        <main className="relative flex min-w-0 flex-1 flex-col bg-[#FCFCFE]" style={{ background: 'var(--pa-surface)' }}>
           <div
             className="flex min-h-0 flex-1 flex-col"
-            style={onChat && keyboardOpen ? { paddingTop: 0 } : undefined}
+            style={{
+              // v0.6.3: 다크모드 상단 상태바(노치) 아래로 내용이 들어가도 흰 띠가 생기지 않게
+              paddingTop: 'env(safe-area-inset-top)',
+              ...(onChat && keyboardOpen ? { paddingTop: 0 } : null),
+            }}
           >
-            <Outlet context={{ profile: { nickname: profile.nickname, agentName: profile.agentName } } satisfies ShellContext} />
+            {/* v0.6.3: 화면 이동에 부드러운 페이드·슬라이드 전환 */}
+            <div key={location.pathname} className="pa-screen-in flex min-h-0 flex-1 flex-col">
+              <Outlet context={{ profile: { nickname: profile.nickname, agentName: profile.agentName } } satisfies ShellContext} />
+            </div>
           </div>
           <MobileTabBar />
         </main>

@@ -68,6 +68,8 @@ export default function Browser() {
   }, [editingAddress]);
   const [vncStatus, setVncStatus] = useState<'connecting' | 'connected' | 'closed' | 'error'>('connecting');
   const [viewerFull, setViewerFull] = useState(false);
+  /** v0.6.3: 모바일 전체화면에서 검은 여백 없이 꽉 채우기 */
+  const [fillScreen, setFillScreen] = useState(true);
   const rfbRef = useRef<RFBInstance | null>(null);
   const imeRef = useRef<HTMLInputElement>(null);
 
@@ -269,6 +271,7 @@ export default function Browser() {
         sessionId={session.id}
         interactive={userControl}
         fill={viewerFull}
+        stretch={viewerFull && fillScreen}
         onStatus={setVncStatus}
         onError={(message) => setHint(message)}
         onReady={(rfb) => {
@@ -491,7 +494,7 @@ export default function Browser() {
               </div>
 
               {/* 실시간 화면(noVNC) — 전체화면일 때는 그쪽에만 그린다(중복 연결 방지) */}
-              <div className="relative aspect-[1280/800] max-h-[62vh] w-full bg-[#0B0B12]">
+              <div className="relative aspect-[1280/800] max-h-[68vh] w-full bg-[#0B0B12]">
                 {viewerFull ? <div className="h-full w-full" /> : viewer}
                 {!userControl ? (
                   <span className="pointer-events-none absolute left-2 top-2 rounded-full bg-[#1F1D2B]/70 px-2.5 py-1 text-[11px] font-semibold text-white">
@@ -594,47 +597,66 @@ export default function Browser() {
 
       {/* ---------- 전체화면(핸드오버) ---------- */}
       {session && viewerFull ? (
-        <div className="fixed inset-0 z-50 flex flex-col bg-[#0B0B12]">
-          <div className="flex shrink-0 items-center gap-2 border-b border-white/10 bg-[#12121C] px-3 py-2 text-white">
-            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-white/10">
-              <Globe size={16} />
+        <div
+          className="fixed inset-0 z-50 flex flex-col bg-[#0B0B12]"
+          style={{
+            height: '100dvh',
+            // v0.6.3: 노치·홈 인디케이터 영역까지 화면으로 쓰되 내용은 가리지 않게
+            paddingTop: 'env(safe-area-inset-top)',
+            paddingBottom: 'env(safe-area-inset-bottom)',
+          }}
+        >
+          <div className="flex shrink-0 items-center gap-1.5 border-b border-white/10 bg-[#12121C] px-2 py-1.5 text-white">
+            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-white/10">
+              <Globe size={14} />
             </span>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-[13px] font-bold">
+              <p className="truncate text-[12.5px] font-bold leading-tight">
                 {userControl ? session.handoverLabel || '화면을 넘겨받았어요' : 'Pomong Browser · 실시간 화면'}
               </p>
-              <p className="truncate text-[11px] text-white/60">
+              <p className="hidden truncate text-[10.5px] text-white/55 sm:block">
                 {userControl ? `직접 입력한 뒤 「인증 완료」를 눌러 주세요 · 남은 ${remaining}분` : 'AI가 조작 중입니다 · 「내가 조작」을 누르면 직접 할 수 있어요'}
               </p>
             </div>
+            <button
+              className={`flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1.5 text-[11.5px] font-bold ${
+                fillScreen ? 'bg-white/15 text-white' : 'bg-white/5 text-white/70'
+              }`}
+              onClick={() => setFillScreen((v) => !v)}
+              aria-pressed={fillScreen}
+              title={fillScreen ? '원래 비율로 보기' : '화면을 꽉 채워 보기'}
+            >
+              {fillScreen ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+              <span className="hidden sm:inline">{fillScreen ? '맞춤' : '채우기'}</span>
+            </button>
             {userControl ? (
               <button
-                className="flex shrink-0 items-center gap-1 rounded-full bg-[#D9F7EA] px-3 py-2 text-[12px] font-bold text-[#0F9668] disabled:opacity-60"
+                className="flex shrink-0 items-center gap-1 rounded-full bg-[#D9F7EA] px-2.5 py-1.5 text-[11.5px] font-bold text-[#0F9668] disabled:opacity-60"
                 onClick={giveBack}
                 disabled={busy}
               >
-                <CheckCircle2 size={14} /> 인증 완료
+                <CheckCircle2 size={13} /> 인증 완료
               </button>
             ) : (
               <button
-                className="flex shrink-0 items-center gap-1 rounded-full bg-[#7C63F6] px-3 py-2 text-[12px] font-bold text-white"
+                className="flex shrink-0 items-center gap-1 rounded-full bg-[#7C63F6] px-2.5 py-1.5 text-[11.5px] font-bold text-white"
                 onClick={takeControl}
                 disabled={busy}
               >
-                <MousePointerClick size={14} /> 내가 조작
+                <MousePointerClick size={13} /> 내가 조작
               </button>
             )}
             <button
-              className="flex shrink-0 items-center gap-1 rounded-full bg-white/10 px-3 py-2 text-[12px] font-bold text-white"
+              className="flex shrink-0 items-center gap-1 rounded-full bg-white/10 px-2.5 py-1.5 text-[11.5px] font-bold text-white"
               onClick={() => setViewerFull(false)}
             >
-              <Minimize2 size={14} /> 닫기
+              <Minimize2 size={13} /> 닫기
             </button>
           </div>
-          <div className="min-h-0 flex-1">{viewer}</div>
-          <div className="flex shrink-0 items-center gap-2 border-t border-white/10 bg-[#12121C] px-2.5 py-2">
+          <div className="min-h-0 flex-1 overflow-hidden">{viewer}</div>
+          <div className="flex shrink-0 items-center gap-1.5 border-t border-white/10 bg-[#12121C] px-2 py-1.5">
             <input
-              className="min-w-0 flex-1 rounded-full bg-white/10 px-3 py-2 text-[16px] text-white placeholder-white/40 focus:outline-none focus:ring-1 focus:ring-[#C9B8FF]"
+              className="min-w-0 flex-1 rounded-full bg-white/10 px-3 py-1.5 text-[16px] text-white placeholder-white/40 focus:outline-none focus:ring-1 focus:ring-[#C9B8FF]"
               placeholder="여기에 입력하면 화면으로 바로 들어가요 (한글 OK)"
               onChange={onImeChange}
               onKeyDown={onImeKeyDown}
@@ -643,10 +665,10 @@ export default function Browser() {
               autoCorrect="off"
               autoCapitalize="off"
             />
-            <button className="shrink-0 rounded-full bg-[#7C63F6] px-3 py-2 text-[12px] font-bold text-white" onClick={() => sendKey('Enter')}>
+            <button className="shrink-0 rounded-full bg-[#7C63F6] px-3 py-1.5 text-[11.5px] font-bold text-white" onClick={() => sendKey('Enter')}>
               Enter
             </button>
-            <button className="shrink-0 rounded-full bg-white/10 px-3 py-2 text-[12px] font-bold text-white" onClick={() => sendInput({ type: 'scroll', dy: 500 })}>
+            <button className="shrink-0 rounded-full bg-white/10 px-3 py-1.5 text-[11.5px] font-bold text-white" onClick={() => sendInput({ type: 'scroll', dy: 500 })}>
               ↓
             </button>
           </div>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { AgentState } from '../lib/store';
 import { assetUrl } from '../lib/version';
 
@@ -10,7 +10,12 @@ export const AGENT_FACE_STATE: Record<AgentState, string> = {
   error: 'error',
 };
 
-/** 선택한 캐릭터의 상태별 표정 PNG (public/mascots/face). 없으면 기본 캐릭터 이미지로 대체. */
+/**
+ * 선택한 캐릭터의 상태별 표정 PNG (public/mascots/face). 없으면 기본 캐릭터 이미지로 대체.
+ *
+ * v0.6.3: 대기 ↔ 작업중 이미지가 뚝 끊기지 않게,
+ * 이전 표정을 위에 겹쳐 두고 새 표정을 crossfade + 살짝 scale 로 바꾼다.
+ */
 export default function MascotFace({
   character = 'pimong',
   state = 'idle',
@@ -32,16 +37,48 @@ export default function MascotFace({
   const src = assetUrl(
     failed ? `/mascots/${character}.png` : `/mascots/face/${character}-${AGENT_FACE_STATE[state]}.png`
   );
+
+  const lastSrc = useRef(src);
+  const [previous, setPrevious] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (lastSrc.current === src) return;
+    const before = lastSrc.current;
+    lastSrc.current = src;
+    setPrevious(before);
+    const timer = window.setTimeout(() => setPrevious(null), 340);
+    return () => window.clearTimeout(timer);
+  }, [src]);
+
+  const common = {
+    width: size,
+    height: size,
+    alt: alt ?? '포몽 에이전트 캐릭터',
+    draggable: false,
+    style: { width: size, height: size },
+  } as const;
+
   return (
-    <img
-      src={src}
-      width={size}
-      height={size}
-      alt={alt ?? '포몽 에이전트 캐릭터'}
-      draggable={false}
-      onError={() => setFailed(true)}
-      className={`select-none object-contain transition-transform duration-300 ${className}`}
+    <span
+      className={`relative inline-flex shrink-0 items-center justify-center align-middle ${className}`}
       style={{ width: size, height: size }}
-    />
+    >
+      {previous ? (
+        <img
+          {...common}
+          src={previous}
+          alt=""
+          aria-hidden
+          className="pointer-events-none absolute inset-0 m-auto select-none object-contain pa-face-out"
+        />
+      ) : null}
+      <img
+        {...common}
+        key={src}
+        src={src}
+        onError={() => setFailed(true)}
+        className="relative select-none object-contain pa-face-in"
+      />
+    </span>
   );
 }

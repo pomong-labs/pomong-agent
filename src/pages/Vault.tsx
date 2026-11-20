@@ -20,6 +20,7 @@ import {
 import Mascot from '../components/Mascot';
 import { api, ApiError, type VaultItem, type VaultStatus } from '../lib/api';
 import { formatDate, formatRelative } from '../lib/format';
+import { keepFieldVisible, modalMaxHeight, useVisualViewportHeight } from '../lib/useKeyboardModal';
 
 const TYPE_META = {
   apikey: { label: 'API 키', bg: '#F3EEFF', fg: '#8B72F6', icon: KeyRound },
@@ -214,7 +215,7 @@ export default function Vault() {
               : 'PIN을 입력하면 다시 열 수 있어요.'}
           </p>
 
-          <div className="mt-6 rounded-[26px] bg-white p-5 text-left shadow-card ring-1 ring-[#F6F4FB]">
+          <div className="mt-6 rounded-[26px] bg-white p-5 text-left shadow-card ring-1 ring-[#F6F4FB]" onFocus={keepFieldVisible}>
             <label className="mb-2 block text-[13px] font-semibold text-[#3B3947]">{configuring ? '새 PIN (4~12자리)' : 'PIN'}</label>
             <input
               className="pa-input text-center text-[20px] tracking-[0.4em]"
@@ -532,6 +533,8 @@ function ItemModal({
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const editing = Boolean(initial);
+  // v0.6.3: iOS 가상 키보드가 올라오면 모달 높이를 visualViewport에 맞춘다.
+  const viewportHeight = useVisualViewportHeight(true);
 
   const save = async () => {
     setBusy(true);
@@ -553,8 +556,20 @@ function ItemModal({
   };
 
   return (
-    <div className="fixed inset-0 z-40 flex items-end justify-center bg-[#1F1D2B]/30 p-0 backdrop-blur-sm sm:items-center sm:p-6">
-      <div className="w-full max-w-[480px] animate-pop rounded-t-[28px] bg-white p-5 shadow-2xl sm:rounded-[28px] sm:p-6">
+    <div className="pa-fade-in fixed inset-0 z-40 flex items-end justify-center bg-[#1F1D2B]/30 p-0 backdrop-blur-sm sm:items-center sm:p-6">
+      <div
+        className="pa-scroll w-full max-w-[480px] overflow-y-auto rounded-t-[28px] bg-white p-5 shadow-2xl sm:rounded-[28px] sm:p-6"
+        style={{
+          maxHeight: (() => {
+            const h = modalMaxHeight(viewportHeight);
+            return typeof h === 'number' ? `${h}px` : h;
+          })(),
+          paddingBottom: 'calc(1.25rem + var(--safe-bottom))',
+          overscrollBehavior: 'contain',
+          WebkitOverflowScrolling: 'touch',
+        }}
+        onFocus={keepFieldVisible}
+      >
         <div className="flex items-center justify-between">
           <h2 className="text-[19px] font-bold">{editing ? '항목 수정' : '새 항목 추가'}</h2>
           <button className="rounded-xl p-2 text-[#A8A5B8] hover:bg-[#FAF9FF]" onClick={onClose} aria-label="닫기">

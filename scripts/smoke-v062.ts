@@ -258,7 +258,7 @@ async function main(): Promise<void> {
   check('브라우저가 꺼진 서버에서는 이유를 알려 준다', /BROWSER_ENABLED|꺼져/.test(openError), openError);
 
   /* 8) 버전 -------------------------------------------------------------- */
-  check('버전 0.6.2', APP_VERSION === '0.6.2', APP_VERSION);
+  check('버전 0.6.3', APP_VERSION === '0.6.3', APP_VERSION);
 
   globalThis.fetch = realFetch;
   console.log(`\n${failures ? `❌ 실패 ${failures}건` : '✅ 전부 통과'}`);

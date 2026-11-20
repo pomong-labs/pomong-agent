@@ -4,10 +4,12 @@ import {
   Bell,
   BellOff,
   Check,
+  Clock,
   Download,
   ExternalLink,
   Globe,
   LogOut,
+  Mail,
   Moon,
   Monitor,
   Palette,
@@ -23,9 +25,13 @@ import {
   api,
   type AccentMode,
   type ExaoneEffort,
+  type MailAccount,
+  type MailPreset,
   type PersonaId,
   type ProviderId,
   type PushStatus,
+  type RouteChoice,
+  type RoutingSettings,
   type SettingsResponse,
   type ThemeMode,
 } from '../lib/api';
@@ -89,6 +95,22 @@ export default function SettingsPage() {
   const [keyBusy, setKeyBusy] = useState(false);
   const [keyMsg, setKeyMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
+  /** v0.6.3: 작업별 모델 자동 라우팅 */
+  const [routing, setRouting] = useState<RoutingSettings>({
+    chat: 'inherit',
+    browser: 'inherit',
+    vision: 'inherit',
+    writing: 'inherit',
+  });
+  const [routingBusy, setRoutingBusy] = useState(false);
+
+  /** v0.6.3: 이메일(IMAP/SMTP) 계정 */
+  const [mailAccounts, setMailAccounts] = useState<MailAccount[]>([]);
+  const [mailPresets, setMailPresets] = useState<MailPreset[]>([]);
+  const [mailForm, setMailForm] = useState({ provider: 'naver', email: '', secret: '', senderName: '' });
+  const [mailBusy, setMailBusy] = useState(false);
+  const [mailMsg, setMailMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
   const [pushStatus, setPushStatus] = useState<PushStatus | null>(null);
   const [pushOn, setPushOn] = useState(false);
   const [pushBusy, setPushBusy] = useState(false);
@@ -112,6 +134,11 @@ export default function SettingsPage() {
         setProvider(r.active.provider);
         setModel(r.active.model);
         setEffort(r.providers.find((p) => p.id === 'exaone')?.reasoningEffort || 'low');
+        if (r.routing) setRouting(r.routing);
+        if (r.mail) {
+          setMailAccounts(r.mail.accounts || []);
+          setMailPresets(r.mail.presets || []);
+        }
       })
       .catch(() => undefined);
 
@@ -340,6 +367,70 @@ export default function SettingsPage() {
     }
   };
 
+  /** v0.6.3: 작업 유형별 모델 선택(누르는 즉시 저장) */
+  const pickRouting = async (kind: keyof RoutingSettings, choice: RouteChoice) => {
+    setRouting((prev) => ({ ...prev, [kind]: choice }));
+    setRoutingBusy(true);
+    try {
+      const res = await api.post<{ routing: RoutingSettings }>('/api/settings/routing', { [kind]: choice });
+      setRouting(res.routing);
+    } catch {
+      await load();
+    } finally {
+      setRoutingBusy(false);
+    }
+  };
+
+  /** v0.6.3: 메일 계정 연결(IMAP·SMTP 연결 시험 후 저장) */
+  const connectMail = async () => {
+    setMailBusy(true);
+    setMailMsg(null);
+    try {
+      const res = await api.post<{ accounts: MailAccount[] }>('/api/mail/accounts', {
+        provider: mailForm.provider,
+        email: mailForm.email.trim(),
+        secret: mailForm.secret,
+        senderName: mailForm.senderName.trim(),
+      });
+      setMailAccounts(res.accounts || []);
+      setMailForm({ provider: mailForm.provider, email: '', secret: '', senderName: '' });
+      setMailMsg({ ok: true, text: '메일 계정을 연결했어요. 이제 AI에게 메일을 맡길 수 있어요.' });
+    } catch (err) {
+      setMailMsg({ ok: false, text: err instanceof Error ? err.message : '메일 계정을 연결하지 못했습니다.' });
+    } finally {
+      setMailBusy(false);
+    }
+  };
+
+  const testMail = async () => {
+    setMailBusy(true);
+    setMailMsg(null);
+    try {
+      const res = await api.post<{ ok: boolean; message: string }>('/api/mail/test', {
+        provider: mailForm.provider,
+        email: mailForm.email.trim(),
+        secret: mailForm.secret,
+        senderName: mailForm.senderName.trim(),
+      });
+      setMailMsg({ ok: Boolean(res.ok), text: res.message });
+    } catch (err) {
+      setMailMsg({ ok: false, text: err instanceof Error ? err.message : '연결 시험에 실패했습니다.' });
+    } finally {
+      setMailBusy(false);
+    }
+  };
+
+  const removeMail = async (id: string) => {
+    if (!window.confirm('이 메일 계정 연결을 해제할까요?')) return;
+    setMailBusy(true);
+    try {
+      const res = await api.del<{ accounts: MailAccount[] }>(`/api/mail/accounts/${id}`);
+      setMailAccounts(res.accounts || []);
+    } finally {
+      setMailBusy(false);
+    }
+  };
+
   const logout = async () => {
     await api.post('/api/auth/logout').catch(() => undefined);
     navigate('/login', { replace: true });
@@ -362,6 +453,12 @@ export default function SettingsPage() {
     { id: 'high', label: '높음', hint: '정확·느림' },
   ];
   const exaoneConnected = Boolean(data?.providers.find((p) => p.id === 'exaone')?.connected);
+  /** v0.6.3: EXAONE 무료 키 만료까지 남은 날(D-3부터 빨갛게) */
+  const exaoneExpiry = data?.exaone?.expiry || data?.providers.find((p) => p.id === 'exaone')?.keyExpiry || null;
+  const routingChoices: { id: RouteChoice; label: string }[] = [
+    { id: 'inherit', label: '채팅 모델 그대로' },
+    ...(data?.providers || []).map((p) => ({ id: p.id as RouteChoice, label: p.label })),
+  ];
   const pickEffort = async (next: ExaoneEffort) => {
     setEffort(next);
     setKeyMsg(null);
@@ -743,10 +840,14 @@ export default function SettingsPage() {
           </div>
 
           {provider === 'exaone' ? (
-            <div className="mt-3 rounded-2xl bg-[#F7FBFF] px-3.5 py-3 ring-1 ring-[#E7F1FE]">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-[13px] font-semibold text-[#3B3947]">추론 강도</span>
-                <span className="text-[11px] text-[#8A8A9A]">높을수록 정확하지만 느려요</span>
+            <div className="mt-3 rounded-2xl px-3.5 py-3 ring-1" style={{ background: 'var(--pa-surface-3)', borderColor: 'var(--pa-line)' }}>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-[13px] font-semibold" style={{ color: 'var(--pa-ink)' }}>
+                  추론 강도
+                </span>
+                <span className="text-[11px]" style={{ color: 'var(--pa-mute)' }}>
+                  높을수록 정확하지만 느려요
+                </span>
               </div>
               <div className="mt-2 grid grid-cols-3 gap-2">
                 {effortChoices.map((choice) => (
@@ -754,22 +855,40 @@ export default function SettingsPage() {
                     key={choice.id}
                     type="button"
                     onClick={() => void pickEffort(choice.id)}
-                    className={`rounded-xl border-[1.5px] px-2 py-2 text-center transition ${
+                    className="rounded-xl border-[1.5px] px-2 py-2 text-center transition active:scale-[0.98]"
+                    style={
                       effort === choice.id
-                        ? 'border-[#9DC7FF] bg-white text-[#2F86D8]'
-                        : 'border-transparent bg-white/70 text-[#6B677A] hover:border-[#D7E7FB]'
-                    }`}
+                        ? { background: 'var(--accent-soft)', borderColor: 'var(--accent-line)', color: 'var(--accent-ink)' }
+                        : { background: 'var(--pa-surface)', borderColor: 'var(--pa-line)', color: 'var(--pa-ink)' }
+                    }
                     aria-pressed={effort === choice.id}
                   >
                     <span className="block text-[13px] font-bold">{choice.label}</span>
-                    <span className="block text-[10.5px] text-[#9B98AB]">{choice.hint}</span>
+                    <span className="block text-[10.5px]" style={{ color: 'var(--pa-mute)' }}>
+                      {choice.hint}
+                    </span>
                   </button>
                 ))}
               </div>
-              <p className="mt-2 text-[11px] leading-[1.55] text-[#7C86A0]">
+              <p className="mt-2 text-[11px] leading-[1.55]" style={{ color: 'var(--pa-mute)' }}>
                 K-EXAONE 2.5는 답하기 전에 항상 추론해요. 사진은 볼 수 없는 텍스트 모델이고, 무료 키는 30일마다
                 재발급이 필요해요.
               </p>
+              {exaoneConnected && exaoneExpiry?.label ? (
+                <p
+                  className={`mt-1.5 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-bold ${
+                    exaoneExpiry.expired
+                      ? 'bg-[#FFF1F1] text-[#E5484D]'
+                      : exaoneExpiry.warn
+                        ? 'bg-[#FFF6E7] text-[#C77A12]'
+                        : 'bg-[#EAFBF1] text-[#12B886]'
+                  }`}
+                >
+                  <Clock size={11} /> 무료 키 {exaoneExpiry.label}
+                  {exaoneExpiry.daysLeft !== null && !exaoneExpiry.expired ? ` · ${exaoneExpiry.daysLeft}일 남음` : ''}
+                  {exaoneExpiry.warn ? ' · docs.exaone.ai에서 재발급' : ''}
+                </p>
+              ) : null}
             </div>
           ) : null}
 
@@ -824,6 +943,187 @@ export default function SettingsPage() {
               </ul>
             </div>
           ) : null}
+        </section>
+
+        {/* v0.6.3: 작업별 모델 자동 선택 */}
+        <section className="mt-4 rounded-[24px] bg-white p-5 shadow-card ring-1 ring-[#F6F4FB] lg:p-6">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="text-[16px] font-bold text-[#1F1D2B]">작업별 모델 자동 선택</h2>
+              <p className="mt-1 text-[13px] text-pomong-sub">
+                지정한 작업이 감지되면 그 AI가 답해요. 두면 지금 채팅 모델을 그대로 써요.
+              </p>
+            </div>
+          </div>
+          <ul className="mt-3 space-y-2">
+            {(data?.routingOptions || [
+              { kind: 'chat' as const, label: '일반 대화', hint: '짧은 질문·잡담' },
+              { kind: 'browser' as const, label: '브라우저 · 로그인 · 작업', hint: '사이트 열기, 로그인, 클릭·입력' },
+              { kind: 'vision' as const, label: '사진 · 파일 분석', hint: '사진을 보고 답하기, 파일 읽기' },
+              { kind: 'writing' as const, label: '요약 · 글쓰기 · 자동화', hint: '요약, 초안, 예약 실행' },
+            ]).map((opt) => (
+              <li
+                key={opt.kind}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-[#FAF9FD] px-3.5 py-2.5"
+              >
+                <div className="min-w-0">
+                  <p className="text-[13px] font-semibold text-[#3B3947]">{opt.label}</p>
+                  <p className="text-[11px] text-pomong-sub">{opt.hint}</p>
+                </div>
+                <select
+                  className="pa-input h-9 w-[168px] py-1 text-[12.5px]"
+                  value={routing[opt.kind]}
+                  onChange={(e) => void pickRouting(opt.kind, e.target.value as RouteChoice)}
+                  disabled={routingBusy}
+                  aria-label={`${opt.label} 모델`}
+                >
+                  {routingChoices.map((choice) => {
+                    const connected =
+                      choice.id === 'inherit' || Boolean(data?.providers.find((p) => p.id === choice.id)?.connected);
+                    return (
+                      <option key={choice.id} value={choice.id} disabled={!connected}>
+                        {choice.label}
+                        {choice.id !== 'inherit' && !connected ? ' (미연결)' : ''}
+                      </option>
+                    );
+                  })}
+                </select>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2.5 rounded-xl bg-[#FAF8FF] px-3 py-2 text-[11.5px] leading-[1.55] text-[#7C6FB0]">
+            사진을 붙였는데 지금 모델이 사진을 못 보면(EXAONE), 사진을 볼 수 있는 AI로 자동으로 넘겨요.
+          </p>
+        </section>
+
+        {/* v0.6.3: 이메일(IMAP/SMTP) */}
+        <section className="mt-4 rounded-[24px] bg-white p-5 shadow-card ring-1 ring-[#F6F4FB] lg:p-6">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="flex items-center gap-1.5 text-[16px] font-bold text-[#1F1D2B]">
+                <Mail size={17} className="text-[#7C63F6]" /> 이메일
+              </h2>
+              <p className="mt-1 text-[13px] text-pomong-sub">
+                네이버·지메일 앱 비밀번호로 메일함을 읽고, 확인 카드를 거쳐 보내요.
+              </p>
+            </div>
+            {mailAccounts.length ? (
+              <span className="flex shrink-0 items-center gap-1 rounded-full bg-[#EAFBF1] px-3 py-1.5 text-[12px] font-semibold text-[#12B886]">
+                <Check size={12} strokeWidth={3} /> {mailAccounts.length}개 연결됨
+              </span>
+            ) : (
+              <span className="shrink-0 rounded-full bg-[#FFF6E7] px-3 py-1.5 text-[12px] font-semibold text-[#E49B18]">
+                미연결
+              </span>
+            )}
+          </div>
+
+          {mailAccounts.length ? (
+            <ul className="mt-3 space-y-1.5">
+              {mailAccounts.map((account) => (
+                <li
+                  key={account.id}
+                  className="flex items-center justify-between gap-2 rounded-2xl bg-[#FAF9FD] px-3.5 py-2.5"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-[13px] font-semibold text-[#3B3947]">{account.email}</p>
+                    <p className="truncate text-[11px] text-pomong-sub">
+                      {account.label} · {account.imapHost} · {account.lastTestAt ? '연결 확인됨' : '확인 전'}
+                    </p>
+                  </div>
+                  <button
+                    className="shrink-0 rounded-xl p-1.5 text-[#D9D5E4] transition hover:text-[#E5484D]"
+                    onClick={() => void removeMail(account.id)}
+                    aria-label="메일 연결 해제"
+                    disabled={mailBusy}
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+
+          <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
+            <label className="block">
+              <span className="mb-1.5 block text-[13px] font-semibold text-[#5B5866]">메일 서비스</span>
+              <select
+                className="pa-input"
+                value={mailForm.provider}
+                onChange={(e) => setMailForm((prev) => ({ ...prev, provider: e.target.value }))}
+              >
+                {(mailPresets.length ? mailPresets : [{ id: 'naver', label: '네이버 메일' }, { id: 'gmail', label: 'Gmail' }]).map((preset) => (
+                  <option key={preset.id} value={preset.id}>
+                    {preset.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-[13px] font-semibold text-[#5B5866]">이메일 주소</span>
+              <input
+                className="pa-input"
+                type="email"
+                inputMode="email"
+                autoComplete="email"
+                placeholder="hyunjun5216@naver.com"
+                value={mailForm.email}
+                onChange={(e) => setMailForm((prev) => ({ ...prev, email: e.target.value }))}
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-[13px] font-semibold text-[#5B5866]">앱 비밀번호</span>
+              <input
+                className="pa-input font-mono text-[13px]"
+                type="password"
+                autoComplete="new-password"
+                placeholder="앱 비밀번호(공백 없이)"
+                value={mailForm.secret}
+                onChange={(e) => setMailForm((prev) => ({ ...prev, secret: e.target.value }))}
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-[13px] font-semibold text-[#5B5866]">보내는 사람 이름</span>
+              <input
+                className="pa-input"
+                placeholder="김현준"
+                value={mailForm.senderName}
+                onChange={(e) => setMailForm((prev) => ({ ...prev, senderName: e.target.value }))}
+              />
+            </label>
+          </div>
+
+          <div className="mt-2.5 flex flex-wrap items-center gap-2">
+            <button
+              className="pa-btn-primary px-4 py-2.5"
+              onClick={() => void connectMail()}
+              disabled={mailBusy || !mailForm.email.trim() || !mailForm.secret.trim()}
+            >
+              {mailBusy ? '확인 중…' : '계정 연결'}
+            </button>
+            <button
+              className="pa-btn-ghost px-4 py-2.5"
+              onClick={() => void testMail()}
+              disabled={mailBusy || !mailForm.email.trim() || !mailForm.secret.trim()}
+            >
+              연결 시험
+            </button>
+          </div>
+          {mailMsg ? (
+            <p
+              className={`mt-2.5 whitespace-pre-wrap rounded-xl px-3 py-2.5 text-[12.5px] font-medium ${
+                mailMsg.ok ? 'bg-[#EAFBF1] text-[#12B886]' : 'bg-[#FFF1F1] text-[#E5484D]'
+              }`}
+            >
+              {mailMsg.text}
+            </p>
+          ) : null}
+          <p className="mt-2.5 text-[11.5px] leading-[1.6] text-[#8A8A9A]">
+            {mailPresets.find((p) => p.id === mailForm.provider)?.help ||
+              '네이버는 환경설정 > POP3/IMAP에서 IMAP/SMTP를 켜고, Gmail은 2단계 인증 뒤 앱 비밀번호를 발급해 주세요.'}
+            <br />
+            앱 비밀번호는 서버에서 암호화해 보관하고, 발송은 채팅의 확인 카드에서 「보내기」를 눌러야 이뤄져요.
+          </p>
         </section>
 
         {/* 알림 · 브라우저 */}

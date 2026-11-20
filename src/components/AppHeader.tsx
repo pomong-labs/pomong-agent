@@ -21,16 +21,12 @@ export default function AppHeader({
   onClear?: () => void;
   onMore?: () => void;
 }) {
-  const { profile, visibleState, agent, keyboardOpen, sessions, activeSession } = useAppStore();
+  const { profile, visibleState, keyboardOpen } = useAppStore();
   const meta = AGENT_STATE_META[visibleState];
-  const detailText =
-    visibleState === 'working' && agent.detail
-      ? agent.detail.replace(/_/g, ' ')
-      : visibleState === 'thinking'
-        ? '잠시만 기다려 주세요'
-        : '';
-  const room = sessions.find((s) => s.id === activeSession);
-  const roomLabel = room && sessions.length > 1 ? room.title : '';
+  /**
+   * v0.6.3: 상태 배지 옆에는 아무것도 붙이지 않는다.
+   * (채팅방 제목 · 도구명 `browser snapshot` 같은 실시간 상세는 표시하지 않음)
+   */
 
   return (
     <header
@@ -82,11 +78,6 @@ export default function AppHeader({
             <span className="h-1.5 w-1.5 rounded-full" style={{ background: meta.dot }} />
             {meta.label}
           </span>
-          {detailText ? (
-            <span className="truncate text-[10.5px] font-medium text-[#A8A5B8]">{detailText}</span>
-          ) : roomLabel ? (
-            <span className="truncate text-[10.5px] font-medium text-[#B4B1C2]">{roomLabel}</span>
-          ) : null}
         </div>
       </div>
 

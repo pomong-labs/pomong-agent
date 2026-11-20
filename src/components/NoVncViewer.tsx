@@ -19,6 +19,8 @@ interface Props {
   interactive: boolean;
   /** 핸드오버 전체화면처럼 화면을 꽉 채울 때 */
   fill?: boolean;
+  /** v0.6.3: 비율을 무시하고 화면 영역을 꽉 채우기(검은 여백 없음) */
+  stretch?: boolean;
   onStatus?: (status: 'connecting' | 'connected' | 'closed' | 'error') => void;
   onError?: (message: string) => void;
   /** 연결되면 RFB 인스턴스를 넘겨 준다(바깥에서 sendKey 등을 쓸 수 있게) */
@@ -35,7 +37,7 @@ export interface RFBInstance {
   scaleViewport: boolean;
 }
 
-export default function NoVncViewer({ sessionId, interactive, fill, onStatus, onError, onReady }: Props) {
+export default function NoVncViewer({ sessionId, interactive, fill, stretch, onStatus, onError, onReady }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const rfbRef = useRef<RFBInstance | null>(null);
   const [status, setStatus] = useState<'connecting' | 'connected' | 'closed' | 'error'>('connecting');
@@ -73,7 +75,7 @@ export default function NoVncViewer({ sessionId, interactive, fill, onStatus, on
           addEventListener: (type: string, fn: () => void) => void;
           removeEventListener: (type: string, fn: () => void) => void;
         };
-        instance.scaleViewport = true;
+        instance.scaleViewport = !stretch;
         instance.viewOnly = !interactive;
         rfb = instance;
         rfbRef.current = instance;
@@ -127,6 +129,11 @@ export default function NoVncViewer({ sessionId, interactive, fill, onStatus, on
     if (rfbRef.current) rfbRef.current.viewOnly = !interactive;
   }, [interactive]);
 
+  // v0.6.3: 「꽉 채우기」를 켜면 비율을 맞추지 않고 화면을 채운다.
+  useEffect(() => {
+    if (rfbRef.current) rfbRef.current.scaleViewport = !stretch;
+  }, [stretch]);
+
   /**
    * 손가락 드래그 → 휠 스크롤, 두 손가락은 그대로 둔다.
    * (noVNC는 휠 이벤트를 받아 서버로 보내므로, 합성 WheelEvent로 스크롤을 만든다)
@@ -178,8 +185,9 @@ export default function NoVncViewer({ sessionId, interactive, fill, onStatus, on
 
   return (
     <div
-      className={`relative w-full overflow-hidden bg-[#0B0B12] ${fill ? 'h-full' : ''}`}
+      className={`relative w-full overflow-hidden bg-[#0B0B12] ${fill ? 'h-full' : ''} ${stretch ? 'pa-vnc-stretch' : ''}`}
       style={fill ? undefined : { aspectRatio: '1280 / 800' }}
+      data-pa-viewer=""
     >
       <div ref={hostRef} className="h-full w-full" style={{ touchAction: 'none' }} />
       {status !== 'connected' ? (

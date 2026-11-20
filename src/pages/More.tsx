@@ -68,7 +68,9 @@ export default function More() {
 
       <div className="mt-8 flex flex-col items-center gap-2.5">
         <p className="text-center text-[12px] text-[#B4B1C2]">Pomong Agent v{version} · Pomong Labs</p>
-        <img src="/pomong-labs-logo.png" alt="Pomong Labs" className="h-5 w-auto opacity-80" draggable={false} />
+        {/* v0.6.3: 라이트/다크에 맞는 로고를 따로 보여 준다(다크모드는 흰색 글자) */}
+        <img src="/pomong-labs-logo.png" alt="Pomong Labs" className="h-5 w-auto opacity-90 dark:hidden" draggable={false} />
+        <img src="/pomong-labs-logo-dark.png" alt="Pomong Labs" className="hidden h-5 w-auto opacity-90 dark:block" draggable={false} />
       </div>
     </div>
   );

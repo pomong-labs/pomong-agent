@@ -2,19 +2,35 @@
 <html lang="ko">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+    <!-- v0.6.3: 핀치 확대(브라우저 기본 줌)를 막아 네이티브 앱처럼 쓴다. noVNC 화면 조작은 앱이 직접 처리한다. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
+    />
     <title>Pomong Agent</title>
     <meta name="description" content="Pomong Agent — 내 서버에 설치하는 개인 AI 비서. BYOK 멀티 LLM, 서버 관제, 암호화 금고." />
     <meta name="theme-color" content="#FBFBFD" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <!-- v0.6.3: 다크모드에서 iOS 상태바 영역이 흰 띠로 남지 않도록 화면 전체를 덮는 방식 -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Pomong" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
     <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
     <link rel="shortcut icon" href="/icons/favicon.ico" />
     <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
+
+    <!-- v0.6.3: iOS PWA 시작 화면(라이트/다크) -->
+    <link rel="apple-touch-startup-image" href="/splash/1170x2532-light.png" media="(prefers-color-scheme: light) and (device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3)" />
+    <link rel="apple-touch-startup-image" href="/splash/1170x2532-dark.png" media="(prefers-color-scheme: dark) and (device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3)" />
+    <link rel="apple-touch-startup-image" href="/splash/1179x2556-light.png" media="(prefers-color-scheme: light) and (device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3)" />
+    <link rel="apple-touch-startup-image" href="/splash/1179x2556-dark.png" media="(prefers-color-scheme: dark) and (device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3)" />
+    <link rel="apple-touch-startup-image" href="/splash/1290x2796-light.png" media="(prefers-color-scheme: light) and (device-width: 430px) and (device-height: 932px) and (-webkit-device-pixel-ratio: 3)" />
+    <link rel="apple-touch-startup-image" href="/splash/1290x2796-dark.png" media="(prefers-color-scheme: dark) and (device-width: 430px) and (device-height: 932px) and (-webkit-device-pixel-ratio: 3)" />
+    <link rel="apple-touch-startup-image" href="/splash/1125x2436-light.png" media="(prefers-color-scheme: light) and (device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3)" />
+    <link rel="apple-touch-startup-image" href="/splash/1125x2436-dark.png" media="(prefers-color-scheme: dark) and (device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3)" />
+
     <link rel="preconnect" href="https://spoqa.github.io" />
     <link
       rel="stylesheet"
@@ -50,6 +66,28 @@
         } catch (e) {
           /* 테마 정보가 없거나 깨졌으면 기본 라이트로 둔다 */
         }
+      })();
+      /* v0.6.3: iOS 사파리 핀치·더블탭 확대 차단(앱처럼 고정).
+         브라우저 화면(noVNC) 안에서는 두 손가락 조작을 건드리지 않는다. */
+      (function () {
+        var inViewer = function (target) {
+          try {
+            return Boolean(target && target.closest && target.closest('[data-pa-viewer], canvas'));
+          } catch (e) {
+            return false;
+          }
+        };
+        var stopGesture = function (e) { if (!inViewer(e.target)) e.preventDefault(); };
+        document.addEventListener('gesturestart', stopGesture, { passive: false });
+        document.addEventListener('gesturechange', stopGesture, { passive: false });
+        document.addEventListener('gestureend', stopGesture, { passive: false });
+        document.addEventListener(
+          'touchmove',
+          function (e) {
+            if (e.touches && e.touches.length > 1 && !inViewer(e.target)) e.preventDefault();
+          },
+          { passive: false }
+        );
       })();
     </script>
   </head>

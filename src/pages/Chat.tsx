@@ -16,12 +16,14 @@ import {
   KeyRound,
   Loader2,
   Lock,
+  Mail,
   MessageSquare,
   Mic,
   Paperclip,
   Pencil,
   Plus,
   Search,
+  Reply,
   Send,
   ShieldCheck,
   Sparkles,
@@ -35,8 +37,8 @@ import AppHeader from '../components/AppHeader';
 import Mascot, { type MascotName } from '../components/Mascot';
 import ModelBar from '../components/ModelBar';
 import { StatsCard, TasksCard } from '../components/Cards';
-import { api, type ChatAttachment, type ChatMessage, type LoginRequest, type ChatSession, type TaskRun, type VaultUnlockRequest } from '../lib/api';
-import { formatClock } from '../lib/format';
+import { api, type ChatAttachment, type ChatMessage, type LoginRequest, type ChatSession, type MailDraftCard, type ReplyTarget, type TaskRun, type VaultUnlockRequest } from '../lib/api';
+import { formatClock, formatRoomStamp } from '../lib/format';
 import {
   dictationErrorMessage,
   dictationSupported,
@@ -149,6 +151,12 @@ export default function Chat() {
   const [drawer, setDrawer] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [highlight, setHighlight] = useState<number | null>(null);
+  /** v0.6.3: 이번 턴이 시작된 시각(대기 시간까지 포함한 실제 소요 시간 표시용) */
+  const [turnStart, setTurnStart] = useState<number | null>(null);
+  const [turnSeconds, setTurnSeconds] = useState(0);
+
+  /** v0.6.3: 답장(인용) 대상 — 입력창 위에 미리보기를 띄운다 */
+  const [replyTo, setReplyTo] = useState<ReplyTarget | null>(null);
 
   const MAX_FILES = 6;
   const MAX_BYTES = 15 * 1024 * 1024;
@@ -298,6 +306,24 @@ export default function Chat() {
     };
   }, [messages, sending, pinToBottom]);
 
+  /** v0.6.3: 응답을 기다리는 동안 실제 경과 시간을 센다(작업 카드·대기 말풍선에 표시). */
+  useEffect(() => {
+    if (!sending) {
+      setTurnStart(null);
+      setTurnSeconds(0);
+      return;
+    }
+    setTurnStart((prev) => prev ?? Date.now());
+  }, [sending]);
+
+  useEffect(() => {
+    if (!sending || !turnStart) return;
+    const update = () => setTurnSeconds(Math.max(0, Math.round((Date.now() - turnStart) / 1000)));
+    update();
+    const timer = window.setInterval(update, 500);
+    return () => window.clearInterval(timer);
+  }, [sending, turnStart]);
+
   // 키보드가 열리거나 닫힐 때: 셸 높이가 줄어드는 동안 스크롤이 위로 튀지 않게 즉시 고정하고,
   // 키보드 애니메이션이 끝날 때까지 몇 번 더 붙인다.
   useEffect(() => {
@@ -314,9 +340,17 @@ export default function Chat() {
     if ((!draft.trim() && !pending.length) || sending || uploading) return;
     if (dictationRef.current) stopDictation();
     const ids = pending.map((p) => p.id);
-    void send(draft, ids);
+    void send(draft, ids, replyTo);
+    setReplyTo(null);
     setPending([]);
     setAttachError('');
+  };
+
+  /** v0.6.3: 인용된 원본 메시지로 이동해 잠깐 강조한다. */
+  const jumpToMessage = (id: number) => {
+    setHighlight(id);
+    document.getElementById(`msg-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    window.setTimeout(() => setHighlight(null), 2200);
   };
 
   const onClear = () => {
@@ -377,14 +411,29 @@ export default function Chat() {
               }`}
             >
               {m.role === 'user' ? (
-                <div className="flex flex-col items-end gap-1.5 animate-fade-up">
+                <div className="group flex flex-col items-end gap-1.5 animate-fade-up">
                   <div className="flex max-w-[85%] flex-col items-end gap-2">
                     {m.attachments?.length ? (
                       <MessageAttachments items={m.attachments} onPreview={setPreview} />
                     ) : null}
+                    {m.replyTo ? (
+                      <button
+                        type="button"
+                        onClick={() => jumpToMessage(m.replyTo!.id)}
+                        className="max-w-[85%] rounded-[14px] border-l-[3px] border-[#B9A8FF] bg-[#F7F5FF] px-3 py-2 text-left transition active:scale-[0.99] dark:bg-[#221E30]"
+                        title="원본 메시지로 이동"
+                      >
+                        <span className="block text-[11px] font-bold text-[#7C63F6]">
+                          {m.replyTo.role === 'user' ? '나에게 답장' : '포몽에게 답장'}
+                        </span>
+                        <span className="mt-0.5 block truncate text-[12px] text-[#6B677A]">
+                          {m.replyTo.content.replace(/\s+/g, ' ').slice(0, 90)}
+                        </span>
+                      </button>
+                    ) : null}
                     {m.content ? (
                       <div
-                        className="rounded-[22px] rounded-br-lg px-4 py-3 text-[15px] leading-relaxed text-[#2A2A35] shadow-[0_2px_10px_rgba(120,100,200,0.05)] sm:text-[16px]"
+                        className="selectable-text rounded-[22px] rounded-br-lg px-4 py-3 text-[15px] leading-relaxed text-[#2A2A35] shadow-[0_2px_10px_rgba(120,100,200,0.05)] sm:text-[16px]"
                         style={{ background: 'var(--bubble-user)' }}
                       >
                         {m.content}
@@ -392,6 +441,16 @@ export default function Chat() {
                     ) : null}
                   </div>
                   <div className="flex items-center gap-1.5 pr-1 text-[12px] text-[#A8A5B8]">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setReplyTo({ id: m.id, role: 'user', content: m.content || '(첨부 파일)', createdAt: m.createdAt })
+                      }
+                      className="flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[11px] font-medium text-[#B4B1C2] transition hover:bg-[#F7F5FF] hover:text-[#7C63F6] active:scale-95"
+                      aria-label="이 메시지에 답장"
+                    >
+                      <Reply size={11} /> 답장
+                    </button>
                     {formatClock(m.createdAt)}
                     <CheckCheck size={13} className="text-[#B9A8FF]" />
                   </div>
@@ -412,6 +471,9 @@ export default function Chat() {
                   onUnlockSubmit={submitUnlockCard}
                   onUnlockDismiss={dismissUnlockCard}
                   onPreview={setPreview}
+                  onReply={() =>
+                    setReplyTo({ id: m.id, role: 'assistant', content: m.content, createdAt: m.createdAt })
+                  }
                 />
               )}
             </div>
@@ -442,7 +504,7 @@ export default function Chat() {
 
           {sending ? (
             <div className="space-y-2.5">
-              {shownLive ? <TaskCard run={shownLive} live /> : null}
+              {shownLive ? <TaskCard run={shownLive} live startMs={turnStart ?? undefined} /> : null}
               <div className="flex items-start gap-2.5 lg:gap-3.5">
               <div className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#FFF0F5] ring-1 ring-[#FFE4EE] sm:flex lg:h-11 lg:w-11">
                 <Mascot name="pimong-think" size={26} />
@@ -453,7 +515,10 @@ export default function Chat() {
                   <Dot delay="150ms" />
                   <Dot delay="300ms" />
                 </span>
-                <span className="text-[12.5px] font-medium text-[#9B98AB]">{pendingLabel}</span>
+                <span className="text-[12.5px] font-medium text-[#9B98AB]">
+                  {pendingLabel}
+                  {turnSeconds > 0 ? ` · ${turnSeconds}초` : ''}
+                </span>
                 {recovering ? (
                   <span className="hidden text-[11px] font-medium text-[#C0BCCD] sm:block">앱을 나갔다 와도 답장은 이어서 도착해요</span>
                 ) : null}
@@ -477,6 +542,27 @@ export default function Chat() {
       {/* composer */}
       <div className={`shrink-0 px-3 pt-1 lg:px-10 ${keyboardOpen ? 'pb-1.5' : 'pb-2 lg:pb-6'}`}>
         <div className="mx-auto w-full max-w-[860px]">
+          {replyTo ? (
+            <div className="mb-1.5 flex items-start gap-2 rounded-[16px] border-l-[3px] border-[#B9A8FF] bg-[#F7F5FF] px-3 py-2 shadow-[0_2px_10px_rgba(120,100,200,0.06)] dark:bg-[#221E30]">
+              <div className="min-w-0 flex-1">
+                <p className="text-[11px] font-bold text-[#7C63F6]">
+                  {replyTo.role === 'user' ? '나에게 답장' : '포몽에게 답장'}
+                </p>
+                <p className="truncate text-[12.5px] text-[#6B677A]">
+                  {replyTo.content.replace(/\s+/g, ' ').slice(0, 120) || '(첨부 파일)'}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="shrink-0 rounded-full p-1 text-[#A8A5B8] transition hover:bg-white/60 hover:text-[#E5484D] active:scale-90"
+                onClick={() => setReplyTo(null)}
+                aria-label="답장 취소"
+                title="답장 취소"
+              >
+                <X size={15} />
+              </button>
+            </div>
+          ) : null}
           <div className="mb-1.5 px-0.5">
             <ModelBar />
           </div>
@@ -627,6 +713,76 @@ function BrowserCard({ sessionId }: { sessionId: string | null }) {
   );
 }
 
+/**
+ * v0.6.3: 메일 발송 확인 카드
+ * AI가 mail_send로 만든 초안을 보여 주고, 사용자가 「보내기」를 눌렀을 때만 발송한다.
+ */
+function MailDraftCardView({ draft }: { draft: MailDraftCard }) {
+  const [state, setState] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
+  const [note, setNote] = useState('');
+
+  const send = async () => {
+    setState('sending');
+    setNote('');
+    try {
+      const res = await api.post<{ ok: boolean; draft?: { sentAt?: string } }>('/api/mail/send', { draftId: draft.id });
+      if (!res.ok) throw new Error('보내지 못했어요.');
+      setState('sent');
+      setNote('메일을 보냈어요.');
+    } catch (err) {
+      setState('error');
+      setNote(err instanceof Error ? err.message : '보내지 못했어요.');
+    }
+  };
+
+  const discard = async () => {
+    await api.post('/api/mail/discard', { draftId: draft.id }).catch(() => undefined);
+    setState('sent');
+    setNote('보내지 않고 취소했어요.');
+  };
+
+  return (
+    <div className="mt-3 rounded-[18px] border border-[#E7E2FA] bg-[#FBFAFF] p-3.5 dark:bg-[#1E1B29]">
+      <div className="flex items-center gap-1.5 text-[12px] font-bold text-[#5B4BC4]">
+        <Mail size={13} /> 메일 발송 확인
+      </div>
+      <dl className="mt-2 space-y-1 text-[12.5px]">
+        <div className="flex gap-2">
+          <dt className="w-14 shrink-0 text-[#8A8A9A]">받는 사람</dt>
+          <dd className="min-w-0 flex-1 break-all font-medium text-[#3B3947]">{draft.to.join(', ')}</dd>
+        </div>
+        {draft.cc?.length ? (
+          <div className="flex gap-2">
+            <dt className="w-14 shrink-0 text-[#8A8A9A]">참조</dt>
+            <dd className="min-w-0 flex-1 break-all font-medium text-[#3B3947]">{draft.cc.join(', ')}</dd>
+          </div>
+        ) : null}
+        <div className="flex gap-2">
+          <dt className="w-14 shrink-0 text-[#8A8A9A]">제목</dt>
+          <dd className="min-w-0 flex-1 font-semibold text-[#2A2A35]">{draft.subject}</dd>
+        </div>
+      </dl>
+      <p className="pa-scroll mt-2 max-h-[132px] overflow-y-auto whitespace-pre-wrap rounded-xl bg-white px-3 py-2 text-[12.5px] leading-[1.65] text-[#4B4856] ring-1 ring-[#F1EEFB] dark:bg-[#17151F]">
+        {draft.text}
+      </p>
+      <p className="mt-1.5 text-[11px] text-[#A8A5B8]">보내는 계정: {draft.accountEmail}</p>
+      {state === 'sent' ? (
+        <p className="mt-2 rounded-xl bg-[#EAFBF1] px-3 py-2 text-[12.5px] font-semibold text-[#12B886]">{note}</p>
+      ) : (
+        <div className="mt-2.5 flex gap-2">
+          <button className="pa-btn-ghost flex-1 py-2.5 text-[13px]" onClick={() => void discard()} disabled={state === 'sending'}>
+            취소
+          </button>
+          <button className="pa-btn-primary flex-1 py-2.5 text-[13px]" onClick={() => void send()} disabled={state === 'sending'}>
+            {state === 'sending' ? '보내는 중…' : '보내기'}
+          </button>
+        </div>
+      )}
+      {state === 'error' && note ? <p className="mt-1.5 text-[11.5px] text-[#E5484D]">{note}</p> : null}
+    </div>
+  );
+}
+
 function AssistantBubble({
   message,
   character,
@@ -640,6 +796,7 @@ function AssistantBubble({
   onUnlockSubmit,
   onUnlockDismiss,
   onPreview,
+  onReply,
 }: {
   message: ChatMessage;
   character: string;
@@ -653,6 +810,8 @@ function AssistantBubble({
   onUnlockSubmit: (id: string, pin: string) => Promise<{ ok: boolean; message?: string }>;
   onUnlockDismiss: (id: string) => Promise<void>;
   onPreview: (p: { url: string; name: string }) => void;
+  /** v0.6.3: 이 답변에 답장(인용)하기 */
+  onReply?: () => void;
 }) {
   const { models } = useAppStore();
   // v0.5.4: 답변 복사 (한 번 누르면 원문 그대로 클립보드로)
@@ -687,7 +846,10 @@ function AssistantBubble({
       <div className="min-w-0 max-w-[92%] sm:max-w-[86%] lg:max-w-[640px]">
         {taskRun ? <TaskCard run={taskRun} /> : null}
         <div className="rounded-[24px] bg-white p-4 shadow-card ring-1 ring-[#F6F4FB] sm:p-5">
-        <RichText text={message.content} />
+        <div className="selectable-text">
+          <RichText text={message.content} />
+        </div>
+        {message.meta?.mailDraft ? <MailDraftCardView draft={message.meta.mailDraft as MailDraftCard} /> : null}
         {message.attachments?.length ? (
           <div className="mt-2.5 flex justify-start">
             <MessageAttachments items={message.attachments} onPreview={onPreview} />
@@ -728,6 +890,16 @@ function AssistantBubble({
             </span>
           ) : null}
           <div className="ml-auto flex shrink-0 items-center gap-0.5">
+            {onReply ? (
+              <button
+                className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[10.5px] font-medium text-[#B4B1C2] transition hover:bg-[#F7F5FF] hover:text-[#7C63F6] active:scale-95"
+                onClick={onReply}
+                aria-label="이 답변에 답장"
+                title="이 답변에 답장"
+              >
+                <Reply size={11} /> 답장
+              </button>
+            ) : null}
             <button
               className={`flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[10.5px] font-medium transition ${
                 speaking
@@ -980,11 +1152,19 @@ function LoginCard({
 }
 
 /** 채팅 말풍선에 붙는 실시간 작업 카드 */
-function TaskCard({ run, live = false }: { run: TaskRun; live?: boolean }) {
+function TaskCard({ run, live = false, startMs }: { run: TaskRun; live?: boolean; startMs?: number }) {
   const [open, setOpen] = useState(live);
   useEffect(() => {
     if (live) setOpen(true);
   }, [live]);
+  /** v0.6.3: 단계별 duration 합 대신, 작업 시작 시각부터의 실제 경과 시간을 실시간으로 보여 준다. */
+  const [now, setNow] = useState(() => Date.now());
+  const active = live && (run.status === 'running' || !run.endedAt);
+  useEffect(() => {
+    if (!active) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 100);
+    return () => window.clearInterval(timer);
+  }, [active]);
   const meta =
     run.status === 'running'
       ? { label: '진행 중', color: '#7C63F6', bg: '#F1ECFF' }
@@ -993,7 +1173,13 @@ function TaskCard({ run, live = false }: { run: TaskRun; live?: boolean }) {
         : run.status === 'partial'
           ? { label: '일부 완료', color: '#C08A16', bg: '#FFF8E7' }
           : { label: '완료', color: '#0F9668', bg: '#EAFBF1' };
-  const seconds = run.items.reduce((sum, item) => sum + (item.durationMs || 0), 0) / 1000;
+  const startedAt = new Date(run.startedAt).getTime();
+  const begin = Number.isFinite(startedAt) ? (startMs ? Math.min(startMs, startedAt) : startedAt) : now;
+  const finishedAt = run.endedAt ? new Date(run.endedAt).getTime() : null;
+  const end = finishedAt && Number.isFinite(finishedAt) ? finishedAt : active ? now : Date.now();
+  const elapsedMs = Math.max(0, end - begin);
+  const elapsedLabel =
+    elapsedMs < 10_000 ? `${(elapsedMs / 1000).toFixed(1)}초` : `${Math.round(elapsedMs / 1000)}초`;
   return (
     <div className="mb-2 overflow-hidden rounded-[18px] bg-white/95 shadow-[0_4px_14px_rgba(90,80,160,0.06)] ring-1 ring-[#EFEBFA]">
       <button className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left" onClick={() => setOpen((v) => !v)}>
@@ -1008,8 +1194,9 @@ function TaskCard({ run, live = false }: { run: TaskRun; live?: boolean }) {
         </span>
         <span className="min-w-0 flex-1">
           <span className="block truncate text-[13px] font-bold text-[#3B3947]">{run.title}</span>
-          <span className="flex items-center gap-1.5 text-[11px] text-[#A8A5B8]">
-            <Clock3 size={10} /> {run.steps}단계{seconds > 0 ? ` · ${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)}초` : ''}
+          <span className="flex items-center gap-1.5 text-[11px] text-[#A8A5B8]" aria-live={active ? 'polite' : 'off'}>
+            <Clock3 size={10} /> {run.steps}단계 · {elapsedLabel}
+            {active ? <span className="h-1 w-1 animate-pulse rounded-full bg-[#B9A8FF]" /> : null}
           </span>
         </span>
         <span className="shrink-0 rounded-full px-2 py-0.5 text-[10.5px] font-bold" style={{ background: meta.bg, color: meta.color }}>
@@ -1290,8 +1477,14 @@ function RoomDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
                         onClose();
                       }}
                     >
-                      <span className={`block truncate text-[13.5px] font-semibold ${active ? 'text-[#5B4BC4]' : 'text-[#3B3947]'}`}>
-                        {room.title}
+                      <span className="flex items-baseline gap-2">
+                        <span className={`min-w-0 flex-1 truncate text-[13.5px] font-semibold ${active ? 'text-[#5B4BC4]' : 'text-[#3B3947]'}`}>
+                          {room.title}
+                        </span>
+                        {/* v0.6.3: 마지막 대화 시각 — 오늘이 아니면 날짜(어제·11월 19일)로 표시 */}
+                        <span className="shrink-0 text-[10.5px] font-medium text-[#B4B1C2]" title={new Date(room.updatedAt).toLocaleString('ko-KR')}>
+                          {formatRoomStamp(room.updatedAt)}
+                        </span>
                       </span>
                       <span className="mt-0.5 block truncate text-[11px] text-[#A8A5B8]">
                         {room.messageCount ? `${room.messageCount}개 · ${room.preview}` : '아직 대화가 없어요'}
@@ -1454,7 +1647,7 @@ function MessageSearch({
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[11.5px] font-semibold text-[#A8A5B8]">
-                  {item.sessionTitle} · {formatClock(item.createdAt)}
+                  {item.sessionTitle} · {formatRoomStamp(item.createdAt)}
                 </span>
                 <span className="mt-0.5 block line-clamp-2 text-[13px] leading-[1.5] text-[#3B3947]">{item.snippet}</span>
               </span>

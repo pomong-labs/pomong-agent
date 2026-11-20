@@ -257,6 +257,10 @@ export function applyTheme(settings: ThemeSettings): { resolved: 'light' | 'dark
   // iOS 상태 표시줄·주소창 색도 테마에 맞춘다.
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.setAttribute('content', resolved === 'dark' ? '#100F16' : '#FBFBFD');
+  // v0.6.3: 상태바(노치) 아래까지 같은 배경으로 칠해 다크모드에 흰 띠가 남지 않게 한다.
+  const shellBg = resolved === 'dark' ? '#100F16' : '#F6F6FA';
+  root.style.backgroundColor = shellBg;
+  if (document.body) document.body.style.backgroundColor = shellBg;
   return { resolved, base };
 }
 

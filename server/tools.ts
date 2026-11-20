@@ -13,8 +13,39 @@ import * as vaultUnlock from './vault-unlock';
 import { findServiceInText } from './services';
 import * as attachments from './attachments';
 import * as files from './files';
+import * as mail from './mail';
 import { webSearch, formatSearch } from './web-search';
 import type { ToolSpec } from './providers';
+
+/** v0.6.3: 메일 계정을 아직 연결하지 않았을 때 안내 */
+function mailNotConnectedMessage(): string {
+  return '아직 연결된 메일 계정이 없습니다. 사용자에게 설정 > 이메일에서 네이버·지메일 계정을 연결(앱 비밀번호)해 달라고 안내하세요. 연결하면 메일 확인·검색·발송을 바로 할 수 있습니다.';
+}
+
+/** v0.6.3: 도구 인자로 받은 계정 주소 → 계정 id */
+function resolveMailAccount(hint: unknown): string | undefined {
+  const text = String(hint || '').trim().toLowerCase();
+  if (!text) return undefined;
+  const accounts = mail.listAccounts();
+  const found =
+    accounts.find((a) => a.email.toLowerCase() === text) ||
+    accounts.find((a) => a.email.toLowerCase().includes(text) || a.label.toLowerCase().includes(text));
+  return found?.id;
+}
+
+function formatMailDate(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString('ko-KR', {
+      timeZone: 'Asia/Seoul',
+      month: 'numeric',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return iso;
+  }
+}
 
 export type TaskPriority = 'high' | 'normal' | 'low';
 
@@ -486,6 +517,64 @@ export const TOOL_SPECS: ToolSpec[] = [
     },
   },
 
+  /* ------------------ v0.6.3: 이메일(IMAP/SMTP) ------------------ */
+  {
+    name: 'mail_list',
+    description:
+      '연결된 메일함(네이버·지메일)의 최근 메일을 읽는다. "새 메일 왔어?", "안 읽은 메일 확인해줘", "메일함 정리해줘" 같은 요청에 쓴다. 제목·보낸사람·날짜와 uid를 돌려주고, 본문은 mail_read로 읽는다.',
+    parameters: {
+      type: 'object',
+      properties: {
+        unread_only: { type: 'boolean', description: '안 읽은 메일만 볼지(기본 false)' },
+        limit: { type: 'number', description: '가져올 개수 1~30 (기본 10)' },
+        account: { type: 'string', description: '메일 계정 주소(여러 개 연결했을 때만)' },
+      },
+    },
+  },
+  {
+    name: 'mail_read',
+    description:
+      '메일 한 통의 본문을 읽는다. mail_list·mail_search가 준 uid를 넣는다. 사용자가 "그 메일 내용 보여줘"라고 하거나 요약·답장을 해야 할 때 쓴다.',
+    parameters: {
+      type: 'object',
+      properties: {
+        uid: { type: 'number', description: '메일 uid (mail_list 결과의 uid)' },
+        account: { type: 'string', description: '메일 계정 주소(여러 개일 때만)' },
+      },
+      required: ['uid'],
+    },
+  },
+  {
+    name: 'mail_search',
+    description:
+      '메일함을 제목·보낸사람·본문으로 검색한다. "지난주에 온 견적 메일 찾아줘" 같은 요청에 쓴다.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: '검색어 (예: "견적", "쿠팡")' },
+        limit: { type: 'number', description: '가져올 개수 1~30 (기본 10)' },
+        account: { type: 'string', description: '메일 계정 주소(여러 개일 때만)' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'mail_send',
+    description:
+      '메일을 쓰는 도구. 호출하면 **바로 보내지 않고** 채팅에 확인 카드(받는 사람·제목·본문)를 띄운다. 사용자가 카드에서 "보내기"를 눌러야 실제로 발송된다. 초안을 만든 뒤 사용자에게 "카드에서 확인하고 보내기를 눌러 주세요"라고 알려 준다. 받는 사람·제목·본문은 사용자가 말한 내용 그대로, 정중한 메일 형식으로 쓴다.',
+    parameters: {
+      type: 'object',
+      properties: {
+        to: { type: 'string', description: '받는 사람 이메일(여러 명이면 쉼표로)' },
+        subject: { type: 'string', description: '메일 제목' },
+        body: { type: 'string', description: '메일 본문(인사·맺음말 포함)' },
+        cc: { type: 'string', description: '참조(선택)' },
+        account: { type: 'string', description: '보내는 계정 주소(여러 개일 때만)' },
+      },
+      required: ['to', 'subject', 'body'],
+    },
+  },
+
   /* ------------------ v0.5.5: 결과물 파일 저장 ------------------ */
   {
     name: 'file_save',
@@ -616,6 +705,30 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
     example: '깃허브 연동하고 싶어',
   },
   {
+    name: 'mail_list',
+    label: '메일 확인',
+    summary: '네이버·지메일 메일함을 직접 읽어 새 메일·안 읽은 메일을 알려줘요(앱 비밀번호로 연결).',
+    example: '새로 온 메일 있어?',
+  },
+  {
+    name: 'mail_read',
+    label: '메일 본문 읽기',
+    summary: '메일 한 통의 본문을 읽고 요약하거나 답장 내용을 만들어요.',
+    example: '그 견적 메일 내용 요약해줘',
+  },
+  {
+    name: 'mail_search',
+    label: '메일 검색',
+    summary: '제목·보낸사람·본문으로 지난 메일을 찾아줘요.',
+    example: '지난주에 온 배송 메일 찾아줘',
+  },
+  {
+    name: 'mail_send',
+    label: '메일 보내기',
+    summary: '메일 초안을 만들고 확인 카드를 띄워요. 카드에서 보내기를 눌러야 실제로 발송돼요.',
+    example: '거래처에 일정 변경 메일 보내줘',
+  },
+  {
     name: 'file_save',
     label: '결과물 파일 저장',
     summary: 'AI가 만든 글·표·코드를 파일로 저장해 파일함에 보관해요.',
@@ -641,6 +754,8 @@ export interface ToolResult {
     vaultHasAccount?: boolean;
     /** v0.6.1: 사이트가 이미 로그인된 상태였다 */
     alreadyLoggedIn?: boolean;
+    /** v0.6.3: 발송 확인 카드로 띄운 메일 초안 id */
+    mailDraftId?: string;
   };
 }
 
@@ -1185,6 +1300,87 @@ async function runToolInner(name: string, args: Record<string, unknown>, ctx: To
         };
       } catch (err) {
         return { content: `파일을 저장하지 못했습니다: ${err instanceof Error ? err.message : String(err)}` };
+      }
+    }
+    /* ------------------ v0.6.3: 이메일(IMAP/SMTP) ------------------ */
+    case 'mail_list': {
+      if (!mail.hasAccounts()) return { content: mailNotConnectedMessage() };
+      try {
+        const accountId = resolveMailAccount(args.account);
+        const result = await mail.listMessages({
+          accountId,
+          unreadOnly: Boolean(args.unread_only),
+          limit: Number(args.limit) || 10,
+        });
+        if (!result.messages.length) {
+          return {
+            content: args.unread_only
+              ? `${result.account} 메일함에 안 읽은 메일이 없습니다.`
+              : `${result.account} 메일함이 비어 있습니다.`,
+          };
+        }
+        const lines = result.messages.map((m, i) =>
+          `${i + 1}. [uid ${m.uid}] ${m.seen ? '' : '(안 읽음) '}${m.subject}\n   · 보낸사람: ${m.fromName} <${m.from}> · ${formatMailDate(m.date)}`
+        );
+        return {
+          content: `${result.account} 메일함 · 최근 ${result.messages.length}통 (전체 ${result.total}통)\n${lines.join('\n')}\n\n본문은 mail_read(uid)로 읽으세요.`,
+        };
+      } catch (err) {
+        return { content: `메일함을 열지 못했습니다: ${err instanceof Error ? err.message : String(err)}` };
+      }
+    }
+    case 'mail_read': {
+      if (!mail.hasAccounts()) return { content: mailNotConnectedMessage() };
+      const uid = Number(args.uid);
+      if (!Number.isFinite(uid) || uid <= 0) return { content: '메일 uid가 필요합니다. mail_list 결과의 uid를 넣어 주세요.' };
+      try {
+        const message = await mail.readMessage(uid, resolveMailAccount(args.account));
+        const body = (message.text || mail.htmlToText(message.html) || '(본문 없음)').slice(0, 8000);
+        const attach = message.attachments.length
+          ? `\n\n[첨부] ${message.attachments.map((a) => `${a.filename} (${a.contentType}, ${Math.round(a.size / 1024)}KB)`).join(', ')}`
+          : '';
+        return {
+          content: `<mail uid="${message.uid}">\n보낸사람: ${message.fromName} <${message.from}>\n받는사람: ${message.to.join(', ')}\n날짜: ${formatMailDate(message.date)}\n제목: ${message.subject}\n\n${body}${attach}\n</mail>`,
+        };
+      } catch (err) {
+        return { content: `메일을 읽지 못했습니다: ${err instanceof Error ? err.message : String(err)}` };
+      }
+    }
+    case 'mail_search': {
+      if (!mail.hasAccounts()) return { content: mailNotConnectedMessage() };
+      const query = String(args.query || '').trim();
+      if (!query) return { content: '검색어를 입력해 주세요.' };
+      try {
+        const result = await mail.searchMessages(query, {
+          accountId: resolveMailAccount(args.account),
+          limit: Number(args.limit) || 10,
+        });
+        if (!result.messages.length) return { content: `'${query}'로 찾은 메일이 없습니다.` };
+        const lines = result.messages.map(
+          (m, i) => `${i + 1}. [uid ${m.uid}] ${m.subject}\n   · ${m.fromName} <${m.from}> · ${formatMailDate(m.date)}`
+        );
+        return { content: `'${query}' 검색 결과 ${result.messages.length}통\n${lines.join('\n')}` };
+      } catch (err) {
+        return { content: `메일을 검색하지 못했습니다: ${err instanceof Error ? err.message : String(err)}` };
+      }
+    }
+    case 'mail_send': {
+      if (!mail.hasAccounts()) return { content: mailNotConnectedMessage() };
+      try {
+        const draft = mail.createDraft({
+          to: args.to,
+          subject: args.subject,
+          text: args.body,
+          cc: args.cc,
+          accountId: resolveMailAccount(args.account),
+          session: ctx.session || null,
+        });
+        return {
+          content: `메일 초안을 만들었습니다. **아직 보내지 않았습니다.**\n받는 사람: ${draft.to.join(', ')}\n제목: ${draft.subject}\n본문: ${draft.text.slice(0, 400)}${draft.text.length > 400 ? '…' : ''}\n\n사용자에게 "아래 카드에서 내용을 확인하고 보내기를 눌러 주세요"라고 알려 주세요. 발송은 사용자가 카드에서 확인해야만 이뤄집니다.`,
+          flags: { mailDraftId: draft.id },
+        };
+      } catch (err) {
+        return { content: `메일 초안을 만들지 못했습니다: ${err instanceof Error ? err.message : String(err)}` };
       }
     }
     case 'time_now': {

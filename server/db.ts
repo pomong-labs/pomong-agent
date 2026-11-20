@@ -81,6 +81,8 @@ function columnsOf(table: string): Set<string> {
 {
   const msgCols = columnsOf('messages');
   if (!msgCols.has('model')) db.exec('ALTER TABLE messages ADD COLUMN model TEXT');
+  // v0.6.3: 특정 메시지에 대한 답장(인용) — 원본 메시지 id
+  if (!msgCols.has('reply_to_id')) db.exec('ALTER TABLE messages ADD COLUMN reply_to_id INTEGER');
 }
 
 {
