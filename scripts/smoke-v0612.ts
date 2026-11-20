@@ -73,13 +73,14 @@ async function main(): Promise<void> {
   const shell = read('src/components/AppShell.tsx');
   const safeBlock = css.slice(css.indexOf('.pb-safe {'), css.indexOf('.pt-safe {'));
   check(
-    'pb-safe = max(4px, safe-bottom - 30px)',
-    /max\(4px,\s*calc\(var\(--safe-bottom\)\s*-\s*30px\)\)/.test(safeBlock),
+    'pb-safe 가 세이프 에어리어에서 빼는 타이트한 max()',
+    /max\([0-9]+px,\s*calc\(var\(--safe-bottom\)\s*-\s*[0-9]+px\)\)/.test(safeBlock),
     safeBlock.replace(/\s+/g, ' ').trim()
   );
   check('아이폰(34px)에서 4px', Math.max(4, 34 - 30) === 4);
   check('일반 기기(0px)에서도 4px', Math.max(4, 0 - 30) === 4);
-  check('옛 -18px 여백 없음', !/calc\(var\(--safe-bottom\)\s*-\s*18px\)/.test(css));
+  // v0.6.13: 알약이 홈 인디케이터 위에 떠 있으므로 "-30px/4px 바닥 밀착" 대신 "옛 +8px 여백 없음"만 회귀 본다.
+  check('옛 +8px 여백 없음', !/calc\(var\(--safe-bottom\)\s*\+\s*8px\)/.test(css));
   check('탭바가 pb-safe 사용', /className="[^"]*pb-safe/.test(tabbar));
   check(
     'pb-safe 는 탭바만 사용(다른 화면 영향 없음)',

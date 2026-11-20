@@ -9,11 +9,13 @@ import {
   Download,
   ExternalLink,
   Globe,
+  KeyRound,
   LogOut,
   Mail,
   Moon,
   Monitor,
   Palette,
+  RefreshCw,
   Send,
   ShieldCheck,
   Sparkles,
@@ -127,6 +129,14 @@ export default function SettingsPage() {
   const [pushBusy, setPushBusy] = useState(false);
   const [pushMsg, setPushMsg] = useState('');
   const [browserBusy, setBrowserBusy] = useState(false);
+
+  /** v0.6.13: 계정 비밀번호 변경 */
+  const [pwForm, setPwForm] = useState({ current: '', next: '', confirm: '' });
+  const [pwBusy, setPwBusy] = useState(false);
+  const [pwMsg, setPwMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  /** v0.6.13: PWA 캐시 초기화 */
+  const [cacheBusy, setCacheBusy] = useState(false);
+  const [cacheMsg, setCacheMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   const load = () =>
     api
@@ -256,6 +266,63 @@ export default function SettingsPage() {
       setPushMsg('브라우저 로그인 세션을 초기화했어요.');
     } finally {
       setBrowserBusy(false);
+    }
+  };
+
+  /**
+   * v0.6.13: 계정 비밀번호 변경.
+   * 현재 비밀번호로 본인 확인 → 새 비밀번호(8자 이상) + 확인 일치 → 서버가 users.password_hash 를 바꾼다.
+   */
+  const changePassword = async () => {
+    setPwMsg(null);
+    if (!pwForm.current) {
+      setPwMsg({ ok: false, text: '현재 비밀번호를 입력해 주세요.' });
+      return;
+    }
+    if (pwForm.next.length < 8) {
+      setPwMsg({ ok: false, text: '새 비밀번호는 8자 이상이어야 해요.' });
+      return;
+    }
+    if (pwForm.next !== pwForm.confirm) {
+      setPwMsg({ ok: false, text: '새 비밀번호 확인이 일치하지 않아요.' });
+      return;
+    }
+    setPwBusy(true);
+    try {
+      await api.post('/api/auth/change-password', { currentPassword: pwForm.current, newPassword: pwForm.next });
+      setPwForm({ current: '', next: '', confirm: '' });
+      setPwMsg({ ok: true, text: '비밀번호를 바꿨어요. 다음 로그인부터 새 비밀번호를 쓰세요.' });
+    } catch (err) {
+      setPwMsg({ ok: false, text: err instanceof Error ? err.message : '비밀번호를 바꾸지 못했어요.' });
+    } finally {
+      setPwBusy(false);
+    }
+  };
+
+  /**
+   * v0.6.13: 앱 캐시 초기화 및 새로고침.
+   * 아이폰 PWA는 서비스워커가 예전 빌드를 캐시에 붙들고 있어 새 배포가 바로 반영되지 않는다.
+   * Cache Storage 전체 삭제 → 서비스워커 등록 해제 → 새로고침. 새로고침 뒤 main.tsx 가
+   * 서비스워커를 다시 등록하므로, 바로 다음 화면부터 새 버전을 받아 온다.
+   */
+  const resetAppCache = async () => {
+    if (!window.confirm('앱 캐시를 지우고 새로고침할까요? 로그인 상태와 대화는 그대로예요.')) return;
+    setCacheBusy(true);
+    setCacheMsg({ ok: true, text: '캐시를 지우는 중이에요…' });
+    try {
+      if ('caches' in window) {
+        const keys = await window.caches.keys();
+        await Promise.all(keys.map((key) => window.caches.delete(key)));
+      }
+      if ('serviceWorker' in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map((reg) => reg.unregister().catch(() => false)));
+      }
+      setCacheMsg({ ok: true, text: '캐시를 비웠어요. 새로고침합니다…' });
+      window.location.reload();
+    } catch (err) {
+      setCacheBusy(false);
+      setCacheMsg({ ok: false, text: err instanceof Error ? err.message : '캐시를 지우지 못했어요.' });
     }
   };
 
@@ -1370,13 +1437,105 @@ export default function SettingsPage() {
           </a>
         </section>
 
+        {/* v0.6.13: 계정 비밀번호 변경 */}
+        <section className="mt-4 rounded-[24px] bg-white p-5 shadow-card ring-1 ring-[#F6F4FB] lg:p-6">
+          <h2 className="flex items-center gap-1.5 text-[16px] font-bold text-[#1F1D2B]">
+            <KeyRound size={16} className="text-[#7C63F6]" /> 계정 비밀번호 변경
+          </h2>
+          <p className="mt-2 text-[12.5px] leading-[1.6] text-[#8A8A9A]">
+            이 앱에 로그인할 때 쓰는 비밀번호예요. 바꾸면 지금 보고 있는 이 기기는 그대로 로그인되어 있고,
+            다음 로그인부터 새 비밀번호를 쓰면 돼요.
+          </p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-3">
+            <label className="block">
+              <span className="mb-1.5 block text-[13px] font-semibold text-[#5B5866]">현재 비밀번호</span>
+              <input
+                type="password"
+                autoComplete="current-password"
+                className="pa-input"
+                value={pwForm.current}
+                placeholder="••••••••"
+                onChange={(e) => setPwForm((prev) => ({ ...prev, current: e.target.value }))}
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-[13px] font-semibold text-[#5B5866]">새 비밀번호</span>
+              <input
+                type="password"
+                autoComplete="new-password"
+                className="pa-input"
+                value={pwForm.next}
+                placeholder="8자 이상"
+                onChange={(e) => setPwForm((prev) => ({ ...prev, next: e.target.value }))}
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-[13px] font-semibold text-[#5B5866]">새 비밀번호 확인</span>
+              <input
+                type="password"
+                autoComplete="new-password"
+                className="pa-input"
+                value={pwForm.confirm}
+                placeholder="한 번 더 입력"
+                onChange={(e) => setPwForm((prev) => ({ ...prev, confirm: e.target.value }))}
+              />
+            </label>
+          </div>
+          <button
+            type="button"
+            className="pa-btn-primary mt-3 px-4 py-2.5 text-[13px]"
+            onClick={() => void changePassword()}
+            disabled={pwBusy || !pwForm.current || !pwForm.next || !pwForm.confirm}
+          >
+            <KeyRound size={15} /> {pwBusy ? '바꾸는 중…' : '비밀번호 변경'}
+          </button>
+          {pwMsg ? (
+            <p
+              className={`mt-2.5 whitespace-pre-wrap rounded-xl px-3 py-2.5 text-[12.5px] font-medium ${
+                pwMsg.ok ? 'bg-[#EAFBF1] text-[#12B886]' : 'bg-[#FFF1F1] text-[#E5484D]'
+              }`}
+            >
+              {pwMsg.text}
+            </p>
+          ) : null}
+        </section>
+
+        {/* v0.6.13: PWA 캐시 초기화 및 새로고침 */}
+        <section className="mt-4 rounded-[24px] bg-white p-5 shadow-card ring-1 ring-[#F6F4FB] lg:p-6">
+          <h2 className="flex items-center gap-1.5 text-[16px] font-bold text-[#1F1D2B]">
+            <RefreshCw size={16} className="text-[#7C63F6]" /> 앱 캐시 초기화
+          </h2>
+          <p className="mt-2 text-[12.5px] leading-[1.6] text-[#8A8A9A]">
+            새 버전을 배포해도 아이폰 홈 화면 앱(PWA)이 예전 화면을 계속 보여 줄 때 눌러 주세요.
+            저장된 캐시와 서비스워커 등록을 지우고 새로고침해서, 지금 서버에 있는 최신 버전을 바로 받아옵니다.
+            로그인 상태·대화·금고는 지워지지 않아요.
+          </p>
+          <button
+            type="button"
+            className="pa-btn-ghost mt-3 inline-flex items-center gap-1.5 px-3.5 py-2.5 text-[13px]"
+            onClick={() => void resetAppCache()}
+            disabled={cacheBusy}
+          >
+            <RefreshCw size={15} /> {cacheBusy ? '지우는 중…' : '앱 캐시 초기화 및 새로고침'}
+          </button>
+          {cacheMsg ? (
+            <p
+              className={`mt-2.5 whitespace-pre-wrap rounded-xl px-3 py-2.5 text-[12.5px] font-medium ${
+                cacheMsg.ok ? 'bg-[#F7F5FF] text-[#5B4BC4]' : 'bg-[#FFF1F1] text-[#E5484D]'
+              }`}
+            >
+              {cacheMsg.text}
+            </p>
+          ) : null}
+        </section>
+
         {/* security / about */}
         <section className="mt-4 rounded-[24px] bg-white p-5 shadow-card ring-1 ring-[#F6F4FB] lg:p-6">
           <h2 className="text-[16px] font-bold text-[#1F1D2B]">정보</h2>
           <ul className="mt-3 divide-y divide-[#F6F4FB] text-[13.5px]">
             <li className="flex items-center justify-between py-3">
               <span className="text-pomong-sub">버전</span>
-              <span className="font-semibold text-[#3B3947]">v{data?.version || '0.6.0'}</span>
+              <span className="font-semibold text-[#3B3947]">v{data?.version || '0.6.13'}</span>
             </li>
             <li className="flex items-center justify-between py-3">
               <span className="text-pomong-sub">데이터 보관</span>
@@ -1397,7 +1556,7 @@ export default function SettingsPage() {
         ) : null}
 
         <p className="mt-6 flex items-center justify-center gap-1.5 text-[12px] text-[#B4B1C2]">
-          <Sparkles size={12} /> Pomong Agent v{data?.version || '0.6.12'} · Pomong Labs
+          <Sparkles size={12} /> Pomong Agent v{data?.version || '0.6.13'} · Pomong Labs
         </p>
         </div>
       </div>

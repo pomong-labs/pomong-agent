@@ -578,6 +578,47 @@ app.get('/api/auth/me', (req, res) => {
   res.json({ ok: true, user: { username: session.username }, profile: profile(), setupDone: setupDone(), aiConfigured: aiConfigured() });
 });
 
+/**
+ * 계정 비밀번호 변경 (v0.6.13)
+ *
+ * 설정 > 백업·시스템 에서 로그인한 사람이 직접 바꾼다. 현재 비밀번호를 한 번 더 확인하고,
+ * 새 비밀번호는 계정 생성과 같은 기준(8자 이상)을 쓴다. 지금 쓰는 세션은 그대로 두어
+ * 바꾼 직후 로그아웃되지 않게 한다.
+ */
+app.post('/api/auth/change-password', requireAuth, (req, res) => {
+  const session = readSession(req);
+  if (!session) {
+    res.status(401).json({ ok: false, code: 'unauthorized', message: '다시 로그인해 주세요.' });
+    return;
+  }
+  const { currentPassword, newPassword } = req.body as { currentPassword?: string; newPassword?: string };
+  const row = db.prepare('SELECT id, password_hash FROM users WHERE id = ?').get(session.id) as
+    | { id: number; password_hash: string }
+    | undefined;
+  if (!row) {
+    res.status(401).json({ ok: false, code: 'unauthorized', message: '계정을 찾지 못했습니다. 다시 로그인해 주세요.' });
+    return;
+  }
+  if (!currentPassword || !verifyPassword(String(currentPassword), row.password_hash)) {
+    addLog('warn', '비밀번호 변경 실패(현재 비밀번호 불일치)');
+    res.status(400).json({ ok: false, code: 'invalid_current_password', message: '현재 비밀번호가 올바르지 않습니다.' });
+    return;
+  }
+  const next = String(newPassword || '');
+  if (next.length < 8) {
+    res.status(400).json({ ok: false, code: 'weak_password', message: '새 비밀번호는 8자 이상이어야 합니다.' });
+    return;
+  }
+  if (next === currentPassword) {
+    res.status(400).json({ ok: false, code: 'same_password', message: '지금 쓰는 비밀번호와 다른 것을 입력해 주세요.' });
+    return;
+  }
+  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(next), row.id);
+  clearLoginAttempts(req.ip || 'unknown');
+  addLog('success', '관리자 비밀번호가 변경되었습니다');
+  res.json({ ok: true });
+});
+
 /* ----------------------------- monitor ---------------------------- */
 
 app.get('/api/monitor/stats', requireAuth, (_req, res) => {
