@@ -111,3 +111,67 @@ export function selectToolNames(input: ToolFilterInput): ToolFilterResult {
   }
   return { tools: [...names], groups: [...groups], reason: 'intent' };
 }
+
+/* ------------------------------------------------------------------ */
+/* v0.6.6 — 기본 도구 ON/OFF (도구 관리자)                             */
+/* ------------------------------------------------------------------ */
+
+/** 도구 관리자 화면에 보여줄 그룹 */
+export interface ToolGroupMeta {
+  id: ToolGroup;
+  label: string;
+  desc: string;
+  emoji: string;
+}
+
+export const TOOL_GROUP_META: ToolGroupMeta[] = [
+  { id: 'core', label: '기본 대화', desc: '할 일·기억·알림처럼 대화 중 늘 쓰는 도구', emoji: '💬' },
+  { id: 'browser', label: '브라우저', desc: '사이트 열기·클릭·입력·로그인 대행', emoji: '🌐' },
+  { id: 'web', label: '웹 검색', desc: '최신 정보·가격·뉴스 찾아보기', emoji: '🔎' },
+  { id: 'mail', label: '이메일', desc: '메일함 확인·검색·읽기·발송', emoji: '✉️' },
+  { id: 'memory', label: '기억', desc: '오래된 대화·기억 검색과 정리', emoji: '🧠' },
+  { id: 'files', label: '파일', desc: '첨부 읽기·결과물 저장', emoji: '📎' },
+  { id: 'automation', label: '자동화', desc: '예약 실행·변경 감시 만들기', emoji: '⏰' },
+  { id: 'server', label: '서버 관제', desc: 'CPU·메모리·디스크 상태 보기', emoji: '🖥️' },
+  { id: 'weather', label: '날씨', desc: '현재 날씨와 예보', emoji: '🌤️' },
+  { id: 'vault', label: '금고', desc: '저장한 계정 이름 확인', emoji: '🔐' },
+];
+
+export interface ToolPrefs {
+  /** 통째로 끈 그룹 */
+  disabledGroups: ToolGroup[];
+  /** 그룹은 켜 둔 채 개별로 끈 도구 */
+  disabledTools: string[];
+}
+
+export const DEFAULT_TOOL_PREFS: ToolPrefs = { disabledGroups: [], disabledTools: [] };
+
+const ALL_TOOL_NAMES = new Set(Object.values(TOOL_GROUPS).flat());
+const ALL_GROUPS = new Set<ToolGroup>(Object.keys(TOOL_GROUPS) as ToolGroup[]);
+
+/** 저장된 설정(JSON)을 안전한 형태로 다듬는다. */
+export function normalizeToolPrefs(value: unknown): ToolPrefs {
+  const raw = (value ?? {}) as Partial<Record<keyof ToolPrefs, unknown>>;
+  const groups = Array.isArray(raw.disabledGroups) ? raw.disabledGroups : [];
+  const tools = Array.isArray(raw.disabledTools) ? raw.disabledTools : [];
+  return {
+    disabledGroups: [...new Set(groups.map((g) => String(g)).filter((g): g is ToolGroup => ALL_GROUPS.has(g as ToolGroup)))],
+    disabledTools: [...new Set(tools.map((t) => String(t)).filter((t) => ALL_TOOL_NAMES.has(t)))],
+  };
+}
+
+/** 설정에서 꺼진 도구 이름 (그룹을 끄면 그 그룹 도구 전부) */
+export function disabledToolNames(prefs: ToolPrefs): Set<string> {
+  const off = new Set<string>(prefs.disabledTools);
+  for (const group of prefs.disabledGroups) {
+    for (const name of TOOL_GROUPS[group]) off.add(name);
+  }
+  return off;
+}
+
+/** 모델에 넘길 도구 목록에서 꺼진 도구를 뺀다. */
+export function filterToolsByPrefs<T extends { name: string }>(specs: T[], prefs: ToolPrefs): T[] {
+  const off = disabledToolNames(prefs);
+  if (off.size === 0) return specs;
+  return specs.filter((spec) => !off.has(spec.name));
+}

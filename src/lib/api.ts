@@ -419,6 +419,52 @@ export interface ToolCatalogEntry {
   example: string;
 }
 
+/** v0.6.6: 도구(스킬) 관리자 — 그룹별 내장 도구 */
+export type ToolGroupId =
+  | 'core'
+  | 'browser'
+  | 'mail'
+  | 'web'
+  | 'memory'
+  | 'files'
+  | 'automation'
+  | 'server'
+  | 'weather'
+  | 'vault';
+
+export interface ToolGroupEntry {
+  id: ToolGroupId;
+  label: string;
+  desc: string;
+  emoji: string;
+  tools: { name: string; label: string; summary: string; example: string }[];
+}
+
+export interface ToolPrefs {
+  disabledGroups: ToolGroupId[];
+  disabledTools: string[];
+}
+
+/** 사용자가 직접 만든 지침 도구 */
+export interface CustomSkill {
+  id: string;
+  name: string;
+  keywords: string[];
+  instructions: string;
+  alwaysApply: boolean;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SkillTemplate {
+  id: string;
+  name: string;
+  summary: string;
+  keywords: string[];
+  instructions: string;
+}
+
 /* ------------------------------------------------------------------ */
 /* Phase 2 — 자동화(예약·워치) · 자율 브라우저                       */
 /* ------------------------------------------------------------------ */

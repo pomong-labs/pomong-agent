@@ -6,7 +6,7 @@ import { api } from '../lib/api';
 
 export default function More() {
   const navigate = useNavigate();
-  const [version, setVersion] = useState('0.6.0');
+  const [version, setVersion] = useState('0.6.6');
 
   useEffect(() => {
     api
@@ -22,7 +22,8 @@ export default function More() {
 
   const items = [
     { label: '파일함', desc: '받은 파일 · AI 결과물 모아 보기', icon: FolderOpen, to: '/files', tint: '#F1ECFF', color: '#7C63F6' },
-    { label: '도구', desc: 'AI가 쓸 수 있는 기능과 예시', icon: Wrench, to: '/tools', tint: '#EAFBF1', color: '#12B886' },
+    // v0.6.6: 도구 관리자 — 기본 도구 ON/OFF + 나만의 지침 도구
+    { label: '도구(스킬) 관리', desc: '기본 도구 끄기 · 나만의 지침 만들기', icon: Wrench, to: '/tools', tint: '#EAFBF1', color: '#12B886' },
     { label: '할 일', desc: '오늘의 태스크 관리', icon: ListChecks, to: '/tasks', tint: '#EFF7FF', color: '#4A90FF' },
     { label: '자동화', desc: '예약 실행 · 웹 변화 감시', icon: AlarmClock, to: '/automation', tint: '#F1ECFF', color: '#7C63F6' },
     { label: '기억함', desc: 'AI가 기억한 취향·약속 관리', icon: Brain, to: '/memory', tint: '#FFEFF3', color: '#E2568B' },

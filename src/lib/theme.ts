@@ -148,6 +148,15 @@ const DARK_SURFACE = '#1B1923';
 const LIGHT_SURFACE = '#FFFFFF';
 
 /**
+ * v0.6.6: 앱 맨 위(아이폰 상태바 바로 아래) 색.
+ * 표면색에 캐릭터 포인트 컬러를 아주 살짝 섞어, 상태바·앱 배경·채팅 상단 페이드가
+ * **완전히 같은 한 가지 색**이 되게 한다(색 띠·경계선 제거).
+ */
+export function topSurfaceColor(base: string, mode: 'light' | 'dark'): string {
+  return mode === 'dark' ? mix(DARK_SURFACE, base, 0.05) : mix(LIGHT_SURFACE, base, 0.035);
+}
+
+/**
  * 포인트 컬러 파생값을 화면 변수로 심는다.
  * 라이트/다크 각각에서 대비가 유지되도록 파생값을 다르게 계산한다.
  */
@@ -168,6 +177,7 @@ export function accentVars(base: string, mode: 'light' | 'dark'): Record<string,
       '--accent-grad': `linear-gradient(135deg, ${lighten(accent, 0.06)} 0%, ${accent} 100%)`,
       '--accent-contrast': readableInk(accent),
       '--bubble-user': `linear-gradient(135deg, ${mix(accent, DARK_SURFACE, 0.62)} 0%, ${mix(accent, DARK_SURFACE, 0.74)} 100%)`,
+      '--pa-top': topSurfaceColor(accent, 'dark'),
     };
   }
   const deep = ensureContrast(darken(accent, 0.12), LIGHT_SURFACE, 4.5, 'darken');
@@ -185,6 +195,7 @@ export function accentVars(base: string, mode: 'light' | 'dark'): Record<string,
     '--accent-grad': `linear-gradient(135deg, ${lighten(accent, 0.12)} 0%, ${accent} 100%)`,
     '--accent-contrast': readableInk(accent),
     '--bubble-user': `linear-gradient(135deg, ${mix(accent, LIGHT_SURFACE, 0.8)} 0%, ${mix(accent, LIGHT_SURFACE, 0.88)} 100%)`,
+    '--pa-top': topSurfaceColor(accent, 'light'),
   };
 }
 
@@ -255,12 +266,13 @@ export function applyTheme(settings: ThemeSettings): { resolved: 'light' | 'dark
   lastApplied = settings;
   storeTheme(settings, resolved, vars);
   // iOS 상태 표시줄·주소창 색도 테마에 맞춘다.
+  // v0.6.6: 상태바 색을 '앱 맨 위 색(--pa-top)'과 정확히 같게 맞춰 색 띠가 생기지 않게 한다.
+  const top = vars['--pa-top'];
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute('content', resolved === 'dark' ? '#100F16' : '#FBFBFD');
-  // v0.6.3: 상태바(노치) 아래까지 같은 배경으로 칠해 다크모드에 흰 띠가 남지 않게 한다.
-  const shellBg = resolved === 'dark' ? '#100F16' : '#F6F6FA';
-  root.style.backgroundColor = shellBg;
-  if (document.body) document.body.style.backgroundColor = shellBg;
+  if (meta) meta.setAttribute('content', top);
+  // 상태바(노치) 아래까지 같은 배경으로 칠해 다크모드에 흰 띠가 남지 않게 한다.
+  root.style.backgroundColor = top;
+  if (document.body) document.body.style.backgroundColor = top;
   return { resolved, base };
 }
 

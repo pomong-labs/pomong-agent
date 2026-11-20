@@ -70,7 +70,15 @@ export default function AppShell() {
           </div>
         </aside>
 
-        <main className="relative flex min-w-0 flex-1 flex-col bg-[#FCFCFE]" style={{ background: 'var(--pa-surface)' }}>
+        <main
+          className="relative flex min-w-0 flex-1 flex-col bg-[#FCFCFE]"
+          style={{
+            // v0.6.6: 상단 상태바(노치) 높이만큼은 앱 맨 위 색(--pa-top)으로 칠하고,
+            // 그 아래부터는 표면색(--pa-surface)으로 이어진다. theme-color·html/body 배경도 같은 색이다.
+            background:
+              'linear-gradient(to bottom, var(--pa-top) 0, var(--pa-top) env(safe-area-inset-top, 0px), var(--pa-surface) env(safe-area-inset-top, 0px))',
+          }}
+        >
           <div
             className="flex min-h-0 flex-1 flex-col"
             style={{

@@ -9,7 +9,7 @@
     />
     <title>Pomong Agent</title>
     <meta name="description" content="Pomong Agent — 내 서버에 설치하는 개인 AI 비서. BYOK 멀티 LLM, 서버 관제, 암호화 금고." />
-    <meta name="theme-color" content="#FBFBFD" />
+    <meta name="theme-color" content="#FBFAFF" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
     <!-- v0.6.3: 다크모드에서 iOS 상태바 영역이 흰 띠로 남지 않도록 화면 전체를 덮는 방식 -->
@@ -69,7 +69,15 @@
             });
           }
           var meta = document.querySelector('meta[name="theme-color"]');
-          if (meta) meta.setAttribute('content', mode === 'dark' ? '#100F16' : '#FBFBFD');
+          // v0.6.6: 상태바 색 = 앱 맨 위 색(--pa-top). 저장된 테마가 계산해 둔 값을 그대로 쓴다.
+          var top =
+            s.vars && typeof s.vars['--pa-top'] === 'string'
+              ? s.vars['--pa-top']
+              : mode === 'dark'
+                ? '#211D2E'
+                : '#FBFAFF';
+          if (meta) meta.setAttribute('content', top);
+          root.style.backgroundColor = top;
         } catch (e) {
           /* 테마 정보가 없거나 깨졌으면 기본 라이트로 둔다 */
         }

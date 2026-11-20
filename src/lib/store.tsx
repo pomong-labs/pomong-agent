@@ -349,8 +349,16 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   }, [profile.theme, profile.accentMode, profile.accentColor, profile.character]);
 
   // v0.6.4: 글꼴도 저장된 값을 따르고, 첫 페인트에 이미 칠해 둔 값을 화면과 맞춘다.
+  // v0.6.5: 서버 프로필에 글꼴이 아직 없거나 기본값인데 이 기기에서 고른 글꼴이 있으면
+  //         화면 글꼴을 기본으로 되돌리지 않고 이 기기 값을 유지한 뒤 서버에 한 번 올려 맞춘다.
+  //         (예전 서버가 PUT에서 font를 빠뜨렸을 때 고른 글꼴이 사라지던 문제 보완)
   useEffect(() => {
-    applyFont(profile.font || readStoredFont());
+    const stored = readStoredFont();
+    const next = profile.font === 'default' && stored !== 'default' ? stored : profile.font || stored;
+    applyFont(next);
+    if (next !== profile.font) {
+      api.put('/api/settings/profile', { font: next }).catch(() => undefined);
+    }
   }, [profile.font]);
 
   // 첫 로드: 프로필 · 모델 목록 · 지난 대화

@@ -50,9 +50,9 @@ async function main(): Promise<void> {
   /* 1) 버전 --------------------------------------------------------------- */
   const pkg = JSON.parse(read('package.json')) as { version: string };
   const compose = read('docker-compose.yml');
-  check('server/config 버전', APP_VERSION === '0.6.4', APP_VERSION);
-  check('package.json 버전', pkg.version === '0.6.4', pkg.version);
-  check('docker-compose 이미지 태그', compose.includes('pomong-agent:0.6.4') && compose.includes('pomong-agent-browser:0.6.4'));
+  check('server/config 버전', APP_VERSION === '0.6.6', APP_VERSION);
+  check('package.json 버전', pkg.version === '0.6.6', pkg.version);
+  check('docker-compose 이미지 태그', compose.includes('pomong-agent:0.6.6') && compose.includes('pomong-agent-browser:0.6.6'));
 
   /* 2) 메시지 병합 -------------------------------------------------------- */
   type Msg = Parameters<typeof mergeMessages>[0][number];
@@ -133,7 +133,7 @@ async function main(): Promise<void> {
     const hits: string[] = [];
     for (const file of targets) {
       const rel = path.relative(ROOT, file);
-      if (rel.startsWith('scripts/smoke-v064')) continue; // 이 테스트의 검사 패턴 자체는 제외
+      if (rel.startsWith('scripts/smoke-')) continue; // 스모크 테스트의 검사 패턴 자체는 제외
       const text = fs.readFileSync(file, 'utf8');
       if (re.test(text)) hits.push(rel);
     }

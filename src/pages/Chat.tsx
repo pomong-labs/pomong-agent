@@ -33,7 +33,7 @@ import {
   X,
   XCircle,
 } from 'lucide-react';
-import AppHeader from '../components/AppHeader';
+import AppHeader, { HEADER_SPACE } from '../components/AppHeader';
 import Mascot, { type MascotName } from '../components/Mascot';
 import ModelBar from '../components/ModelBar';
 import { StatsCard, TasksCard } from '../components/Cards';
@@ -144,6 +144,19 @@ export default function Chat() {
   const navigate = useNavigate();
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  /** v0.6.5: 보낸 뒤 입력창 높이를 기본 1줄로 되돌리는 데 쓴다 */
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const resetComposerHeight = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+  }, []);
+
+  // v0.6.5: 입력이 비면(전송·지우기) 늘어났던 입력창을 항상 1줄 높이로 되돌린다.
+  useEffect(() => {
+    if (draft === '') resetComposerHeight();
+  }, [draft, resetComposerHeight]);
 
   /** v0.5.2: 아직 보내지 않은 첨부(사진·파일) */
   const [pending, setPending] = useState<{ id: string; view: ChatAttachment; preview?: string }[]>([]);
@@ -342,6 +355,8 @@ export default function Chat() {
     setReplyTo(null);
     setPending([]);
     setAttachError('');
+    // v0.6.5: 여러 줄을 쓰고 보낸 뒤에도 입력창이 늘어난 채로 남지 않게 한다.
+    resetComposerHeight();
   };
 
   /** v0.6.3: 인용된 원본 메시지로 이동해 잠깐 강조한다. */
@@ -378,7 +393,8 @@ export default function Chat() {
       : '포몽이 생각 중…';
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="relative flex h-full min-h-0 flex-col">
+      {/* v0.6.5: 상단바는 채팅 위에 겹쳐 뜨는 플로팅 오버레이다(아래 패딩으로 첫 메시지 가림만 막는다) */}
       <AppHeader
         onMenu={() => setDrawer(true)}
         onSearch={() => setSearchOpen(true)}
@@ -387,7 +403,11 @@ export default function Chat() {
       />
 
       {/* messages */}
-      <div ref={scrollRef} className="pa-scroll min-h-0 flex-1 overflow-y-auto px-4 py-4 lg:px-10 lg:py-8">
+      <div
+        ref={scrollRef}
+        className="pa-scroll min-h-0 flex-1 overflow-y-auto px-4 pb-4 lg:px-10 lg:pb-8"
+        style={{ paddingTop: keyboardOpen ? HEADER_SPACE.compact : HEADER_SPACE.normal }}
+      >
         <div className="mx-auto w-full max-w-[880px] space-y-5 lg:space-y-6">
           {!aiReady ? (
             <div className="flex items-start gap-3 rounded-2xl border border-[#FFE7C7] bg-[#FFF9F0] px-4 py-3.5 text-[13.5px] text-[#A9762A]">
@@ -671,6 +691,7 @@ export default function Chat() {
                 }}
               />
               <textarea
+                ref={textareaRef}
                 rows={1}
                 value={draft}
                 onChange={(e) => {

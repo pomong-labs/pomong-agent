@@ -36,12 +36,13 @@ export interface ChatMessage {
 }
 
 /**
- * 멀티모달 파트 (v0.5.2): 채팅에 첨부한 사진을 AI가 직접 보게 한다.
- * text = 글, image = base64로 넘기는 사진 한 장.
+ * 멀티모달 파트 (v0.5.2 / PDF v0.6.5): 채팅에 첨부한 사진·PDF를 AI가 직접 보게 한다.
+ * text = 글, image = base64 사진 한 장, pdf = 글자를 뽑지 못한 스캔본 PDF 원본.
  */
 export type AgentPart =
   | { type: 'text'; text: string }
-  | { type: 'image'; mime: string; dataBase64: string };
+  | { type: 'image'; mime: string; dataBase64: string }
+  | { type: 'pdf'; mime: string; dataBase64: string };
 
 /** 도구 호출을 주고받는 에이전트 루프용 메시지 (도구 결과 포함) */
 export type AgentMessage =
@@ -457,30 +458,35 @@ function openAiMessages(turns: ToolRunMessage[], imageSupport: boolean): OpenAiM
   for (const turn of turns) {
     if (turn.role === 'tool') {
       messages.push({ role: 'tool', tool_call_id: turn.toolCallId, content: turn.content });
-    } else if (turn.role === 'user' && turn.parts?.some((p) => p.type === 'image')) {
+    } else if (turn.role === 'user' && turn.parts?.some((p) => p.type !== 'text')) {
       const parts = textOrParts(turn);
-      if (imageSupport) {
-        // v0.5.2: 사진은 image_url(data URL)로 넘긴다.
-        messages.push({
-          role: 'user',
-          content: parts.map((part) =>
-            part.type === 'text'
-              ? { type: 'text', text: part.text }
-              : { type: 'image_url', image_url: { url: `data:${part.mime};base64,${part.dataBase64}` } }
-          ),
-        });
-      } else {
-        // 글만 보는 모델(EXAONE): 사진 대신 안내 문구를 붙인다.
-        const text = parts
-          .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
-          .map((p) => p.text)
-          .join('\n')
-          .trim();
-        messages.push({
-          role: 'user',
-          content: `${text ? `${text}\n\n` : ''}[첨부 사진] 이 모델은 사진을 볼 수 없습니다. 사진을 봐야 하는 작업이면 Gemini처럼 사진을 보는 모델로 바꿔 달라고 사용자에게 안내하세요.`,
-        });
+      // v0.6.5: 사진은 image_url(base64)로, 스캔본 PDF는 이 규격에 파일 입력이 없어 본문 텍스트로 대신한다.
+      const texts: string[] = [];
+      const media: Record<string, unknown>[] = [];
+      const notes: string[] = [];
+      for (const part of parts) {
+        if (part.type === 'text') {
+          if (part.text) texts.push(part.text);
+          continue;
+        }
+        if (part.type === 'image') {
+          if (imageSupport) {
+            media.push({ type: 'image_url', image_url: { url: `data:${part.mime};base64,${part.dataBase64}` } });
+          } else {
+            notes.push(
+              '[첨부 사진] 이 모델은 사진을 볼 수 없습니다. 사진을 봐야 하는 작업이면 Gemini처럼 사진을 보는 모델로 바꿔 달라고 사용자에게 안내하세요.'
+            );
+          }
+          continue;
+        }
+        // pdf — 글자를 뽑지 못한 스캔본의 원본. 본문 텍스트는 이미 텍스트 파트에 들어 있다.
+        notes.push(
+          '[첨부 PDF] 이 모델은 PDF 원본 페이지를 직접 볼 수 없습니다. 위 [첨부] 블록의 본문 텍스트로 답하고, 원본 그림을 봐야 한다면 Gemini처럼 PDF를 보는 모델로 바꾸라고 사용자에게 안내하세요.'
+        );
       }
+      const text = [...texts, ...notes].filter(Boolean).join('\n\n');
+      const imageContent = media.length ? [{ type: 'text', text }, ...media] : text;
+      messages.push({ role: 'user', content: imageContent });
     } else if (turn.role === 'assistant') {
       const msg: OpenAiMessage = { role: 'assistant', content: turn.content || null };
       if (turn.toolCalls?.length) {
@@ -639,15 +645,18 @@ async function claudeStep(
   for (const turn of turns) {
     if (turn.role === 'tool') {
       push('user', [{ type: 'tool_result', tool_use_id: turn.toolCallId, content: turn.content }]);
-    } else if (turn.role === 'user' && turn.parts?.some((p) => p.type === 'image')) {
+    } else if (turn.role === 'user' && turn.parts?.some((p) => p.type !== 'text')) {
       // v0.5.2: 사진은 base64 image 블록으로 넘긴다.
+      // v0.6.5: 스캔본 PDF는 document 블록으로 넘겨 페이지를 직접 읽게 한다.
       push(
         'user',
-        textOrParts(turn).map((part) =>
-          part.type === 'text'
-            ? { type: 'text', text: part.text }
-            : { type: 'image', source: { type: 'base64', media_type: part.mime, data: part.dataBase64 } }
-        )
+        textOrParts(turn).map((part) => {
+          if (part.type === 'text') return { type: 'text', text: part.text };
+          if (part.type === 'pdf') {
+            return { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: part.dataBase64 } };
+          }
+          return { type: 'image', source: { type: 'base64', media_type: part.mime, data: part.dataBase64 } };
+        })
       );
     } else if (turn.role === 'assistant') {
       const blocks: ClaudeContent[] = [];

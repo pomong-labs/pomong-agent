@@ -159,7 +159,7 @@ async function main(): Promise<void> {
   /* 7) 버전 --------------------------------------------------------------- */
   const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')) as { version: string };
   check('버전이 package.json 과 같다', APP_VERSION === pkg.version, APP_VERSION);
-  check('package.json 0.6.4', pkg.version === '0.6.4', pkg.version);
+  check('package.json 0.6.6', pkg.version === '0.6.6', pkg.version);
 
   console.log(`\n${failures ? `❌ 실패 ${failures}건` : '✅ 전부 통과'}`);
   process.exit(failures ? 1 : 0);

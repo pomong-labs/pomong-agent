@@ -736,6 +736,26 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
   },
 ];
 
+/**
+ * v0.6.6: 도구 관리자('더보기 → 도구(스킬) 관리')에 쓰는 이름표.
+ * 카탈로그에 설명이 있는 도구는 그 라벨을 쓰고, 나머지는 여기서 채운다.
+ */
+export const TOOL_LABELS: Record<string, string> = {
+  ...Object.fromEntries(TOOL_CATALOG.map((entry) => [entry.name, entry.label])),
+  chat_notify: '중간 안내 말풍선',
+  memory_search: '기억 검색',
+  memory_delete: '기억 삭제',
+  browser_snapshot: '화면 읽기',
+  browser_click: '클릭',
+  browser_type: '입력',
+  browser_extract: '글자 추출',
+  browser_screenshot: '스크린샷',
+  browser_close: '브라우저 닫기',
+  browser_fill_vault: '금고 비밀번호 채우기',
+  automation_list: '예약·감시 목록',
+  attachment_read: '첨부 다시 읽기',
+};
+
 export interface ToolResult {
   content: string;
   meta?: 'tasks' | 'server_stats' | 'browser';

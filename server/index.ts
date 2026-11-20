@@ -35,7 +35,7 @@ import {
   type ExaoneEffort,
   type ProviderId,
 } from './providers';
-import { TOOL_SPECS, TOOL_CATALOG, runTool, listTaskRows, toTaskView, normalizeDue, normalizePriority, type TaskRow } from './tools';
+import { TOOL_SPECS, TOOL_CATALOG, TOOL_LABELS, runTool, listTaskRows, toTaskView, normalizeDue, normalizePriority, type TaskRow } from './tools';
 import { getAgentStatus, setAgentState } from './agent-status';
 import * as vault from './vault';
 import * as jobs from './jobs';
@@ -61,7 +61,8 @@ import * as filesBox from './files';
 import { postAutomationMessage } from './automation-chat';
 import * as mail from './mail';
 import { DEFAULT_ROUTING, TASK_KIND_META, TASK_KINDS, detectTaskKind, exaoneKeyStatus, normalizeRouting, resolveRoute, type RoutingSettings, type TaskKind } from './routing';
-import { selectToolNames } from './tool-filter';
+import { selectToolNames, filterToolsByPrefs, normalizeToolPrefs, TOOL_GROUP_META, TOOL_GROUPS, DEFAULT_TOOL_PREFS, disabledToolNames, type ToolPrefs } from './tool-filter';
+import * as skills from './skills';
 import type { TaskRunView } from './task-runs';
 
 ensureDataDir();
@@ -636,7 +637,7 @@ function serverContextForPrompt(): string {
   ].join('\n');
 }
 
-function systemPrompt(memoryBlock = ''): string {
+function systemPrompt(memoryBlock = '', skillBlock = ''): string {
   const p = profile();
   const characterName = MASCOTS.find((m) => m.id === p.character)?.name || '피몽';
   const agentName = p.agentName || 'Pomong';
@@ -688,8 +689,8 @@ function systemPrompt(memoryBlock = ''): string {
       '로그인 페이지가 404이거나 "페이지를 찾을 수 없습니다" 화면이 뜨면 바로 포기하지 마. 그 서비스의 메인 도메인(예: https://kmong.com/)으로 이동해 "로그인"·"로그인/회원가입" 버튼을 찾아 누른 뒤 이어서 해. 주소를 모르겠으면 web_search로 "사이트이름 로그인"을 찾아 실제 주소를 확인해.'
     ),
     s(
-      '사용자가 사진이나 파일을 첨부하면 그 내용을 실제로 보고 답하세요. 사진은 함께 전달되므로 "볼 수 없다"고 하지 말고 무엇이 보이는지 설명하세요. 파일 내용은 [첨부] 블록에 들어 있고, 잘렸거나 읽지 못한 파일은 attachment_read 도구로 다시 읽거나 사용자에게 물어보세요. 첨부와 상관없는 추측은 하지 마세요.',
-      '사용자가 사진이나 파일을 첨부하면 그 내용을 실제로 보고 답해. 사진은 함께 전달되니까 "볼 수 없다"고 하지 말고 뭐가 보이는지 설명해. 파일 내용은 [첨부] 블록에 들어 있고, 잘렸거나 못 읽은 파일은 attachment_read 도구로 다시 읽거나 사용자에게 물어봐. 첨부와 상관없는 추측은 하지 마.'
+      '사용자가 사진이나 파일(PDF·문서·텍스트)을 첨부하면 그 내용을 실제로 보고 답하세요. 사진은 함께 전달되므로 "볼 수 없다"고 하지 말고 무엇이 보이는지 설명하세요. PDF·텍스트 파일은 서버가 뽑은 본문이 [첨부] 블록에 들어 있으니 그 내용으로 바로 요약·분석하세요(스캔본은 PDF 원본도 함께 전달됩니다). 잘렸거나 읽지 못한 파일은 attachment_read 도구로 다시 읽거나 사용자에게 물어보세요. 첨부와 상관없는 추측은 하지 마세요.',
+      '사용자가 사진이나 파일(PDF·문서·텍스트)을 첨부하면 그 내용을 실제로 보고 답해. 사진은 함께 전달되니까 "볼 수 없다"고 하지 말고 뭐가 보이는지 설명해. PDF·텍스트 파일은 서버가 뽑은 본문이 [첨부] 블록에 있으니 그 내용으로 바로 요약·분석해(스캔본은 PDF 원본도 함께 보냈어). 잘렸거나 못 읽은 파일은 attachment_read 도구로 다시 읽거나 사용자에게 물어봐. 첨부와 상관없는 추측은 하지 마.'
     ),
     s(
       '도구를 쓸 수 있습니다: 할 일 조회(tasks_list)·추가(tasks_add)·완료(tasks_complete), 금고 항목 이름 조회(vault_list), 서버 상태(server_stats), 날씨 조회(weather_get), 현재 시각(time_now), 웹 브라우저(browser_open·snapshot·click·type·extract·screenshot·handover·close), 예약·워치(automation_list·job_create·watch_create).',
@@ -770,10 +771,26 @@ function systemPrompt(memoryBlock = ''): string {
     '',
     '[실시간 컨텍스트]',
     serverContextForPrompt(),
+    ...(skillBlock ? ['', skillBlock] : []),
     ...(memoryBlock ? ['', memoryBlock] : []),
     '',
     toneRuleBottom,
   ].join('\n');
+}
+
+/** v0.6.6: 도구 관리자 설정 — settings 테이블의 'toolPrefs' 키에 JSON으로 둔다. */
+function readToolPrefs(): ToolPrefs {
+  return normalizeToolPrefs(getJson<unknown>('toolPrefs', DEFAULT_TOOL_PREFS));
+}
+
+function saveToolPrefs(input: unknown): ToolPrefs {
+  const clean = normalizeToolPrefs(input);
+  setJson('toolPrefs', clean);
+  addLog(
+    'info',
+    `도구 관리자 설정 저장 · 꺼진 그룹 ${clean.disabledGroups.length}건 · 꺼진 도구 ${clean.disabledTools.length}건`
+  );
+  return clean;
 }
 
 interface ChatMeta {
@@ -1034,8 +1051,9 @@ interface ChatTurnResult {
 async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
   const { session } = input;
   // v0.6.3: 이번 요청의 성격(대화·브라우저·사진·글쓰기)에 맞춰 모델을 자동으로 고른다.
+  // v0.6.5: 사진뿐 아니라 글자를 뽑지 못한 스캔본 PDF 원본도 '직접 봐야 하는 첨부'로 다룬다.
   const hasImage = input.history.some(
-    (m) => m.role === 'user' && Boolean(m.parts?.some((p) => p.type === 'image'))
+    (m) => m.role === 'user' && Boolean(m.parts?.some((p) => p.type === 'image' || p.type === 'pdf'))
   );
   const route = routeFor(input.prompt, hasImage);
   const config = {
@@ -1059,9 +1077,10 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
     hasImage,
     browserActive: Boolean(browser.activeSession()),
   });
-  const turnTools = toolSelection.tools
-    ? TOOL_SPECS.filter((spec) => toolSelection.tools?.includes(spec.name))
-    : TOOL_SPECS;
+  const turnTools = filterToolsByPrefs(
+    toolSelection.tools ? TOOL_SPECS.filter((spec) => toolSelection.tools?.includes(spec.name)) : TOOL_SPECS,
+    readToolPrefs()
+  );
   const MAX_STEPS = 20;
   const usedTools: string[] = [];
   let browserUsed = false;
@@ -1113,7 +1132,7 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
       provider: config.provider,
       apiKey,
       model: config.model,
-      system: systemPrompt(memory.memoryPromptBlock(input.prompt)),
+      system: systemPrompt(memory.memoryPromptBlock(input.prompt), skills.skillPromptBlock(input.prompt)),
       history: input.history,
       tools: turnTools,
       maxSteps: MAX_STEPS,
@@ -1519,6 +1538,10 @@ function buildModelHistory(session: string): { role: 'user' | 'assistant'; conte
     .filter((r) => r.role === 'user' && (files[r.id] || []).some((a) => a.kind === 'image'))
     .map((r) => r.id);
   const inlineRows = new Set(imageRows.slice(-2));
+  // v0.6.5: 글자를 뽑지 못한 스캔본 PDF만 원본째로 보낸다(마지막 한 메시지로 제한 — 전송량 보호).
+  const pdfRow = [...ordered]
+    .reverse()
+    .find((r) => r.role === 'user' && (files[r.id] || []).some((a) => a.kind === 'pdf'))?.id;
   let textBudget = 24_000;
 
   return ordered.map((row) => {
@@ -1526,19 +1549,21 @@ function buildModelHistory(session: string): { role: 'user' | 'assistant'; conte
     const list = files[row.id] || [];
     const rawContent = withQuote(row);
     if (!list.length) return { role, content: rawContent };
-    const block = attachments.buildPromptBlock(
-      list.map((a) => a.id),
-      { images: inlineRows.has(row.id), maxChars: textBudget > 6000 ? 6000 : Math.max(800, textBudget) }
-    );
+    const block = attachments.buildPromptBlock(list.map((a) => a.id), {
+      images: inlineRows.has(row.id),
+      pdfFiles: row.id === pdfRow,
+      maxChars: textBudget > 6000 ? 6000 : Math.max(800, textBudget),
+    });
     textBudget = Math.max(0, textBudget - block.text.length);
     const content = `${rawContent}${block.text ? `\n\n[첨부]\n${block.text}` : ''}`;
-    if (!block.images.length) return { role, content };
+    if (!block.images.length && !block.documents.length) return { role, content };
     return {
       role,
       content,
       parts: [
         { type: 'text' as const, text: content },
         ...block.images.map((img) => ({ type: 'image' as const, mime: img.mime, dataBase64: img.dataBase64 })),
+        ...block.documents.map((doc) => ({ type: 'pdf' as const, mime: doc.mime, dataBase64: doc.dataBase64 })),
       ],
     };
   });
@@ -2132,14 +2157,96 @@ app.put('/api/settings/profile', requireAuth, (req, res) => {
     persona: normalizePersona(body.persona, current.persona),
     personaCustom:
       typeof body.personaCustom === 'string' ? body.personaCustom.slice(0, 200) : current.personaCustom,
+    // v0.6.5: 글꼴도 프로필에 저장한다(예전엔 이 라우트에서 빠져 있어 재진입하면 기본 글꼴로 돌아갔다)
+    font: normalizeFont(body.font, current.font),
   });
   res.json({ ok: true, profile: profile() });
 });
 
 /* ----------------------------- tools ----------------------------- */
 
+/**
+ * v0.6.6: 도구(스킬) 관리자 화면 데이터.
+ *  · tools   — 기존 '도구 목록' 카탈로그(호환 유지)
+ *  · groups  — 그룹별 내장 도구 목록(스위치용)
+ *  · prefs   — 꺼 둔 그룹·도구
+ */
 app.get('/api/tools', requireAuth, (_req, res) => {
-  res.json({ ok: true, tools: TOOL_CATALOG });
+  const prefs = readToolPrefs();
+  const catalog = new Map(TOOL_CATALOG.map((entry) => [entry.name, entry]));
+  const groups = TOOL_GROUP_META.map((group) => ({
+    ...group,
+    tools: TOOL_GROUPS[group.id].map((name) => {
+      const entry = catalog.get(name);
+      return {
+        name,
+        label: TOOL_LABELS[name] || entry?.label || name,
+        summary: entry?.summary || '',
+        example: entry?.example || '',
+      };
+    }),
+  }));
+  res.json({ ok: true, tools: TOOL_CATALOG, groups, prefs, disabledCount: disabledToolNames(prefs).size });
+});
+
+/** 기본 도구 ON/OFF 저장 */
+app.post('/api/tools/prefs', requireAuth, (req, res) => {
+  const body = (req.body ?? {}) as Partial<ToolPrefs>;
+  const prefs = saveToolPrefs({ disabledGroups: body.disabledGroups, disabledTools: body.disabledTools });
+  res.json({ ok: true, prefs, disabledCount: disabledToolNames(prefs).size });
+});
+
+/* ----------------------- 나만의 지침 도구(v0.6.6) ------------------ */
+
+app.get('/api/skills', requireAuth, (_req, res) => {
+  res.json({ ok: true, skills: skills.listSkills(), templates: skills.SKILL_TEMPLATES });
+});
+
+app.post('/api/skills', requireAuth, (req, res) => {
+  const result = skills.createSkill((req.body ?? {}) as skills.SkillInput);
+  if ('error' in result) {
+    res.status(400).json({ ok: false, code: 'invalid_skill', message: result.error });
+    return;
+  }
+  addLog('info', `지침 도구 추가 · ${result.name}`);
+  res.json({ ok: true, skill: result });
+});
+
+app.put('/api/skills/:id', requireAuth, (req, res) => {
+  const result = skills.updateSkill(String(req.params.id), (req.body ?? {}) as skills.SkillInput);
+  if (result === null) {
+    res.status(404).json({ ok: false, code: 'skill_not_found', message: '지침 도구를 찾을 수 없습니다.' });
+    return;
+  }
+  if ('error' in result) {
+    res.status(400).json({ ok: false, code: 'invalid_skill', message: result.error });
+    return;
+  }
+  res.json({ ok: true, skill: result });
+});
+
+app.delete('/api/skills/:id', requireAuth, (req, res) => {
+  const removed = skills.deleteSkill(String(req.params.id));
+  if (!removed) {
+    res.status(404).json({ ok: false, code: 'skill_not_found', message: '지침 도구를 찾을 수 없습니다.' });
+    return;
+  }
+  res.json({ ok: true });
+});
+
+/** 예시 템플릿 원클릭 추가 */
+app.post('/api/skills/templates/:id', requireAuth, (req, res) => {
+  const result = skills.addTemplate(String(req.params.id));
+  if ('error' in result) {
+    res.status(404).json({ ok: false, code: 'template_not_found', message: result.error });
+    return;
+  }
+  if ('existing' in result) {
+    res.json({ ok: true, existing: true, skill: result.existing });
+    return;
+  }
+  addLog('info', `지침 도구 템플릿 추가 · ${result.name}`);
+  res.json({ ok: true, existing: false, skill: result });
 });
 
 /* --------------------------- models ------------------------------- */
@@ -2847,16 +2954,19 @@ const server = app.listen(PORT, HOST, () => {
       // v0.6.3: 예약 실행에도 필요한 도구만 넘긴다(허용 목록이 있으면 그 안에서).
       const selection = selectToolNames({ userRequest: job.prompt });
       const allowedByJob = job.toolsAllow && job.toolsAllow.length ? job.toolsAllow : null;
-      const jobTools = TOOL_SPECS.filter((spec) => {
-        if (allowedByJob && !allowedByJob.includes(spec.name)) return false;
-        if (selection.tools && !selection.tools.includes(spec.name)) return false;
-        return true;
-      });
+      const jobTools = filterToolsByPrefs(
+        TOOL_SPECS.filter((spec) => {
+          if (allowedByJob && !allowedByJob.includes(spec.name)) return false;
+          if (selection.tools && !selection.tools.includes(spec.name)) return false;
+          return true;
+        }),
+        readToolPrefs()
+      );
       const loop = await runAgentLoop({
         provider: config.provider,
         apiKey,
         model: config.model,
-        system: `${systemPrompt()}\n\n[예약 실행]\n지금은 사용자가 대화하지 않은 채 깨어난 예약 실행입니다. 지시를 스스로 처리하고, 결과를 사용자가 바로 읽을 수 있게 3줄 이내로 요약하세요. 결제·게시·로그인처럼 사람이 해야 할 일은 하지 말고 "사람이 필요하다"고 적으세요.`,
+        system: `${systemPrompt('', skills.skillPromptBlock(job.prompt))}\n\n[예약 실행]\n지금은 사용자가 대화하지 않은 채 깨어난 예약 실행입니다. 지시를 스스로 처리하고, 결과를 사용자가 바로 읽을 수 있게 3줄 이내로 요약하세요. 결제·게시·로그인처럼 사람이 해야 할 일은 하지 말고 "사람이 필요하다"고 적으세요.`,
         history: [{ role: 'user', content: job.prompt }],
         tools: jobTools,
         maxSteps: job.maxSteps,

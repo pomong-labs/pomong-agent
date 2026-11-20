@@ -40,7 +40,7 @@ import {
 import { useAppStore } from '../lib/store';
 import { PERSONA_OPTIONS, personaExample } from '../lib/persona';
 import { ACCENT_CHOICES, CHARACTER_ACCENTS, applyTheme, normalizeHex } from '../lib/theme';
-import { FONT_OPTIONS, applyFont, type FontId } from '../lib/font';
+import { FONT_OPTIONS, applyFont, readStoredFont, type FontId } from '../lib/font';
 import PolicySection from '../components/PolicySection';
 
 /** VAPID 공개키(base64url) → Uint8Array (PushManager.subscribe에 필요) */
@@ -86,8 +86,8 @@ export default function SettingsPage() {
   const [theme, setTheme] = useState<ThemeMode>('light');
   const [accentMode, setAccentMode] = useState<AccentMode>('purple');
   const [accentColor, setAccentColor] = useState('#8B72F8');
-  /** v0.6.4: 앱 글꼴 */
-  const [font, setFont] = useState<FontId>('default');
+  /** v0.6.4: 앱 글꼴 — v0.6.5: 첫 페인트에 이미 적용된 글꼴(localStorage)에서 시작해 체크가 깜빡이지 않게 한다 */
+  const [font, setFont] = useState<FontId>(() => readStoredFont());
   /** v0.6.4: 설정 카테고리 탭 — 긴 스크롤 대신 한 묶음씩 보여 준다. */
   const [tab, setTab] = useState<'look' | 'ai' | 'mail' | 'system'>('look');
   /** v0.6.4: AI 프로바이더는 평소 1줄로 접어 두고 필요할 때 펼친다. */
@@ -142,7 +142,7 @@ export default function SettingsPage() {
         setTheme(r.profile.theme || 'light');
         setAccentMode(r.profile.accentMode || 'purple');
         setAccentColor(r.profile.accentColor || '#8B72F8');
-        setFont(r.profile.font || 'default');
+        setFont(r.profile.font === 'default' ? readStoredFont() : r.profile.font || 'default');
         setProvider(r.active.provider);
         setModel(r.active.model);
         setEffort(r.providers.find((p) => p.id === 'exaone')?.reasoningEffort || 'low');
@@ -546,8 +546,10 @@ export default function SettingsPage() {
   ];
 
   return (
-    <div ref={panelRef} className="pa-scroll h-full min-h-0 overflow-y-auto px-4 pb-8 pt-5 lg:px-10 lg:pt-9">
-      <div className="mx-auto w-full max-w-[720px]">
+    <div className="flex h-full min-h-0 flex-col">
+      {/* v0.6.6: 제목·카테고리 바는 스크롤 컨테이너 **밖에 고정** — 콘텐츠가 위로 삐져나오는 일이 원천적으로 없다 */}
+      <div className="shrink-0 px-4 pb-0.5 pt-5 lg:px-10 lg:pt-9">
+        <div className="mx-auto w-full max-w-[720px]">
         <header className="flex items-center gap-2">
           <BackButton />
           <div>
@@ -558,10 +560,8 @@ export default function SettingsPage() {
         </header>
 
         {/* v0.6.4: 카테고리 탭 — 한 번에 한 묶음만 보여 줘 긴 스크롤을 줄인다 */}
-        <div
-          className="sticky top-0 z-20 -mx-4 mt-4 px-4 py-2 backdrop-blur lg:-mx-10 lg:px-10"
-          style={{ background: 'color-mix(in srgb, var(--pa-surface) 88%, transparent)' }}
-        >
+        {/* v0.6.6: sticky를 걷어내고 스크롤 영역 밖 고정 헤더로 옮겼다. */}
+        <div className="mt-4">
           <div className="no-scrollbar flex gap-1.5 overflow-x-auto rounded-2xl bg-[#F6F4FB] p-1 dark:bg-[#232030]">
             {([
               { id: 'look' as const, label: '캐릭터·테마', icon: Palette },
@@ -590,6 +590,12 @@ export default function SettingsPage() {
             })}
           </div>
         </div>
+        </div>
+      </div>
+
+      {/* v0.6.6: 헤더 아래 콘텐츠만 스크롤된다 */}
+      <div ref={panelRef} className="pa-scroll mt-3 min-h-0 flex-1 overflow-y-auto px-4 pb-8 lg:px-10">
+        <div className="mx-auto w-full max-w-[720px]">
 
         {tab === 'look' ? (
           <>
@@ -1391,8 +1397,9 @@ export default function SettingsPage() {
         ) : null}
 
         <p className="mt-6 flex items-center justify-center gap-1.5 text-[12px] text-[#B4B1C2]">
-          <Sparkles size={12} /> Pomong Agent v{data?.version || '0.6.0'} · Pomong Labs
+          <Sparkles size={12} /> Pomong Agent v{data?.version || '0.6.6'} · Pomong Labs
         </p>
+        </div>
       </div>
     </div>
   );

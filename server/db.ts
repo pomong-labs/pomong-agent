@@ -59,6 +59,18 @@ CREATE TABLE IF NOT EXISTS logs (
   message    TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+
+/* v0.6.6: 나만의 지침 도구(커스텀 스킬) */
+CREATE TABLE IF NOT EXISTS custom_skills (
+  id           TEXT PRIMARY KEY,
+  name         TEXT NOT NULL,
+  keywords     TEXT NOT NULL DEFAULT '',
+  instructions TEXT NOT NULL,
+  always_on    INTEGER NOT NULL DEFAULT 0,
+  enabled      INTEGER NOT NULL DEFAULT 1,
+  created_at   TEXT NOT NULL,
+  updated_at   TEXT NOT NULL
+);
 `);
 
 /* ------------------------------------------------------------------ */
@@ -314,6 +326,13 @@ CREATE TABLE IF NOT EXISTS chat_attachments (
 CREATE INDEX IF NOT EXISTS idx_chat_attachments_message ON chat_attachments(message_id);
 CREATE INDEX IF NOT EXISTS idx_chat_attachments_session ON chat_attachments(session_id, created_at DESC);
 `);
+
+{
+  // v0.6.5: 첨부 파일(PDF)에서 뽑아 둔 본문 텍스트 캐시.
+  //   NULL = 아직 추출 안 함, '' = 추출했지만 글자가 없음(스캔본 등)
+  const attachCols = columnsOf('chat_attachments');
+  if (!attachCols.has('text_content')) db.exec('ALTER TABLE chat_attachments ADD COLUMN text_content TEXT');
+}
 
 
 /* ------------------------------------------------------------------ */
