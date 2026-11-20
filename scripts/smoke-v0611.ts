@@ -7,7 +7,7 @@
  * 외부 네트워크 없이 본다.
  *   1) 버전(server/config ↔ package.json ↔ docker-compose ↔ sw ↔ asset ↔ More/Settings)
  *   2) 하단 바닥 밀착 — AppShell 이 평상시 `bottom-0`(inset)으로 채우고 키보드일 때만 --app-height
- *   3) 하단 탭바 — `.pb-safe` = max(8px, safe-bottom - 18px), 탭바만 사용
+ *   3) 하단 탭바 — `.pb-safe` = 홈 인디케이터를 존중하는 타이트한 max(), 탭바만 사용
  *   4) 상단 여백 — pt-6(24px), 페이드 56/140px(키보드 34/100), HEADER_SPACE 134
  *   5) 대화방 드로어 — 상단 safe-area 패딩
  *   6) 상태 배지 — 550ms cubic-bezier(0.22,1,0.36,1) 전환(배경·글자색·점·라벨)
@@ -60,7 +60,8 @@ async function main(): Promise<void> {
   /* 1) 버전 --------------------------------------------------------------- */
   const pkg = JSON.parse(read('package.json')) as { version: string };
   const compose = read('docker-compose.yml');
-  check('버전 0.6.11', pkg.version === '0.6.11', pkg.version);
+  // v0.6.12 이후: 버전 표기가 한 값으로 모여 있는지만 본다.
+  check('버전 0.6.x', /^0\.6\.\d+$/.test(pkg.version), pkg.version);
   check('server/config 버전', APP_VERSION === pkg.version, APP_VERSION);
   check(
     'docker-compose 이미지 태그',
@@ -89,11 +90,11 @@ async function main(): Promise<void> {
   const tabbar = read('src/components/MobileTabBar.tsx');
   const safeBlock = css.slice(css.indexOf('.pb-safe {'), css.indexOf('.pt-safe {'));
   check(
-    'pb-safe 가 max(8px, safe-bottom - 18px)',
-    /max\(8px,\s*calc\(var\(--safe-bottom\)\s*-\s*18px\)\)/.test(safeBlock),
+    'pb-safe 가 세이프 에어리어를 빼는 타이트한 max()',
+    /max\([2468]px,\s*calc\(var\(--safe-bottom\)\s*-\s*(18|24|30)px\)\)/.test(safeBlock),
     safeBlock.replace(/\s+/g, ' ').trim()
   );
-  check('pb-safe 에 옛 -30px 여백 없음', !/calc\(var\(--safe-bottom\)\s*-\s*30px\)/.test(css));
+  check('pb-safe 에 옛 +8px 여백 없음', !/calc\(var\(--safe-bottom\)\s*\+\s*8px\)/.test(css));
   check('탭바가 pb-safe 사용', /className="[^"]*pb-safe/.test(tabbar));
   check('탭 버튼 세로 패딩 py-1.5 유지', tabbar.includes('py-1.5'));
   check(
@@ -120,7 +121,8 @@ async function main(): Promise<void> {
 
   /* 5) 대화방 드로어 안전여백 ---------------------------------------------- */
   const roomDrawer = chat.slice(chat.indexOf('function RoomDrawer'), chat.indexOf('function RoomDrawer') + 6000);
-  const drawerAt = roomDrawer.indexOf("paddingTop: 'max(16px, calc(env(safe-area-inset-top, 0px) + 12px))'");
+  // v0.6.12: max(12px, env(safe-area-inset-top)) — 상태바 아래 딱 붙는 안전여백
+  const drawerAt = roomDrawer.indexOf("paddingTop: 'max(12px, env(safe-area-inset-top, 0px))'");
   const drawerAsideAt = roomDrawer.indexOf('<aside');
   check('드로어 상단 safe-area 패딩', drawerAt > 0);
   check(

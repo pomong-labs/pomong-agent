@@ -614,12 +614,14 @@ export default function Browser() {
       {/* ---------- 전체화면(핸드오버) ---------- */}
       {session && viewerFull ? (
         <div
-          className="fixed inset-0 z-50 flex flex-col bg-[#0B0B12]"
+          className="fixed inset-0 z-50 flex flex-col overflow-hidden bg-[#0B0B12]"
           style={{
+            // v0.6.3: 노치 영역까지 화면으로 쓰되 내용은 가리지 않게
+            // v0.6.12: 100dvh 가 실제 보이는 높이보다 커지면 맨 아래 입력 바가 화면 밖으로 반쯤 잘렸다(IMG_3657).
+            // inset-0(뷰포트)보다 커지지 않게 maxHeight 로 묶고, 아래 세이프 에어리어 여백은 입력 바가 직접 갖는다.
             height: '100dvh',
-            // v0.6.3: 노치·홈 인디케이터 영역까지 화면으로 쓰되 내용은 가리지 않게
+            maxHeight: '100%',
             paddingTop: 'env(safe-area-inset-top)',
-            paddingBottom: 'env(safe-area-inset-bottom)',
           }}
         >
           <div className="flex shrink-0 items-center gap-1.5 border-b border-white/10 bg-[#12121C] px-2 py-1.5 text-white">
@@ -673,7 +675,11 @@ export default function Browser() {
             </button>
           </div>
           <div className="min-h-0 flex-1 overflow-hidden">{viewer}</div>
-          <div className="flex shrink-0 items-center gap-1.5 border-t border-white/10 bg-[#12121C] px-2 py-1.5">
+          {/* v0.6.12: 홈 인디케이터에 가리지 않게 입력 바가 직접 아래 여백을 갖는다(최소 14px). */}
+          <div
+            className="flex shrink-0 items-center gap-1.5 border-t border-white/10 bg-[#12121C] px-2 pt-1.5"
+            style={{ paddingBottom: 'max(14px, env(safe-area-inset-bottom, 0px))' }}
+          >
             <input
               className="min-w-0 flex-1 rounded-full bg-white/10 px-3 py-1.5 text-[16px] text-white placeholder-white/40 focus:outline-none focus:ring-1 focus:ring-[#C9B8FF]"
               placeholder="여기에 입력하면 화면으로 바로 들어가요 (한글 OK)"

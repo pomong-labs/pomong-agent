@@ -39,6 +39,7 @@ import ModelBar from '../components/ModelBar';
 import { StatsCard, TasksCard } from '../components/Cards';
 import { api, type ChatAttachment, type ChatMessage, type LoginRequest, type ChatSession, type MailDraftCard, type ReplyTarget, type TaskRun, type VaultUnlockRequest } from '../lib/api';
 import { formatClock, formatRoomStamp } from '../lib/format';
+import { subjectName } from '../lib/korean';
 import {
   dictationErrorMessage,
   dictationSupported,
@@ -74,6 +75,10 @@ function renderInline(text: string, keyPrefix: string) {
   });
 }
 
+/**
+ * v0.6.12: 비서 이름에 받침 유무에 맞는 주격 조사(이/가)를 붙인다.
+ * "라몽이 생각 중…", "퐁이가 생각 중…" 처럼 이름을 바꿔도 문장이 자연스럽게 읽힌다.
+ */
 export function RichText({ text }: { text: string }) {
   return (
     <div className="space-y-1.5 text-[15px] leading-[1.75] text-[#2A2A35] sm:text-[16px]">
@@ -351,7 +356,8 @@ export default function Chat() {
     if ((!draft.trim() && !pending.length) || sending || uploading) return;
     if (dictationRef.current) stopDictation();
     const ids = pending.map((p) => p.id);
-    void send(draft, ids, replyTo);
+    // v0.6.12: 낙관적 말풍선에 사진·파일을 바로 그리도록 첨부 뷰를 함께 넘긴다.
+    void send(draft, ids, replyTo, pending.map((p) => p.view));
     setReplyTo(null);
     setPending([]);
     setAttachError('');
@@ -386,11 +392,12 @@ export default function Chat() {
     submit();
   };
 
+  const agentName = profile.agentName || '포몽';
   const pendingLabel = recovering
     ? '연결을 다시 잇는 중…'
     : visibleState === 'working'
-      ? '포몽이 작업 중…'
-      : '포몽이 생각 중…';
+      ? `${subjectName(agentName)} 작업 중…`
+      : `${subjectName(agentName)} 생각 중…`;
 
   return (
     <div className="relative flex h-full min-h-0 flex-col">
@@ -453,7 +460,7 @@ export default function Chat() {
                         title="원본 메시지로 이동"
                       >
                         <span className="block text-[11px] font-bold text-[#7C63F6]">
-                          {m.replyTo.role === 'user' ? '나에게 답장' : '포몽에게 답장'}
+                          {m.replyTo.role === 'user' ? '나에게 답장' : `${agentName}에게 답장`}
                         </span>
                         <span className="mt-0.5 block truncate text-[12px] text-[#6B677A]">
                           {m.replyTo.content.replace(/\s+/g, ' ').slice(0, 90)}
@@ -575,7 +582,7 @@ export default function Chat() {
             <div className="mb-1.5 flex items-start gap-2 rounded-[16px] border-l-[3px] border-[#B9A8FF] bg-[#F7F5FF] px-3 py-2 shadow-[0_2px_10px_rgba(120,100,200,0.06)] dark:bg-[#221E30]">
               <div className="min-w-0 flex-1">
                 <p className="text-[11px] font-bold text-[#7C63F6]">
-                  {replyTo.role === 'user' ? '나에게 답장' : '포몽에게 답장'}
+                  {replyTo.role === 'user' ? '나에게 답장' : `${agentName}에게 답장`}
                 </p>
                 <p className="truncate text-[12.5px] text-[#6B677A]">
                   {replyTo.content.replace(/\s+/g, ' ').slice(0, 120) || '(첨부 파일)'}
@@ -1559,7 +1566,9 @@ function RoomDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
         className="relative flex h-full w-[86%] max-w-[330px] flex-col bg-[#FCFCFE] shadow-2xl animate-slide-right"
         style={{
           // v0.6.11: 드로어 상단 헤더가 iOS 상태바(시계·배터리) 흐림 영역에 닿지 않게 안전영역 안쪽으로 내린다.
-          paddingTop: 'max(16px, calc(env(safe-area-inset-top, 0px) + 12px))',
+          // v0.6.12: +12px 여백까지 더해 헤더가 너무 아래로 내려가 보여(IMG_3654), 상태바 아래 딱 붙는
+          // max(12px, safe-area-inset-top) 로 줄였다(약 12px 위로 올림).
+          paddingTop: 'max(12px, env(safe-area-inset-top, 0px))',
         }}
       >
         <div className="flex items-center justify-between border-b border-[#F1EFF8] px-4 py-3.5">

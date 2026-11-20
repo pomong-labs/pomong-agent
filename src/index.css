@@ -305,9 +305,11 @@ html.dark {
    * v0.6.11: 셸이 `bottom: 0` 으로 진짜 바닥까지 닿게 되면서, 홈 인디케이터 흰 바를 가리지 않을
    * 만큼만 다시 숨을 준다 — 세이프 에어리어에서 18px 을 빼서 아이폰(34px)은 16px,
    * 세이프 에어리어가 없는 기기(0px)에서는 8px. 탭 버튼은 바닥에 깔끔히 붙고 흰 바는 가리지 않는다.
+   * v0.6.12: 16px 도 아직 떠 보여 홈 인디케이터 바로 위에 찰싹 붙였다 — 세이프 에어리어에서 30px 을
+   * 빼서 아이폰(34px)은 4px, 세이프 에어리어가 없는 기기(0px)에서도 4px 만 남긴다.
    */
   .pb-safe {
-    padding-bottom: max(8px, calc(var(--safe-bottom) - 18px));
+    padding-bottom: max(4px, calc(var(--safe-bottom) - 30px));
   }
 
   .pt-safe {

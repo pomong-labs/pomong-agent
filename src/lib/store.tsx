@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import {
   api,
   ApiError,
+  type ChatAttachment,
   type ChatMessage,
   type ReplyTarget,
   type ChatSession,
@@ -75,7 +76,7 @@ interface AppStoreValue {
   deleteSession: (id: string) => Promise<void>;
   /** AI 답변·작업 중지 */
   stop: () => Promise<void>;
-  send: (text: string, attachmentIds?: string[], replyTo?: ReplyTarget | null) => Promise<void>;
+  send: (text: string, attachmentIds?: string[], replyTo?: ReplyTarget | null, attachmentViews?: ChatAttachment[]) => Promise<void>;
   clearChat: () => Promise<void>;
   draft: string;
   setDraft: (value: string) => void;
@@ -878,7 +879,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   );
 
   const send = useCallback(
-    async (text: string, attachmentIds?: string[], replyTo?: ReplyTarget | null) => {
+    async (text: string, attachmentIds?: string[], replyTo?: ReplyTarget | null, attachmentViews?: ChatAttachment[]) => {
       const content = text.trim();
       const ids = (attachmentIds || []).filter(Boolean);
       const session = activeSessionRef.current;
@@ -894,7 +895,9 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         role: 'user',
         content,
         meta: null,
-        attachments: [],
+        // v0.6.12: 낙관적 말풍선에도 보낸 첨부를 바로 넣는다. 예전에는 비워 두어 AI 답장이 끝나고
+        // 서버 메시지로 바뀔 때까지 사진·파일이 내 말풍선에 보이지 않았다(IMG_3649 → IMG_3650).
+        attachments: attachmentViews ?? [],
         replyTo: replyTo ? { id: replyTo.id, role: replyTo.role, content: replyTo.content, createdAt: replyTo.createdAt } : null,
         createdAt: new Date().toISOString(),
       };

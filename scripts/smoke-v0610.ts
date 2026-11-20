@@ -120,11 +120,12 @@ async function main(): Promise<void> {
   /* 4) 하단 탭바 — 바닥 밀착 ----------------------------------------------- */
   const css = read('src/index.css');
   const tabbar = read('src/components/MobileTabBar.tsx');
-  // v0.6.11: max(8px, safe-bottom - 18px) — "세이프 에어리어에서 빼는 타이트한 max()" 형태만 본다.
+  // v0.6.11: max(8px, safe-bottom - 18px) / v0.6.12: max(4px, safe-bottom - 30px)
+  // — "세이프 에어리어에서 빼는 타이트한 max()" 형태만 본다.
   const safeBlock = css.slice(css.indexOf('.pb-safe {'), css.indexOf('.pt-safe {'));
   check(
     'pb-safe 가 타이트한 max() 형태',
-    /max\([268]px,\s*calc\(var\(--safe-bottom\)\s*-\s*(18|24|30)px\)\)/.test(safeBlock),
+    /max\([2468]px,\s*calc\(var\(--safe-bottom\)\s*-\s*(18|24|30)px\)\)/.test(safeBlock),
     safeBlock.replace(/\s+/g, ' ').trim()
   );
   check('pb-safe 에 옛 -24px 여백 없음', !/calc\(var\(--safe-bottom\)\s*-\s*24px\)/.test(css));

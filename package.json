@@ -1,6 +1,6 @@
 {
   "name": "pomong-agent",
-  "version": "0.6.11",
+  "version": "0.6.12",
   "private": true,
   "description": "Pomong Agent — a self-hosted personal AI assistant OS with BYOK multi-LLM, server monitoring and an encrypted vault.",
   "license": "MIT",
