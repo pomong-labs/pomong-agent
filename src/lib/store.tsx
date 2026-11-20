@@ -101,7 +101,8 @@ const DEFAULT_PROFILE: Profile = {
   tone: 'polite',
   persona: 'default',
   personaCustom: '',
-  font: 'default',
+  // v0.6.4: 첫 페인트에 이미 칠해 둔 글꼴에서 시작해, 프로필을 받아 오기 전에 되돌아가지 않게 한다.
+  font: readStoredFont(),
 };
 
 /**
@@ -263,6 +264,8 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   const turnStart = runtime.startedAt;
   const error = runtime.error;
 
+  /** 전송 요청이 실제로 진행 중인 방 — 화면 반영(렌더) 전에 연타를 막는 동기 가드 */
+  const inFlightRef = useRef<Set<string>>(new Set());
   const runtimeRef = useRef(runtimeBySession);
   runtimeRef.current = runtimeBySession;
   const messagesRef = useRef(messagesBySession);
@@ -297,7 +300,10 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   }, []);
 
   /** 그 방이 지금 작업 중인지(전역 1개가 아니라 방별) */
-  const isSending = useCallback((session: string) => Boolean(runtimeRef.current[session]?.sending), []);
+  const isSending = useCallback(
+    (session: string) => inFlightRef.current.has(session) || Boolean(runtimeRef.current[session]?.sending),
+    []
+  );
 
   const setImmersive = useCallback((value: boolean) => setImmersiveState(value), []);
   /** 연결 복구 루프 세대 번호 — 값이 바뀌면 진행 중이던 복구를 버린다 */
@@ -867,6 +873,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       const ids = (attachmentIds || []).filter(Boolean);
       const session = activeSessionRef.current;
       if ((!content && !ids.length) || isSending(session)) return;
+      inFlightRef.current.add(session);
       patchRuntime(session, { sending: true, recovering: false, startedAt: Date.now(), error: '' });
       setDraft('');
       // 끊겼을 때 "이 요청 전에 있던 마지막 메시지"를 기준점으로 삼아 새 답장을 가려낸다.
@@ -924,6 +931,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         // 서버에는 내 메시지가 이미 저장돼 있을 수 있으니 실제 저장본으로 맞춘다.
         void loadMessages(session);
       } finally {
+        inFlightRef.current.delete(session);
         if (!handedOff) {
           patchRuntime(session, { sending: false, recovering: false, liveTask: null, startedAt: null });
         }

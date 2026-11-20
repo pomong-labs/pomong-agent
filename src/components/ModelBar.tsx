@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Check, ChevronDown, ChevronLeft, KeyRound, MoreHorizontal, Sparkles, X } from 'lucide-react';
 import { useAppStore } from '../lib/store';
@@ -47,11 +47,6 @@ export default function ModelBar() {
     };
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
-  }, [open]);
-
-  /** 펼친 상태에서 다른 모델을 고르면 다시 컴팩트하게 접는다. */
-  useLayoutEffect(() => {
-    if (open) setExpanded(true);
   }, [open]);
 
   const active = models?.active;
