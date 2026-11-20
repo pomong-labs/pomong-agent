@@ -1397,7 +1397,7 @@ export default function SettingsPage() {
         ) : null}
 
         <p className="mt-6 flex items-center justify-center gap-1.5 text-[12px] text-[#B4B1C2]">
-          <Sparkles size={12} /> Pomong Agent v{data?.version || '0.6.7'} · Pomong Labs
+          <Sparkles size={12} /> Pomong Agent v{data?.version || '0.6.8'} · Pomong Labs
         </p>
         </div>
       </div>

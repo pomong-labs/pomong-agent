@@ -56,8 +56,8 @@ async function main(): Promise<void> {
   /* 1) 버전 --------------------------------------------------------------- */
   const pkg = JSON.parse(read('package.json')) as { version: string };
   const compose = read('docker-compose.yml');
-  check('server/config 버전', APP_VERSION === '0.6.7', APP_VERSION);
-  check('package.json 버전', pkg.version === '0.6.7', pkg.version);
+  check('server/config 버전', APP_VERSION === pkg.version, APP_VERSION);
+  check('package.json 버전', /^0\.6\.\d+$/.test(pkg.version), pkg.version);
   check(
     'docker-compose 이미지 태그',
     compose.includes(`pomong-agent:${pkg.version}`) && compose.includes(`pomong-agent-browser:${pkg.version}`)

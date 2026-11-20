@@ -187,7 +187,8 @@ async function main(): Promise<void> {
   check('--pa-top 계산 함수', theme.includes('export function topSurfaceColor') && theme.includes("'--pa-top': topSurfaceColor(accent, 'light')"));
   check('theme-color를 --pa-top으로', theme.includes("meta.setAttribute('content', top)"));
   check('html/body 배경이 --pa-top', css.includes('background: var(--pa-top)') && (css.match(/--pa-top/g) || []).length >= 2);
-  check('첫 페인트 스크립트도 --pa-top', html.includes("s.vars['--pa-top']"));
+  // v0.6.7 마무리: 첫 페인이 저장된 틴트 값 대신 모드에서 표면색을 바로 심는다.
+  check('첫 페인트 스크립트도 --pa-top', html.includes("setProperty('--pa-top', top)"));
   // v0.6.7: 정적 메타 하나 → 라이트/다크 media 메타 2개.
   check(
     '라이트·다크 theme-color 메타',

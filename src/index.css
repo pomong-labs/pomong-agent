@@ -294,8 +294,13 @@ html.dark {
 }
 
 @layer utilities {
+  /*
+   * v0.6.8: 하단 탭바 전용(MobileTabBar). 세이프 에어리어(아이폰 34px)를 그대로 더하면
+   * 탭 버튼 아래로 빈 공간이 42px씩 남아 화면이 떠 보였다. 홈 인디케이터(약 5px) 바로
+   * 위까지만 남기고, 세이프 에어리어가 없는 기기(0px)에서도 10px 은 유지한다.
+   */
   .pb-safe {
-    padding-bottom: calc(var(--safe-bottom) + 8px);
+    padding-bottom: max(10px, calc(var(--safe-bottom) - 14px));
   }
 
   .pt-safe {

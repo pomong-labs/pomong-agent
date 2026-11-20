@@ -85,12 +85,30 @@ function RequireAuth() {
   return <Outlet />;
 }
 
+/**
+ * v0.6.8: iOS 홈 화면 앱(standalone)인지.
+ * 이 경우 iOS가 `apple-touch-startup-image` 네이티브 스플래시를 먼저 보여 주므로
+ * React 스플래시까지 뜨면 같은 화면이 두 번 연속 나온다.
+ */
+function standalonePwa(): boolean {
+  if (typeof window === 'undefined') return false;
+  const iosStandalone = (window.navigator as Navigator & { standalone?: boolean }).standalone;
+  const displayMode = typeof window.matchMedia === 'function' && window.matchMedia('(display-mode: standalone)').matches;
+  return Boolean(displayMode || iosStandalone);
+}
+
+/** 스플래시: 620ms 보여 주고 300ms 동안 사라진다 */
+const SPLASH_FADE_MS = 620;
+const SPLASH_DONE_MS = 940;
+
 export default function App() {
-  /** 스플래시: 620ms 보여 주고 300ms 동안 사라진다 */
-  const [splash, setSplash] = useState<'show' | 'fading' | 'done'>('show');
+  /** PWA 실행이면 이미 네이티브 스플래시가 떴다 — 처음부터 'done'으로 시작해 건너뛴다 */
+  const [splash, setSplash] = useState<'show' | 'fading' | 'done'>(() => (standalonePwa() ? 'done' : 'show'));
+
   useEffect(() => {
-    const fade = window.setTimeout(() => setSplash('fading'), 620);
-    const done = window.setTimeout(() => setSplash('done'), 940);
+    if (standalonePwa()) return;
+    const fade = window.setTimeout(() => setSplash('fading'), SPLASH_FADE_MS);
+    const done = window.setTimeout(() => setSplash('done'), SPLASH_DONE_MS);
     return () => {
       window.clearTimeout(fade);
       window.clearTimeout(done);
