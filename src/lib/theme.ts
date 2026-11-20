@@ -144,16 +144,19 @@ export function accentBaseFor(settings: Pick<ThemeSettings, 'accentMode' | 'acce
   return PURPLE_ACCENT;
 }
 
-const DARK_SURFACE = '#1B1923';
-const LIGHT_SURFACE = '#FFFFFF';
+/** 실제 `--pa-surface`(src/index.css)와 반드시 같은 값이어야 한다. */
+export const LIGHT_SURFACE = '#FFFFFF';
+export const DARK_SURFACE = '#1B1923';
 
 /**
- * v0.6.6: 앱 맨 위(아이폰 상태바 바로 아래) 색.
- * 표면색에 캐릭터 포인트 컬러를 아주 살짝 섞어, 상태바·앱 배경·채팅 상단 페이드가
- * **완전히 같은 한 가지 색**이 되게 한다(색 띠·경계선 제거).
+ * v0.6.7: 앱 맨 위(아이폰 상태바 바로 아래) 색 = 본문 표면색(`--pa-surface`)과 **정확히 같은 HEX**.
+ *
+ * v0.6.6까지는 표면색에 캐릭터 포인트 컬러를 3.5%(다크 5%) 섞은 값을 썼다. 그래서 아이폰 상태바
+ * (safe-area-inset-top)와 그 아래 본문 배경의 색이 미세하게 달라, 경계에 색 띠가 한 줄 보였다(IMG_3637).
+ * 이제 두 값이 같은 문자열이라 어떤 포인트 컬러에서도 띠·경계선이 생기지 않는다.
  */
-export function topSurfaceColor(base: string, mode: 'light' | 'dark'): string {
-  return mode === 'dark' ? mix(DARK_SURFACE, base, 0.05) : mix(LIGHT_SURFACE, base, 0.035);
+export function topSurfaceColor(_base: string | undefined, mode: 'light' | 'dark'): string {
+  return mode === 'dark' ? DARK_SURFACE : LIGHT_SURFACE;
 }
 
 /**
@@ -197,6 +200,17 @@ export function accentVars(base: string, mode: 'light' | 'dark'): Record<string,
     '--bubble-user': `linear-gradient(135deg, ${mix(accent, LIGHT_SURFACE, 0.8)} 0%, ${mix(accent, LIGHT_SURFACE, 0.88)} 100%)`,
     '--pa-top': topSurfaceColor(accent, 'light'),
   };
+}
+
+/**
+ * v0.6.7: `index.html`에는 라이트/다크용 `theme-color` 메타가 media 쿼리로 두 개 있다.
+ * 저장된 테마가 기기 설정과 다를 수 있으므로, 화면에 적용한 색을 모든 메타에 같이 써 준다.
+ */
+export function syncThemeColor(top: string): void {
+  if (typeof document === 'undefined') return;
+  document.querySelectorAll('meta[name="theme-color"]').forEach((meta) => {
+    meta.setAttribute('content', top);
+  });
 }
 
 export const THEME_STORAGE_KEY = 'pomong.theme';
@@ -266,10 +280,9 @@ export function applyTheme(settings: ThemeSettings): { resolved: 'light' | 'dark
   lastApplied = settings;
   storeTheme(settings, resolved, vars);
   // iOS 상태 표시줄·주소창 색도 테마에 맞춘다.
-  // v0.6.6: 상태바 색을 '앱 맨 위 색(--pa-top)'과 정확히 같게 맞춰 색 띠가 생기지 않게 한다.
+  // v0.6.7: 상태바 색 = 본문 표면색(--pa-surface)과 같은 값. media 쿼리로 나뉜 메타도 **모두** 맞춘다.
   const top = vars['--pa-top'];
-  const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute('content', top);
+  syncThemeColor(top);
   // 상태바(노치) 아래까지 같은 배경으로 칠해 다크모드에 흰 띠가 남지 않게 한다.
   root.style.backgroundColor = top;
   if (document.body) document.body.style.backgroundColor = top;

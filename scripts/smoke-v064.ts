@@ -50,9 +50,8 @@ async function main(): Promise<void> {
   /* 1) 버전 --------------------------------------------------------------- */
   const pkg = JSON.parse(read('package.json')) as { version: string };
   const compose = read('docker-compose.yml');
-  check('server/config 버전', APP_VERSION === '0.6.6', APP_VERSION);
-  check('package.json 버전', pkg.version === '0.6.6', pkg.version);
-  check('docker-compose 이미지 태그', compose.includes('pomong-agent:0.6.6') && compose.includes('pomong-agent-browser:0.6.6'));
+  check('server/config 버전', APP_VERSION === pkg.version, APP_VERSION);
+  check('docker-compose 이미지 태그', compose.includes(`pomong-agent:${pkg.version}`) && compose.includes(`pomong-agent-browser:${pkg.version}`));
 
   /* 2) 메시지 병합 -------------------------------------------------------- */
   type Msg = Parameters<typeof mergeMessages>[0][number];

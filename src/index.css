@@ -43,8 +43,8 @@
   --pa-surface: #ffffff;
   --pa-surface-2: #fcfcfe;
   --pa-surface-3: #faf9fd;
-  /* v0.6.6: 앱 맨 위(상태바 아래) 색 — 표면 + 포인트 컬러 틴트. theme.ts가 정확한 값으로 덮어쓴다. */
-  --pa-top: #fbfaff;
+  /* v0.6.7: 앱 맨 위(상태바 아래) 색 = 표면색과 정확히 같은 값. theme.ts가 이 값을 그대로 다시 심는다. */
+  --pa-top: #ffffff;
   --pa-line: #e9e7f2;
   --pa-line-soft: #f6f4fb;
   --pa-ink: #2a2a35;
@@ -91,7 +91,8 @@ html.dark {
   --pa-surface: #1b1923;
   --pa-surface-2: #17151f;
   --pa-surface-3: #232030;
-  --pa-top: #211d2e;
+  /* v0.6.7: 다크에서도 상태바·본문 배경이 같은 값 */
+  --pa-top: #1b1923;
   --pa-line: #332e42;
   --pa-line-soft: #2a2636;
   --pa-ink: #edeaf6;
@@ -118,6 +119,15 @@ html.dark {
     /* v0.6.6: html 배경도 앱 맨 위 색으로 — 상태바와 화면 사이 색 경계를 없앤다 */
     background: var(--pa-top);
     overscroll-behavior: none;
+  }
+
+  /*
+   * v0.6.7: 앱 셸의 위치 보정은 키보드가 화면을 밀어 올렸을 때(html.pa-shifted)만 한다.
+   * 평상시에도 translate3d(0,0,0)을 걸어 두면 그 transform이 iOS PWA의 fixed 뷰포트를
+   * 별도 합성 레이어로 띄워 상태바 영역과 어긋나며 흰 띠가 드러났다. 오프셋이 0이면 아예 걸지 않는다.
+   */
+  html.pa-shifted .pa-app-shell {
+    transform: translate3d(var(--app-offset-x, 0px), var(--app-offset, 0px), 0);
   }
 
   #root {

@@ -14,7 +14,7 @@ import { AGENT_STATE_META, type AgentState, useAppStore } from '../lib/store';
  * - 아이콘–이름–배지 세로 간격을 6·4px로 좁혀 헤더 전체 높이를 슬림하게 만들었다.
  * - 페이드의 불투명 구간을 이름·배지가 끝나는 높이까지 넉넉히 덮어, 뒤쪽 말풍선 글씨가
  *   이름·배지 뒤로 비쳐 보이지 않게 했다.
- * - 페이드 시작색은 시스템 상태바와 같은 `--pa-top` 이라 위아래 색 경계가 보이지 않는다.
+ * - 페이드 시작색은 본문 배경과 같은 `--pa-surface`(= 상태바 색)라 위아래 색 경계가 보이지 않는다.
  *
  * - 좌우 버튼은 `absolute` 로 두어 가운데(캐릭터·이름·배지)가 화면 정중앙에 온다.
  * - 헤더 전체는 `pointer-events-none` 이라 그 위에서도 채팅 스크롤이 그대로 먹고,
@@ -55,13 +55,13 @@ export default function AppHeader({
 
   return (
     <header className="pointer-events-none absolute inset-x-0 top-0 z-30">
-      {/* 상단 페이드 — 맨 위는 시스템 상태바와 같은 색(--pa-top), 아래로 갈수록 투명해져
+      {/* 상단 페이드 — 맨 위는 본문 배경·상태바와 같은 색(--pa-surface), 아래로 갈수록 투명해져
           메시지가 스며들 듯 사라진다. 이름·배지가 끝나는 높이까지는 불투명하게 덮는다. */}
       <div
         className="pointer-events-none absolute inset-x-0 top-0"
         style={{
           height: fadeHeight,
-          background: `linear-gradient(to bottom, var(--pa-top) 0px, var(--pa-top) ${fadeSolid}px, transparent ${fadeHeight}px)`,
+          background: `linear-gradient(to bottom, var(--pa-surface) 0px, var(--pa-surface) ${fadeSolid}px, transparent ${fadeHeight}px)`,
         }}
         aria-hidden
       />
@@ -162,7 +162,7 @@ export default function AppHeader({
                   right: compact ? 0 : -1,
                   bottom: compact ? 0 : -1,
                   background: meta.dot,
-                  boxShadow: '0 0 0 2.5px var(--pa-top)',
+                  boxShadow: '0 0 0 2.5px var(--pa-surface)',
                 }}
                 aria-hidden
               />

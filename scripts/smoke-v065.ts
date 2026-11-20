@@ -69,11 +69,10 @@ async function main(): Promise<void> {
   /* 1) 버전 --------------------------------------------------------------- */
   const pkg = JSON.parse(read('package.json')) as { version: string };
   const compose = read('docker-compose.yml');
-  check('server/config 버전', APP_VERSION === '0.6.6', APP_VERSION);
-  check('package.json 버전', pkg.version === '0.6.6', pkg.version);
-  check('docker-compose 이미지 태그', compose.includes('pomong-agent:0.6.6') && compose.includes('pomong-agent-browser:0.6.6'));
-  check('서비스 워커 캐시 버전', read('public/sw.js').includes("pomong-agent-v0.6.6"));
-  check('에셋 캐시 버전', ASSET_VERSION === '0.6.6', ASSET_VERSION);
+  check('server/config 버전', APP_VERSION === pkg.version, APP_VERSION);
+  check('docker-compose 이미지 태그', compose.includes(`pomong-agent:${pkg.version}`) && compose.includes(`pomong-agent-browser:${pkg.version}`));
+  check('서비스 워커 캐시 버전', read('public/sw.js').includes(`pomong-agent-v${pkg.version}`));
+  check('에셋 캐시 버전', ASSET_VERSION === pkg.version, ASSET_VERSION);
 
   /* 2) 설정 카테고리 바 — v0.6.6에서 스크롤 밖 고정 헤더로 변경 ---------- */
   const settings = read('src/pages/Settings.tsx');
@@ -100,13 +99,14 @@ async function main(): Promise<void> {
   const chat = read('src/pages/Chat.tsx');
   const css = read('src/index.css');
   check('상단바가 겹쳐 뜨는 오버레이', header.includes('pointer-events-none absolute inset-x-0 top-0 z-30'));
-  check('상단 페이드 그라데이션', header.includes('linear-gradient(to bottom, var(--pa-top) 0px'));
+  // v0.6.7: 페이드 시작색은 본문 표면색(--pa-surface). --pa-top 과 같은 값이라 경계가 없다.
+  check('상단 페이드 그라데이션', header.includes('linear-gradient(to bottom, var(--pa-surface) 0px'));
   check('불투명 박스·하단 경계선 제거', !header.includes('border-b border-[#F4F2FA]') && !header.includes('bg-[#FCFCFE]/95'));
   check('좌우 버튼은 유리(pa-glass)', header.includes('pa-glass') && css.includes('.pa-glass'));
   check('유리 캡슐 안 구분선', header.includes("background: 'var(--pa-line)'") && header.includes('h-3.5 w-px'));
   check('캐릭터 아바타(48px · v0.6.6 축소)', header.includes('const avatar = compact ? 34 : 48'));
   check('은은한 원형 링', header.includes('--pa-line) 45%') && header.includes('radial-gradient('));
-  check('우측 하단 상태 점', header.includes('boxShadow: \'0 0 0 2.5px var(--pa-top)\''));
+  check('우측 하단 상태 점', header.includes('boxShadow: \'0 0 0 2.5px var(--pa-surface)\''));
   check('아이콘·이름 사이 간격 축소', header.includes('mt-1.5 text-[15px]'));
   check('채팅 리스트 상단 여백 확보', chat.includes('HEADER_SPACE.normal') && chat.includes('HEADER_SPACE.compact'));
 

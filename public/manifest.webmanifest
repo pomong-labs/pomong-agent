@@ -4,8 +4,8 @@
   "description": "내 서버에 설치하는 개인 AI 비서 · BYOK 멀티 LLM, 서버 관제, 암호화 금고",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#FBFBFD",
-  "theme_color": "#FBFBFD",
+  "background_color": "#FFFFFF",
+  "theme_color": "#FFFFFF",
   "lang": "ko",
   "icons": [
     {

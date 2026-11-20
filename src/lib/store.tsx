@@ -180,6 +180,8 @@ function useVisualViewport(): boolean {
       root.style.setProperty('--app-offset', `${Math.round(offsetTop)}px`);
       root.style.setProperty('--app-offset-x', `${Math.round(offsetLeft)}px`);
       root.classList.toggle('kb-open', open);
+      // v0.6.7: 화면이 실제로 밀린 경우에만 셸을 translate 한다(평상시 transform은 iOS PWA 상태바에 흰 띠를 만든다).
+      root.classList.toggle('pa-shifted', Math.abs(offsetTop) >= 1 || Math.abs(offsetLeft) >= 1);
       // 키보드가 닫혀 있을 때만 기준 높이를 갱신한다(키보드 높이를 기준으로 굳지 않게).
       if (!open) measureBaseline();
       setKbOpen(open);

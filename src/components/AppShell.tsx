@@ -28,12 +28,13 @@ export default function AppShell() {
 
   return (
     <div
-      className="fixed inset-x-0 top-0 w-full bg-[#F6F6FA] lg:p-4"
+      className="pa-app-shell fixed inset-x-0 top-0 w-full bg-[#F6F6FA] lg:p-4"
       style={{
         height: 'var(--app-height, 100%)',
         background: 'var(--pa-bg)',
-        // iOS가 키보드 때문에 화면을 밀어 올린 만큼(visualViewport.offsetTop) 셸도 따라 올린다.
-        transform: 'translate3d(var(--app-offset-x, 0px), var(--app-offset, 0px), 0)',
+        // v0.6.7: 키보드가 화면을 밀어 올린 만큼(visualViewport.offsetTop) 셸을 따라 올리는 transform은
+        // `html.pa-shifted`일 때만 CSS(index.css)가 건다. 오프셋이 0인 평상시에 transform을 걸어 두면
+        // iOS PWA의 fixed 뷰포트가 상태바와 어긋나 흰 띠가 드러나기 때문이다.
       }}
     >
       <div
@@ -73,10 +74,10 @@ export default function AppShell() {
         <main
           className="relative flex min-w-0 flex-1 flex-col bg-[#FCFCFE]"
           style={{
-            // v0.6.6: 상태바(노치) 높이는 앱 맨 위 색(--pa-top)으로 칠하고, 그 아래 60px에 걸쳐 표면색으로
-            // 부드럽게 넘어간다. 상태바·html 배경·채팅 페이드 시작색이 모두 --pa-top 한 값이라 색 띄가 없다.
-            background:
-              'linear-gradient(to bottom, var(--pa-top) 0, var(--pa-top) env(safe-area-inset-top, 0px), var(--pa-surface) calc(env(safe-area-inset-top, 0px) + 60px))',
+            // v0.6.7: 본문 배경과 상태바 영역을 **같은 단일 색**으로 칠한다.
+            // v0.6.6까지는 상태바 아래 60px에 걸쳐 표면색으로 넘어가는 그라데이션이 있어,
+            // 경계 위치에 따라 미세한 색 띠가 보일 수 있었다(IMG_3637). 이제 그라데이션 없이 한 색이다.
+            background: 'var(--pa-surface)',
           }}
         >
           <div

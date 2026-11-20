@@ -51,14 +51,13 @@ async function main(): Promise<void> {
   /* 1) 버전 --------------------------------------------------------------- */
   const pkg = JSON.parse(read('package.json')) as { version: string };
   const compose = read('docker-compose.yml');
-  check('server/config 버전', APP_VERSION === '0.6.6', APP_VERSION);
-  check('package.json 버전', pkg.version === '0.6.6', pkg.version);
+  check('server/config 버전', APP_VERSION === pkg.version, APP_VERSION);
   check(
     'docker-compose 이미지 태그',
-    compose.includes('pomong-agent:0.6.6') && compose.includes('pomong-agent-browser:0.6.6')
+    compose.includes(`pomong-agent:${pkg.version}`) && compose.includes(`pomong-agent-browser:${pkg.version}`)
   );
-  check('서비스 워커 캐시 버전', read('public/sw.js').includes('pomong-agent-v0.6.6'));
-  check('에셋 캐시 버전', ASSET_VERSION === '0.6.6', ASSET_VERSION);
+  check('서비스 워커 캐시 버전', read('public/sw.js').includes(`pomong-agent-v${pkg.version}`));
+  check('에셋 캐시 버전', ASSET_VERSION === pkg.version, ASSET_VERSION);
 
   /* 2) 기본 도구 ON/OFF --------------------------------------------------- */
   const normalized = toolFilter.normalizeToolPrefs({
@@ -177,7 +176,8 @@ async function main(): Promise<void> {
   check('이름–배지 간격 축소', header.includes("mt-1 text-[15px]") === false || header.includes('mt-1 gap-1.5 px-2.5'));
   check('헤더 높이 상수를 공유', header.includes('export const HEADER_SPACE') && chat.includes('HEADER_SPACE.normal'));
   check('페이드가 이름·배지까지 불투명', header.includes('const fadeSolid = compact ? 70 : 112'));
-  check('페이드 시작색이 상태바 색', header.includes('linear-gradient(to bottom, var(--pa-top) 0px'));
+  // v0.6.7: 페이드 시작색이 상태바가 아니라 본문 표면색(--pa-surface)이 되었다(두 값은 같다).
+  check('페이드 시작색이 본문 표면색', header.includes('linear-gradient(to bottom, var(--pa-surface) 0px'));
 
   /* 7) 화면 — 상태바 색 통일 ---------------------------------------------- */
   const theme = read('src/lib/theme.ts');
@@ -188,8 +188,16 @@ async function main(): Promise<void> {
   check('theme-color를 --pa-top으로', theme.includes("meta.setAttribute('content', top)"));
   check('html/body 배경이 --pa-top', css.includes('background: var(--pa-top)') && (css.match(/--pa-top/g) || []).length >= 2);
   check('첫 페인트 스크립트도 --pa-top', html.includes("s.vars['--pa-top']"));
-  check('정적 theme-color 기본값', html.includes('<meta name="theme-color" content="#FBFAFF" />'));
-  check('세이프 에어리어 띠를 같은 색으로', shell.includes('env(safe-area-inset-top, 0px)') && shell.includes('var(--pa-top) 0'));
+  // v0.6.7: 정적 메타 하나 → 라이트/다크 media 메타 2개.
+  check(
+    '라이트·다크 theme-color 메타',
+    html.includes('media="(prefers-color-scheme: light)"') && html.includes('media="(prefers-color-scheme: dark)"')
+  );
+  // v0.6.7: 세이프 에어리어 아래 그라데이션을 없애고 본문 배경 단일 색으로 통일했다.
+  check(
+    '세이프 에어리어 띠를 같은 색으로',
+    shell.includes("background: 'var(--pa-surface)'") && !shell.includes('env(safe-area-inset-top, 0px) + 60px')
+  );
 
   /* 8) 화면 — 설정 카테고리 고정 헤더 -------------------------------------- */
   const settings = read('src/pages/Settings.tsx');

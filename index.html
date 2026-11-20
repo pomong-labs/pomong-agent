@@ -9,7 +9,30 @@
     />
     <title>Pomong Agent</title>
     <meta name="description" content="Pomong Agent — 내 서버에 설치하는 개인 AI 비서. BYOK 멀티 LLM, 서버 관제, 암호화 금고." />
-    <meta name="theme-color" content="#FBFAFF" />
+    <!--
+      v0.6.7: 상태바 색을 기기 설정(라이트/다크)에 맞춰 **두 메타**로 나눴다.
+      값은 본문 표면색(--pa-surface)과 같은 #FFFFFF / #1B1923 이다. 저장된 테마가 기기 설정과 다르면
+      아래 첫 페인트 스크립트가 모든 theme-color 메타를 저장된 색으로 다시 맞춘다.
+    -->
+    <meta name="theme-color" content="#FFFFFF" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#1B1923" media="(prefers-color-scheme: dark)" />
+    <!--
+      v0.6.7: 콜드 스타트·백그라운드 복귀 순간에 흰 띠가 비치지 않도록, CSS가 오기 전 첫 페인트부터
+      기기 설정에 맞는 배경으로 칠해 둔다(저장된 테마가 있으면 바로 아래 스크립트가 인라인으로 덮어쓴다).
+    -->
+    <style>
+      html,
+      body {
+        background-color: #ffffff;
+      }
+      @media (prefers-color-scheme: dark) {
+        html,
+        body {
+          background-color: #1b1923;
+          color-scheme: dark;
+        }
+      }
+    </style>
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
     <!-- v0.6.3: 다크모드에서 iOS 상태바 영역이 흰 띠로 남지 않도록 화면 전체를 덮는 방식 -->
@@ -68,15 +91,14 @@
               root.style.setProperty(key, s.vars[key]);
             });
           }
-          var meta = document.querySelector('meta[name="theme-color"]');
-          // v0.6.6: 상태바 색 = 앱 맨 위 색(--pa-top). 저장된 테마가 계산해 둔 값을 그대로 쓴다.
-          var top =
-            s.vars && typeof s.vars['--pa-top'] === 'string'
-              ? s.vars['--pa-top']
-              : mode === 'dark'
-                ? '#211D2E'
-                : '#FBFAFF';
-          if (meta) meta.setAttribute('content', top);
+          // v0.6.7: 상태바 색 = 본문 표면색(--pa-surface) = 라이트 #FFFFFF / 다크 #1B1923.
+          // v0.6.6까지 저장된 vars 의 --pa-top 은 포인트 컬러를 섞은 옛 값이라 쓰지 않고,
+          // 모드에서 바로 정해 덮어쓴다(업데이트 직후 콜드 스타트에 옛 틴트가 비치지 않게).
+          var top = mode === 'dark' ? '#1B1923' : '#FFFFFF';
+          root.style.setProperty('--pa-top', top);
+          // media 쿼리로 나뉜 theme-color 메타가 둘이므로 전부 맞춘다.
+          var metas = document.querySelectorAll('meta[name="theme-color"]');
+          for (var i = 0; i < metas.length; i += 1) metas[i].setAttribute('content', top);
           root.style.backgroundColor = top;
         } catch (e) {
           /* 테마 정보가 없거나 깨졌으면 기본 라이트로 둔다 */
