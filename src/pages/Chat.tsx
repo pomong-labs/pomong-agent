@@ -1555,7 +1555,13 @@ function RoomDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-40 flex" role="dialog" aria-label="대화방 목록">
       <div className="absolute inset-0 bg-[#1F1D2B]/35 backdrop-blur-sm" onClick={onClose} />
-      <aside className="relative flex h-full w-[86%] max-w-[330px] flex-col bg-[#FCFCFE] shadow-2xl animate-slide-right">
+      <aside
+        className="relative flex h-full w-[86%] max-w-[330px] flex-col bg-[#FCFCFE] shadow-2xl animate-slide-right"
+        style={{
+          // v0.6.11: 드로어 상단 헤더가 iOS 상태바(시계·배터리) 흐림 영역에 닿지 않게 안전영역 안쪽으로 내린다.
+          paddingTop: 'max(16px, calc(env(safe-area-inset-top, 0px) + 12px))',
+        }}
+      >
         <div className="flex items-center justify-between border-b border-[#F1EFF8] px-4 py-3.5">
           <span className="flex items-center gap-2 text-[15px] font-bold text-[#1F1D2B]">
             <MessageSquare size={17} className="text-[#7C63F6]" /> 대화방

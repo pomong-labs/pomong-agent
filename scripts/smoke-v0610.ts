@@ -4,6 +4,9 @@
  *   npx tsx scripts/smoke-v0610.ts
  *
  * 이름·상태 배지 유리 박스 묶기 + 하단 탭바 바닥 밀착 + 상단 요소 조금 더 내리기 검증. 외부 네트워크 없이 본다.
+ * v0.6.11 이후: 이 파일은 **0.6.10 스모크의 회귀 항목**만 본다. 버전·패딩·페이드·탭바 여백처럼
+ * 릴리스마다 값이 따라 움직이는 체크는 다음 버전과 충돌하지 않게 범위/패턴으로 정합화했다.
+ *
  *   1) 버전(server/config ↔ package.json ↔ docker-compose ↔ sw ↔ asset ↔ More/Settings)
  *   2) 이름 + 상태 배지 — 하나의 `.pa-glass` 캡슐 안에 나란히, 상태 색·크로스페이드 전환 유지
  *   3) 상단 여백 — 일반 모드 pt-2 → pt-4, 페이드 48/132px(키보드 34/100), HEADER_SPACE 동반 조정
@@ -57,12 +60,18 @@ async function main(): Promise<void> {
   /* 1) 버전 --------------------------------------------------------------- */
   const pkg = JSON.parse(read('package.json')) as { version: string };
   const compose = read('docker-compose.yml');
-  check('버전 0.6.10', pkg.version === '0.6.10', pkg.version);
+  check('버전 0.6.x (0.6.10 이상)', /^0\.6\.(1[0-9]|[2-9]\d)$/.test(pkg.version), pkg.version);
   check('server/config 버전', APP_VERSION === pkg.version, APP_VERSION);
-  check('docker-compose 이미지 태그', compose.includes('image: pomong-agent:0.6.10') && compose.includes('image: pomong-agent-browser:0.6.10'));
-  check('서비스 워커 캐시 버전', read('public/sw.js').includes('pomong-agent-v0.6.10'));
+  check(
+    'docker-compose 이미지 태그',
+    compose.includes(`image: pomong-agent:${pkg.version}`) && compose.includes(`image: pomong-agent-browser:${pkg.version}`)
+  );
+  check('서비스 워커 캐시 버전', read('public/sw.js').includes(`pomong-agent-v${pkg.version}`));
   check('에셋 캐시 버전', ASSET_VERSION === pkg.version, ASSET_VERSION);
-  check('More·Settings 표시 버전', read('src/pages/More.tsx').includes("useState('0.6.10')") && read('src/pages/Settings.tsx').includes("|| '0.6.10'"));
+  check(
+    'More·Settings 표시 버전',
+    read('src/pages/More.tsx').includes(`useState('${pkg.version}')`) && read('src/pages/Settings.tsx').includes(`|| '${pkg.version}'`)
+  );
 
   /* 2) 이름 + 상태 배지 — 하나의 유리 캡슐 -------------------------------- */
   const header = read('src/components/AppHeader.tsx');
@@ -77,7 +86,11 @@ async function main(): Promise<void> {
   check('옛 이름 text-shadow 헤일로 제거', !header.includes('textShadow:'));
   check('옛 배지 단독 그림자 제거', !header.includes("boxShadow: '0 2px 10px color-mix(in srgb, var(--pa-surface) 40%, transparent)'"));
   check('배지 상태 색 유지(meta.bg · meta.text)', badgeAt > 0);
-  check('배지 색 전환 애니메이션 유지', header.slice(badgeAt - 400, badgeAt + 200).includes('transition-colors duration-300 ease-out'));
+  // v0.6.11: 300ms → 550ms(cubic-bezier(0.22,1,0.36,1)). 전환 자체가 남아 있는지만 본다.
+  check(
+    '배지 색 전환 애니메이션 유지',
+    /transition-colors duration-(300|\[550ms\])/.test(header.slice(badgeAt - 400, badgeAt + 200))
+  );
   check(
     '배지 라벨 크로스페이드 유지(5상태 겹침)',
     header.includes("const STATE_ORDER: AgentState[] = ['idle', 'thinking', 'working', 'responding', 'error'];") &&
@@ -87,28 +100,31 @@ async function main(): Promise<void> {
   check('캡슐이 화면 폭을 넘지 않음(max-w-[76vw])', header.includes('max-w-[76vw]'));
 
   /* 3) 상단 여백 — 조금 더 내리기 ------------------------------------------ */
-  check('일반 모드 상단 패딩 pt-4', header.includes('pb-1.5 pt-4'));
+  // v0.6.11: pt-4 → pt-6(24px), 페이드 56/140, HEADER_SPACE 134 — "pt-2 보다는 내려가 있고, 값들이 함께 움직인다"만 본다.
+  const padN = Number((header.match(/pb-1\.5 pt-(\d+(?:\.\d+)?)/) || [])[1] || 0);
+  const solidN = Number((header.match(/const fadeSolid = compact \? 34 : (\d+);/) || [])[1] || 0);
+  const fadeN = Number((header.match(/const fadeHeight = compact \? 100 : (\d+);/) || [])[1] || 0);
+  const spaceN = Number((header.match(/HEADER_SPACE = \{ normal: (\d+), compact: 88 \}/) || [])[1] || 0);
+  check('일반 모드 상단 패딩 pt-4 이상', padN >= 4, `pt-${padN}`);
   check('옛 상단 패딩 pt-2 없음', !header.includes("'pb-1.5 pt-2'"));
-  check('페이드 불투명 48px(키보드 34px)', header.includes('const fadeSolid = compact ? 34 : 48;'));
-  check('페이드 전체 132px(키보드 100px)', header.includes('const fadeHeight = compact ? 100 : 132;'));
-  check('HEADER_SPACE 동반 조정(126/88)', header.includes('HEADER_SPACE = { normal: 126, compact: 88 }'));
+  check('페이드 불투명 ≥ 48px(키보드 34px)', solidN >= 48 && header.includes('compact ? 34 :'), `${solidN}px`);
+  check('페이드 전체 ≥ 132px(키보드 100px)', fadeN >= 132 && header.includes('compact ? 100 :'), `${fadeN}px`);
+  check('HEADER_SPACE 동반 조정(≥126/88)', spaceN >= 126, `normal: ${spaceN}`);
   const chat = read('src/pages/Chat.tsx');
   check(
     '첫 말풍선 여백이 HEADER_SPACE 사용',
     chat.includes('paddingTop: keyboardOpen ? HEADER_SPACE.compact : HEADER_SPACE.normal')
   );
-  check(
-    '헤더 아래 끝(≈102px)보다 HEADER_SPACE 가 큼',
-    header.includes('HEADER_SPACE = { normal: 126') && 126 > 16 + 48 + 6 + 26 + 6
-  );
+  check('헤더 아래 끝보다 HEADER_SPACE 가 큼', spaceN > padN * 4 + 48 + 6 + 26 + 6, `HEADER_SPACE ${spaceN}`);
 
   /* 4) 하단 탭바 — 바닥 밀착 ----------------------------------------------- */
   const css = read('src/index.css');
   const tabbar = read('src/components/MobileTabBar.tsx');
+  // v0.6.11: max(8px, safe-bottom - 18px) — "세이프 에어리어에서 빼는 타이트한 max()" 형태만 본다.
   const safeBlock = css.slice(css.indexOf('.pb-safe {'), css.indexOf('.pt-safe {'));
   check(
-    'pb-safe 가 max(2px, safe-bottom - 30px)',
-    /max\(2px,\s*calc\(var\(--safe-bottom\)\s*-\s*30px\)\)/.test(safeBlock),
+    'pb-safe 가 타이트한 max() 형태',
+    /max\([268]px,\s*calc\(var\(--safe-bottom\)\s*-\s*(18|24|30)px\)\)/.test(safeBlock),
     safeBlock.replace(/\s+/g, ' ').trim()
   );
   check('pb-safe 에 옛 -24px 여백 없음', !/calc\(var\(--safe-bottom\)\s*-\s*24px\)/.test(css));

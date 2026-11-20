@@ -20,6 +20,12 @@ import { AGENT_STATE_META, type AgentState, useAppStore } from '../lib/store';
  *   말풍선이 훨씬 잘 비쳐 보이게 했다(페이드 전체 높이 168 → 124px).
  * - 이름은 표면색 헤일로(text-shadow)로, 배지는 은은한 그림자로 가독성을 유지한다.
  *
+ * v0.6.11에서 바꾼 것
+ * - 일반 모드 상단 패딩을 pt-4(16px) → **pt-6(24px)** 으로 한 단계 더 내려 시계·배터리 줄에서
+ *   여유 있게 떨어뜨렸다(HEADER_SPACE·페이드 높이도 함께 +8px씩).
+ * - 상태 배지 전환을 300ms → **550ms** `cubic-bezier(0.22,1,0.36,1)` 로 늘려 배경·글자색·점·
+ *   라벨 크로스페이드가 모두 같은 커브로 스르륵 넘어간다(캐릭터 표정도 같은 550ms 로 동기화).
+ *
  * v0.6.10에서 바꾼 것
  * - 이름과 상태 배지를 각각 띄우지 않고 **하나의 반투명 유리 캡슐(`.pa-glass`)** 안에 나란히 묶었다.
  *   페이드가 옅어진 자리에서도 뒤쪽 채팅 문구와 겹쳐 이름이 뭉개지지 않고, 헤더가 한 덩어리로 정돈된다.
@@ -37,9 +43,9 @@ const STATE_ORDER: AgentState[] = ['idle', 'thinking', 'working', 'responding', 
 
 /**
  * 헤더가 덮는 높이(px). Chat이 첫 메시지 위쪽 여백으로 쓴다.
- * 배지 아래 끝(약 110px)보다 조금 더 두어 첫 말풍선이 배지에 붙지 않게 한다.
+ * 배지 아래 끝(약 118px)보다 조금 더 두어 첫 말풍선이 배지에 붙지 않게 한다.
  */
-export const HEADER_SPACE = { normal: 126, compact: 88 };
+export const HEADER_SPACE = { normal: 134, compact: 88 };
 
 export default function AppHeader({
   onMenu,
@@ -60,10 +66,10 @@ export default function AppHeader({
   const buttonSize = compact ? 32 : 36;
   const sideTop = (avatar - buttonSize) / 2;
   const busy = visibleState === 'thinking' || visibleState === 'working' || visibleState === 'responding';
-  // v0.6.10: 상단을 8px 더 내렸으므로(pt-4) 페이드의 불투명 구간도 그만큼 함께 내린다.
-  // 맨 윗줄(16~52px)만 불투명하게 덮고, 그 아래는 78% → 40% → 투명으로 푼다.
-  const fadeSolid = compact ? 34 : 48;
-  const fadeHeight = compact ? 100 : 132;
+  // v0.6.11: 상단을 8px 더 내렸으므로(pt-6) 페이드의 불투명 구간도 그만큼 함께 내린다.
+  // 맨 윗줄(24~60px)만 불투명하게 덮고, 그 아래는 78% → 40% → 투명으로 푼다.
+  const fadeSolid = compact ? 34 : 56;
+  const fadeHeight = compact ? 100 : 140;
   const fadeSpan = fadeHeight - fadeSolid;
   const fade78 = Math.round(fadeSolid + fadeSpan * 0.34);
   const fade40 = Math.round(fadeSolid + fadeSpan * 0.72);
@@ -81,7 +87,7 @@ export default function AppHeader({
         aria-hidden
       />
 
-      <div className={`relative mx-auto w-full max-w-[880px] ${compact ? 'pb-1 pt-1' : 'pb-1.5 pt-4'}`}>
+      <div className={`relative mx-auto w-full max-w-[880px] ${compact ? 'pb-1 pt-1' : 'pb-1.5 pt-6'}`}>
         <div className="relative flex items-start justify-center px-3 lg:px-4">
           {/* 좌측: 대화방 드로어 (반투명 유리 원형 버튼) */}
           <div className="absolute left-3 lg:left-4" style={{ top: sideTop }}>
@@ -170,7 +176,7 @@ export default function AppHeader({
               </div>
               {/* 상태 점 — 배지와 함께 색이 부드럽게 바뀐다 */}
               <span
-                className="absolute rounded-full transition-colors duration-300 ease-out"
+                className="absolute rounded-full transition-colors duration-[550ms] ease-[cubic-bezier(0.22,1,0.36,1)]"
                 style={{
                   width: compact ? 11 : 14,
                   height: compact ? 11 : 14,
@@ -211,14 +217,14 @@ export default function AppHeader({
 
               {/* 상태 배지 — 캡슐 안의 작은 알약. 대기 중 ↔ 작업 중이 부드럽게 크로스페이드된다 */}
               <div
-                className={`flex shrink-0 items-center justify-center rounded-full transition-colors duration-300 ease-out ${
+                className={`flex shrink-0 items-center justify-center rounded-full transition-colors duration-[550ms] ease-[cubic-bezier(0.22,1,0.36,1)] ${
                   compact ? 'gap-1 px-1.5 py-[1px]' : 'gap-1.5 px-2 py-[2px]'
                 }`}
                 style={{ background: meta.bg, color: meta.text }}
                 aria-live="polite"
               >
                 <span
-                  className={`shrink-0 rounded-full transition-colors duration-300 ease-out ${busy ? 'animate-pulse' : ''}`}
+                  className={`shrink-0 rounded-full transition-colors duration-[550ms] ease-[cubic-bezier(0.22,1,0.36,1)] ${busy ? 'animate-pulse' : ''}`}
                   style={{ width: compact ? 5 : 6, height: compact ? 5 : 6, background: meta.dot }}
                   aria-hidden
                 />
@@ -226,7 +232,7 @@ export default function AppHeader({
                   {STATE_ORDER.map((id) => (
                     <span
                       key={id}
-                      className={`col-start-1 row-start-1 whitespace-nowrap font-bold leading-none transition-all duration-300 ease-out ${
+                      className={`col-start-1 row-start-1 whitespace-nowrap font-bold leading-none transition-all duration-[550ms] ease-[cubic-bezier(0.22,1,0.36,1)] ${
                         compact ? 'text-[10px]' : 'text-[11.5px]'
                       } ${id === visibleState ? 'translate-y-0 opacity-100' : 'translate-y-[3px] opacity-0'}`}
                       aria-hidden={id !== visibleState}

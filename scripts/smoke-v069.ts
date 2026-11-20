@@ -68,10 +68,10 @@ async function main(): Promise<void> {
   const css = read('src/index.css');
   const tabbar = read('src/components/MobileTabBar.tsx');
   const safeBlock = css.slice(css.indexOf('.pb-safe {'), css.indexOf('.pt-safe {'));
-  // v0.6.10: -24px → -30px 로 한 번 더 조였다. 이 스모크는 "세이프 에어리어를 빼는 타이트한 max()" 형태만 본다.
+  // v0.6.10: -24px → -30px, v0.6.11: -18px(max 8px). 이 스모크는 "세이프 에어리어를 빼는 타이트한 max()" 형태만 본다.
   check(
-    'pb-safe 가 max(2~6px, safe-bottom - 24~30px)',
-    /max\([26]px,\s*calc\(var\(--safe-bottom\)\s*-\s*(24|30)px\)\)/.test(safeBlock),
+    'pb-safe 가 max(2~8px, safe-bottom - 18~30px)',
+    /max\([268]px,\s*calc\(var\(--safe-bottom\)\s*-\s*(18|24|30)px\)\)/.test(safeBlock),
     safeBlock.replace(/\s+/g, ' ').trim()
   );
   check('pb-safe 에 옛 -14px 여백 없음', !/calc\(var\(--safe-bottom\)\s*-\s*14px\)/.test(css));

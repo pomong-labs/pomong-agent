@@ -28,9 +28,13 @@ export default function AppShell() {
 
   return (
     <div
-      className="pa-app-shell fixed inset-x-0 top-0 w-full bg-[#F6F6FA] lg:p-4"
+      className={`pa-app-shell fixed inset-x-0 top-0 w-full bg-[#F6F6FA] lg:p-4 ${keyboardOpen ? '' : 'bottom-0'}`}
       style={{
-        height: 'var(--app-height, 100%)',
+        // v0.6.11: 평상시에는 `bottom-0`(inset)으로 **화면 물리적 맨 아래까지** 꽉 채운다.
+        // v0.6.10까지는 늘 height:var(--app-height)(= visualViewport.height)를 썼는데, iOS PWA에서
+        // 이 값이 실제 화면 높이보다 ~30px 짧아 하단 탭바 아래로 빈 공간이 붕 떠 보였다(IMG_3645).
+        // 키보드가 올라온 때만 보이는 영역 높이를 그대로 써서 키보드 위에 붙인다.
+        ...(keyboardOpen ? { height: 'var(--app-height, 100%)' } : null),
         background: 'var(--pa-bg)',
         // v0.6.7: 키보드가 화면을 밀어 올린 만큼(visualViewport.offsetTop) 셸을 따라 올리는 transform은
         // `html.pa-shifted`일 때만 CSS(index.css)가 건다. 오프셋이 0인 평상시에 transform을 걸어 두면

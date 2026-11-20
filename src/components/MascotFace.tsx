@@ -15,6 +15,8 @@ export const AGENT_FACE_STATE: Record<AgentState, string> = {
  *
  * v0.6.3: 대기 ↔ 작업중 이미지가 뚝 끊기지 않게,
  * 이전 표정을 위에 겹쳐 두고 새 표정을 crossfade + 살짝 scale 로 바꾼다.
+ * v0.6.11: 배지 전환과 같은 550ms·cubic-bezier(0.22,1,0.36,1) 로 늘려(index.css)
+ * 상태 배지 색과 캐릭터 표정이 함께 부드럽게 넘어간다.
  */
 export default function MascotFace({
   character = 'pimong',
@@ -46,7 +48,8 @@ export default function MascotFace({
     const before = lastSrc.current;
     lastSrc.current = src;
     setPrevious(before);
-    const timer = window.setTimeout(() => setPrevious(null), 340);
+    // v0.6.11: 크로스페이드가 550ms 로 길어져, 이전 이미지는 그 애니메이션이 끝난 뒤에 지운다.
+    const timer = window.setTimeout(() => setPrevious(null), 620);
     return () => window.clearTimeout(timer);
   }, [src]);
 

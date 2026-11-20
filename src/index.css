@@ -302,9 +302,12 @@ html.dark {
    * v0.6.10: 10px 도 아래 여백이 남아 보여 한 번 더 조였다 — 세이프 에어리어에서 30px 을 빼서
    * 아이폰(34px)은 4px, 탭바가 홈 인디케이터 바로 위 바닥에 바짝 붙는다. 세이프 에어리어가
    * 없는 기기(0px)에서는 2px 만 남긴다.
+   * v0.6.11: 셸이 `bottom: 0` 으로 진짜 바닥까지 닿게 되면서, 홈 인디케이터 흰 바를 가리지 않을
+   * 만큼만 다시 숨을 준다 — 세이프 에어리어에서 18px 을 빼서 아이폰(34px)은 16px,
+   * 세이프 에어리어가 없는 기기(0px)에서는 8px. 탭 버튼은 바닥에 깔끔히 붙고 흰 바는 가리지 않는다.
    */
   .pb-safe {
-    padding-bottom: max(2px, calc(var(--safe-bottom) - 30px));
+    padding-bottom: max(8px, calc(var(--safe-bottom) - 18px));
   }
 
   .pt-safe {
@@ -320,11 +323,13 @@ html.dark {
 /* v0.6.3 — 네이티브 앱 같은 움직임 · 글자 선택 경계                   */
 /* ------------------------------------------------------------------ */
 
-/* 표정(대기 ↔ 작업중) 전환: 겹쳐 두고 crossfade + 미세 scale */
+/* 표정(대기 ↔ 작업중) 전환: 겹쳐 두고 crossfade + 미세 scale
+ * v0.6.11: 상태 배지와 **같은 시간·같은 커브**(550ms, cubic-bezier(0.22,1,0.36,1))로 맞춰
+ * 배지 색과 캐릭터 표정이 한 몸처럼 스르륵 바뀐다. */
 @keyframes pa-face-in {
   from {
     opacity: 0;
-    transform: scale(0.9);
+    transform: scale(0.94);
   }
   to {
     opacity: 1;
@@ -338,14 +343,14 @@ html.dark {
   }
   to {
     opacity: 0;
-    transform: scale(1.06);
+    transform: scale(1.04);
   }
 }
 .pa-face-in {
-  animation: pa-face-in 280ms cubic-bezier(0.2, 0.7, 0.3, 1) both;
+  animation: pa-face-in 550ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 .pa-face-out {
-  animation: pa-face-out 300ms ease both;
+  animation: pa-face-out 550ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 /* 화면 전환 */

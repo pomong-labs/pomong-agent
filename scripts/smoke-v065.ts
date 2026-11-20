@@ -112,10 +112,11 @@ async function main(): Promise<void> {
   check('채팅 리스트 상단 여백 확보', chat.includes('HEADER_SPACE.normal') && chat.includes('HEADER_SPACE.compact'));
 
   /* 5) 배지 전환 애니메이션 ----------------------------------------------- */
-  check('배지 transition-all 300 ease-out', header.includes('transition-all duration-300 ease-out'));
+  // v0.6.11: 300ms → 550ms(cubic-bezier(0.22,1,0.36,1)) 로 길어졌다. 전환 자체가 있는지만 본다.
+  check('배지 라벨 크로스페이드 전환', /transition-all duration-(300|\[550ms\])/.test(header));
   check('배지 글자 크로스페이드(같은 칸 겹침)', header.includes('col-start-1 row-start-1') && header.includes('opacity-100'));
   check('모든 상태 라벨을 겹쳐 둔다', header.includes("const STATE_ORDER: AgentState[] = ['idle', 'thinking', 'working', 'responding', 'error']"));
-  check('점 색도 부드럽게', header.includes('transition-colors duration-300'));
+  check('점 색도 부드럽게', /transition-colors duration-(300|\[550ms\])/.test(header));
 
   /* 6) 첨부 내용 분석 ----------------------------------------------------- */
   const attachmentsSrc = read('server/attachments.ts');

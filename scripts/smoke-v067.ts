@@ -105,8 +105,9 @@ async function main(): Promise<void> {
   check('theme.ts도 모든 메타 동기화', themeSrc.includes('export function syncThemeColor') && themeSrc.includes('syncThemeColor(top)'));
 
   /* 4) AppShell — 세이프 에어리어 단일 색 · 평상시 transform 없음 ------------ */
-  const shellTag = shell.slice(shell.indexOf('<div\n      className="pa-app-shell'), shell.indexOf('<main'));
-  check('셸에 pa-app-shell 클래스', shell.includes('className="pa-app-shell fixed inset-x-0 top-0'));
+  // v0.6.11: className 이 template literal 로 바뀌어(bottom-0 분기) 여는 따옴표 모양이 달라진다.
+  const shellTag = shell.slice(shell.indexOf('pa-app-shell'), shell.indexOf('<main'));
+  check('셸에 pa-app-shell 클래스', /className=\{?[`"]pa-app-shell fixed inset-x-0 top-0/.test(shell));
   check('셸 인라인 transform 제거', !shellTag.includes('transform:'));
   check('본문 배경 단일 색', shell.includes("background: 'var(--pa-surface)'"));
   check('세이프 에어리어 그라데이션 제거', !shell.includes('linear-gradient(to bottom, var(--pa-top)') && !shell.includes('env(safe-area-inset-top, 0px) + 60px'));
