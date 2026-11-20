@@ -93,6 +93,20 @@ export function RichText({ text }: { text: string }) {
 }
 
 export default function Chat() {
+  /** 터치 기기(아이폰 등)인지 — 엔터를 줄바꿈으로 쓸지 결정한다 (v0.6.2) */
+  const [touchKeyboard, setTouchKeyboard] = useState(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return false;
+    return window.matchMedia('(pointer: coarse)').matches || /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+  });
+
+  useEffect(() => {
+    if (!window.matchMedia) return;
+    const query = window.matchMedia('(pointer: coarse)');
+    const update = () => setTouchKeyboard(query.matches || /iPhone|iPad|iPod|Android/i.test(navigator.userAgent));
+    query.addEventListener?.('change', update);
+    return () => query.removeEventListener?.('change', update);
+  }, []);
+
   const {
     messages,
     sending,
@@ -310,11 +324,19 @@ export default function Chat() {
     void clearChat();
   };
 
+  /**
+   * v0.6.2: 엔터 키 동작을 기기별로 나눈다.
+   *   · 모바일(터치 기기): 엔터 = 줄바꿈, 전송은 오른쪽 전송 버튼으로만
+   *   · PC: 엔터 = 전송, Shift+Enter = 줄바꿈
+   * 한글 조합 중(isComposing)의 엔터는 조합 확정이라 전송하지 않는다.
+   */
   const onKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      submit();
-    }
+    if (e.key !== 'Enter') return;
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+    if (touchKeyboard) return; // 모바일: 기본 동작(줄바꿈)
+    if (e.shiftKey) return; // PC: Shift+Enter 줄바꿈
+    e.preventDefault();
+    submit();
   };
 
   const pendingLabel = recovering
@@ -482,7 +504,7 @@ export default function Chat() {
                   pinToBottom('auto');
                   window.setTimeout(() => pinToBottom('auto'), 260);
                 }}
-                enterKeyHint="send"
+                enterKeyHint={touchKeyboard ? 'enter' : 'send'}
                 placeholder={aiReady ? `${profile.agentName || '포몽'}에게 물어보세요…` : 'AI 키를 먼저 연결해 주세요'}
                 className="pa-scroll max-h-[140px] min-h-[44px] flex-1 resize-none bg-transparent px-2 py-2.5 text-[16px] leading-relaxed placeholder:text-[#B7B4C6] focus:outline-none"
               />
@@ -537,8 +559,10 @@ export default function Chat() {
             </p>
           ) : null}
           {!keyboardOpen && !listening && !voiceHint ? (
-            <p className="mt-2 hidden text-center text-[11.5px] text-[#C0BCCD] lg:block">
-              Enter 전송 / Shift+Enter 줄바꿈 · 사진·파일도 붙여서 보낼 수 있어요
+            <p className={`mt-2 text-center text-[11.5px] text-[#C0BCCD] ${touchKeyboard ? '' : 'hidden lg:block'}`}>
+              {touchKeyboard
+                ? '엔터는 줄바꿈이에요 · 보내기는 오른쪽 버튼'
+                : 'Enter 전송 / Shift+Enter 줄바꿈 · 사진·파일도 붙여서 보낼 수 있어요'}
             </p>
           ) : null}
         </div>

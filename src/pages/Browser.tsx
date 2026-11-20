@@ -58,6 +58,14 @@ export default function Browser() {
   const [address, setAddress] = useState('');
   const [editingAddress, setEditingAddress] = useState(false);
   const [hint, setHint] = useState('');
+  /** v0.6.2: 세션이 없을 때 바로 열 주소(비우면 빈 화면으로 열고 바로 입력) */
+  const [openAddress, setOpenAddress] = useState('');
+  const [navigating, setNavigating] = useState(false);
+  /** 주소창을 입력하는 동안 4초 폴링이 값을 덮어쓰지 않게 한다 */
+  const editingRef = useRef(false);
+  useEffect(() => {
+    editingRef.current = editingAddress;
+  }, [editingAddress]);
   const [vncStatus, setVncStatus] = useState<'connecting' | 'connected' | 'closed' | 'error'>('connecting');
   const [viewerFull, setViewerFull] = useState(false);
   const rfbRef = useRef<RFBInstance | null>(null);
@@ -69,7 +77,8 @@ export default function Browser() {
       setStatus({ enabled: res.enabled, connected: res.connected });
       const current = res.sessions[0] || null;
       setSession(current);
-      if (current?.url) setAddress(current.url);
+      // v0.6.2: 주소창에 입력 중이면 폴링이 입력값을 지우지 않게 한다.
+      if (current?.url && !editingRef.current) setAddress(current.url);
       setError('');
     } catch (err) {
       setStatus({ enabled: false, connected: false });
@@ -117,6 +126,50 @@ export default function Browser() {
       setError(err instanceof Error ? err.message : '브라우저를 열지 못했어요.');
     } finally {
       setStarting(false);
+    }
+  };
+
+  /**
+   * v0.6.2: AI를 거치지 않고 브라우저를 바로 열어 내가 조작한다.
+   * 세션이 없으면 새로 열고, 있으면 그 세션의 제어권을 내가 가져온다.
+   */
+  const openDirectly = async () => {
+    setStarting(true);
+    setError('');
+    setHint('');
+    try {
+      const res = await api.post<{ session: BrowserSession; url: string | null; note: string | null }>('/api/browser/open', {
+        url: openAddress.trim() || undefined,
+      });
+      setSession(res.session);
+      if (res.url) setAddress(res.url);
+      if (res.note) setHint(res.note);
+      setViewerFull(true);
+      await loadStatus();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '브라우저를 열지 못했어요.');
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  /** v0.6.2: 주소창에서 입력한 주소로 지금 화면을 바로 이동한다. */
+  const navigateTo = async (raw?: string) => {
+    if (!session) return;
+    const target = (raw ?? address).trim();
+    if (!target) return;
+    setNavigating(true);
+    setHint('');
+    try {
+      const res = await api.post<{ url: string; note: string | null }>(`/api/browser/sessions/${session.id}/navigate`, { url: target });
+      setAddress(res.url);
+      setEditingAddress(false);
+      if (res.note) setHint(res.note);
+      await loadStatus();
+    } catch (err) {
+      setHint(err instanceof Error ? err.message : '주소로 이동하지 못했어요.');
+    } finally {
+      setNavigating(false);
     }
   };
 
@@ -299,8 +352,34 @@ export default function Browser() {
               </div>
             </div>
             {error ? <p className="mt-3 rounded-[12px] bg-[#FFF6F6] px-3 py-2 text-[12.5px] text-[#B2373B]">{error}</p> : null}
-            <button className="pa-btn-primary mt-4 w-full py-3 lg:w-auto lg:px-6" onClick={startSession} disabled={starting}>
-              {starting ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />} 브라우저 열기
+            {/* v0.6.2: AI를 거치지 않고 바로 열어 내가 조작한다 */}
+            <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+              <div className="flex min-w-0 flex-1 items-center gap-2 rounded-2xl bg-[#F7F5FF] px-3 py-2 ring-1 ring-[#EFEDF6]">
+                <Globe size={15} className="shrink-0 text-[#9B98AB]" />
+                <input
+                  className="min-w-0 flex-1 bg-transparent text-[16px] text-[#3B3947] placeholder:text-[#B7B4C6] focus:outline-none sm:text-[13.5px]"
+                  value={openAddress}
+                  onChange={(e) => setOpenAddress(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void openDirectly();
+                  }}
+                  placeholder="주소를 입력하면 그 사이트로 열려요 (예: naver.com)"
+                  inputMode="url"
+                  autoComplete="off"
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  aria-label="열 주소"
+                />
+              </div>
+              <button className="pa-btn-primary px-5 py-3" onClick={openDirectly} disabled={starting}>
+                {starting ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />} 브라우저 바로 열기
+              </button>
+            </div>
+            <p className="mt-2 text-[11.5px] leading-[1.55] text-[#A8A5B8]">
+              AI 없이 열어도 돼요. 열리면 제어권이 내게 오고, 주소창·화면을 직접 조작할 수 있어요.
+            </p>
+            <button className="mt-2 text-[12px] font-semibold text-[#8B72F6] hover:underline" onClick={startSession} disabled={starting}>
+              AI가 조작하는 세션으로 열기
             </button>
             {status && !status.enabled ? (
               <p className="mt-2 text-[11.5px] text-[#A8A5B8]">이 서버는 브라우저 기능이 꺼져 있어요(BROWSER_ENABLED=0).</p>
@@ -346,20 +425,38 @@ export default function Browser() {
                   <RotateCw size={17} />
                 </button>
                 {editingAddress ? (
-                  <input
-                    autoFocus
-                    className="min-w-0 flex-1 rounded-full bg-[#F7F5FF] px-3 py-1.5 text-[12.5px] focus:outline-none"
-                    value={address}
-                    onChange={(e) => setAddress(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        setEditingAddress(false);
-                        void sendInput({ type: 'goto', url: address });
-                      }
-                      if (e.key === 'Escape') setEditingAddress(false);
-                    }}
-                    onBlur={() => setEditingAddress(false)}
-                  />
+                  <>
+                    <input
+                      autoFocus
+                      className="min-w-0 flex-1 rounded-full bg-[#F7F5FF] px-3 py-1.5 text-[16px] text-[#3B3947] focus:outline-none sm:text-[12.5px]"
+                      value={address}
+                      onChange={(e) => setAddress(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          void navigateTo();
+                        }
+                        if (e.key === 'Escape') {
+                          setEditingAddress(false);
+                          if (session.url) setAddress(session.url);
+                        }
+                      }}
+                      inputMode="url"
+                      enterKeyHint="go"
+                      autoComplete="off"
+                      autoCapitalize="off"
+                      autoCorrect="off"
+                      aria-label="주소 입력"
+                    />
+                    <button
+                      type="button"
+                      className="shrink-0 rounded-full bg-[#7C63F6] px-3 py-1.5 text-[11.5px] font-bold text-white disabled:opacity-50"
+                      onClick={() => void navigateTo()}
+                      disabled={navigating || !address.trim()}
+                    >
+                      {navigating ? '이동 중' : '이동'}
+                    </button>
+                  </>
                 ) : (
                   <button
                     className="flex min-w-0 flex-1 items-center gap-1.5 rounded-full bg-[#F7F5FF] px-3 py-1.5 text-left text-[12.5px] text-[#5B5866]"

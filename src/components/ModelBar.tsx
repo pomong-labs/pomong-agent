@@ -3,7 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import { Check, ChevronDown, KeyRound, Sparkles, X } from 'lucide-react';
 import { useAppStore } from '../lib/store';
 
-const PROVIDER_LABEL: Record<string, string> = { gemini: 'Gemini', openai: 'GPT', claude: 'Claude' };
+const PROVIDER_LABEL: Record<string, string> = { gemini: 'Gemini', openai: 'GPT', claude: 'Claude', exaone: 'EXAONE' };
+
+/** 모델 이름 끝의 짧은 표기(k-exaone_v2.5 → 2.5) */
+function modelHint(id: string): string {
+  if (/^k-exaone_v/i.test(id)) return id.replace(/^k-exaone_v/i, '');
+  return id.split('-').slice(-1)[0];
+}
 
 function modelLabel(models: Record<string, string> | undefined, id: string): string {
   return models?.[id] || id.replace(/^gemini-/, '').replace(/-/g, ' ');
@@ -110,7 +116,7 @@ export default function ModelBar() {
                         }`}
                       >
                         <span className="truncate">{modelLabel(models?.labels, m)}</span>
-                        {selected ? <Check size={14} strokeWidth={3} /> : <span className="shrink-0 text-[10.5px] text-[#C0BCCD]">{m.split('-').slice(-1)[0]}</span>}
+                        {selected ? <Check size={14} strokeWidth={3} /> : <span className="shrink-0 text-[10.5px] text-[#C0BCCD]">{modelHint(m)}</span>}
                       </button>
                     );
                   })}

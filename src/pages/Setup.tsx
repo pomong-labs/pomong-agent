@@ -7,7 +7,7 @@ import Logo from '../components/Logo';
 import { api, ApiError, type ThemeMode } from '../lib/api';
 import { applyTheme } from '../lib/theme';
 
-type ProviderId = 'gemini' | 'openai' | 'claude';
+type ProviderId = 'gemini' | 'openai' | 'claude' | 'exaone';
 
 const SETUP_MASCOTS = [
   { id: 'poding', name: '포딩' },
@@ -29,6 +29,7 @@ const PROVIDERS: { id: ProviderId; label: string; accent: string }[] = [
   { id: 'gemini', label: 'Gemini', accent: '#7C63F6' },
   { id: 'openai', label: 'OpenAI', accent: '#1F1D2B' },
   { id: 'claude', label: 'Claude', accent: '#D97757' },
+  { id: 'exaone', label: 'EXAONE', accent: '#2F86D8' },
 ];
 
 function ProviderMark({ id, size = 22 }: { id: ProviderId; size?: number }) {
@@ -54,9 +55,18 @@ function ProviderMark({ id, size = 22 }: { id: ProviderId; size?: number }) {
       </svg>
     );
   }
+  if (id === 'claude') {
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#D97757" strokeWidth="2" strokeLinecap="round">
+        <path d="M12 4v16M4 8l16 8M20 8 4 16" />
+      </svg>
+    );
+  }
+  // EXAONE — 엑사원의 둥근 X 마크를 단순화한 표식
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#D97757" strokeWidth="2" strokeLinecap="round">
-      <path d="M12 4v16M4 8l16 8M20 8 4 16" />
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#2F86D8" strokeWidth="2" strokeLinecap="round">
+      <path d="M6 6l12 12M18 6 6 18" opacity="0.35" />
+      <path d="M8.5 4.5h7a4 4 0 0 1 4 4v7a4 4 0 0 1-4 4h-7a4 4 0 0 1-4-4v-7a4 4 0 0 1 4-4z" />
     </svg>
   );
 }

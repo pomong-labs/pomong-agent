@@ -44,7 +44,10 @@ export const api = {
 /* Shared types                                                        */
 /* ------------------------------------------------------------------ */
 
-export type ProviderId = 'gemini' | 'openai' | 'claude';
+export type ProviderId = 'gemini' | 'openai' | 'claude' | 'exaone';
+
+/** v0.6.2: EXAONE 추론 강도 */
+export type ExaoneEffort = 'low' | 'medium' | 'high';
 
 /** AI 성격·말투 프리셋 (v0.5.6) */
 export type PersonaId = 'default' | 'calm' | 'bright' | 'concise' | 'witty' | 'custom';
@@ -302,6 +305,8 @@ export interface ProviderInfo {
   connected: boolean;
   connectedAt: string | null;
   active: boolean;
+  /** v0.6.2: EXAONE 추론 강도(다른 프로바이더는 null) */
+  reasoningEffort?: ExaoneEffort | null;
 }
 
 export interface ModelsResponse {
@@ -323,8 +328,10 @@ export interface SettingsResponse {
   version: string;
   mascots: MascotInfo[];
   active: { provider: ProviderId; model: string };
-  provider: { provider: ProviderId; label: string; model: string; connectedAt: string } | null;
+  provider: { provider: ProviderId; label: string; model: string; connectedAt: string; reasoningEffort?: ExaoneEffort } | null;
   providers: ProviderInfo[];
+  /** v0.6.2: EXAONE 추론 강도 선택지 */
+  exaone?: { efforts: ExaoneEffort[] };
 }
 
 export interface ToolCatalogEntry {

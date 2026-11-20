@@ -1,4 +1,4 @@
-import { runAgentStep, type AgentMessage, type AgentPart, type ProviderId, type ToolSpec } from './providers';
+import { higherTierModel, runAgentStep, type AgentMessage, type AgentPart, type ProviderId, type ProviderOptions, type ToolSpec } from './providers';
 import type { ToolResult } from './tools';
 
 /**
@@ -37,6 +37,8 @@ export interface AgentLoopOptions {
   onToolEnd?: (name: string, content: string, durationMs: number, ok: boolean) => void;
   /** chat_notify: 작업 중간에 사용자에게 먼저 보여 줄 말풍선 */
   onNotify?: (text: string) => void | Promise<void>;
+  /** v0.6.2: 프로바이더별 추가 설정(EXAONE 추론 강도 등) */
+  providerOptions?: ProviderOptions;
 }
 
 export interface AgentLoopResult {
@@ -55,6 +57,10 @@ export interface AgentLoopResult {
   lastError: string | null;
   /** 사용자에게 화면을 넘겼는지(browser_handover 성공) */
   handover: boolean;
+  /** v0.6.2: 빈 응답·잘못된 함수 호출로 모델을 다시 불러본 횟수 */
+  emptyRetries: number;
+  /** v0.6.2: 경량 모델에서 상위 모델로 올렸다면 그 모델 이름 */
+  escalatedTo: string | null;
 }
 
 export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoopResult> {
@@ -79,6 +85,9 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
   let handover = false;
   /** v0.6.1: "시스템상 제한이라 못 한다"며 포기한 답변을 한 번만 되돌린다 */
   let nudges = 0;
+  /** v0.6.2: 브라우저 작업 중 빈 응답·잘못된 함수 호출로 다시 시도한 횟수 */
+  let emptyRetries = 0;
+  let escalatedTo: string | null = null;
   const stopped = (): boolean => Boolean(options.signal?.aborted) || Boolean(options.cancelled?.());
 
   const done = (extra: Partial<AgentLoopResult> = {}): AgentLoopResult => ({
@@ -92,6 +101,8 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
     lastTool,
     lastError,
     handover,
+    emptyRetries,
+    escalatedTo,
     ...extra,
   });
 
@@ -107,7 +118,16 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
     // v0.5.2: 모델 혼잡(503·high demand)은 어느 단계에서든 대체 모델로 재시도한다.
     let result;
     try {
-      result = await runAgentStep(options.provider, options.apiKey, model, conversation, options.tools, true, options.signal);
+      result = await runAgentStep(
+        options.provider,
+        options.apiKey,
+        model,
+        conversation,
+        options.tools,
+        true,
+        options.signal,
+        options.providerOptions
+      );
     } catch (err) {
       // 사용자가 중지했거나 응답 대기가 끊긴 경우는 오류가 아니라 '중지'로 끝낸다.
       if (stopped()) return done({ cancelled: true });
@@ -117,6 +137,35 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
     steps += 1;
 
     if (!result.toolCalls.length) {
+      /**
+       * v0.6.2: 브라우저 작업 도중 모델이 `toolCalls: []` + 빈 텍스트로 멈추거나
+       * Gemini가 MALFORMED_FUNCTION_CALL 로 끊기면, 루프를 그대로 끝내지 않고
+       * 경량 모델이면 상위 모델로 올려 이어서 실행하게 한다.
+       * (2026-11-20 크몽 메시지함: 3.1-flash-lite가 방 클릭 뒤 빈 응답으로 종료)
+       */
+      const empty = isEmptyOrMalformedReply(result);
+      const plan = planEmptyRecovery({
+        empty: empty.empty,
+        malformed: empty.malformed,
+        browserUsed: used.some((name) => name.startsWith('browser_')),
+        retriesUsed: emptyRetries,
+        handover,
+        stopped: stopped(),
+      });
+      if (plan.retry) {
+        emptyRetries += 1;
+        reply = '';
+        const escalated = higherTierModel(options.provider, model);
+        if (escalated && escalated !== model) {
+          model = escalated;
+          escalatedTo = escalated;
+        }
+        conversation.push({
+          role: 'system',
+          content: EMPTY_RETRY_NUDGE + (empty.malformed ? EMPTY_RETRY_NUDGE_MALFORMED : ''),
+        });
+        continue;
+      }
       reply = result.text;
       /**
        * v0.6.1: 사용자가 전송·답장·댓글을 직접 부탁했는데, 브라우저를 몇 단계만 만져 보고
@@ -223,6 +272,50 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
   return done();
 }
 
+/** v0.6.2: 빈 응답·잘못된 함수 호출을 몇 번까지 다시 시도할지 */
+export const MAX_EMPTY_RETRIES = 2;
+
+/** v0.6.2: 빈 응답으로 브라우저 작업이 끊겼을 때 모델에게 다시 넣는 지시 */
+export const EMPTY_RETRY_NUDGE =
+  '[서버 점검] 작업이 아직 끝나지 않았습니다. 현재 열린 화면을 browser_snapshot으로 확인하고 요청된 입력(browser_type)·전송(browser_click)까지 끝까지 완료하세요.';
+export const EMPTY_RETRY_NUDGE_MALFORMED =
+  ' (모델이 잘못된 함수 호출 형식을 보내 응답이 끊겼습니다. 도구 인자를 JSON 스키마에 맞게 다시 보내세요.)';
+
+/**
+ * 브라우저 작업 중 빈 응답이 났을 때 다시 시도할지 판단한다(v0.6.2).
+ * 브라우저를 만진 뒤에만 재시도하고, 이미 화면을 사용자에게 넘겼거나
+ * 재시도 한도를 다 썼거나 사용자가 중지했으면 멈춘다.
+ */
+export function planEmptyRecovery(input: {
+  empty: boolean;
+  malformed: boolean;
+  browserUsed: boolean;
+  retriesUsed: number;
+  handover: boolean;
+  stopped: boolean;
+}): { retry: boolean; reason: 'empty' | 'malformed' | null } {
+  const reason: 'empty' | 'malformed' | null = input.malformed ? 'malformed' : input.empty ? 'empty' : null;
+  if (!reason) return { retry: false, reason: null };
+  if (!input.browserUsed) return { retry: false, reason: null };
+  if (input.retriesUsed >= MAX_EMPTY_RETRIES) return { retry: false, reason: null };
+  if (input.handover || input.stopped) return { retry: false, reason: null };
+  return { retry: true, reason };
+}
+
+/**
+ * 모델이 도구 호출 없이 끝났을 때, 이것이 '빈 응답'인지 '잘못된 함수 호출'인지 판단한다.
+ * (v0.6.2 — 브라우저 작업이 중간에 끊기는 원인을 구분해 재시도 조건으로 쓴다)
+ */
+export function isEmptyOrMalformedReply(result: { text: string; toolCalls: unknown[]; finishReason?: string }): {
+  empty: boolean;
+  malformed: boolean;
+} {
+  const reason = String(result.finishReason || '').toUpperCase();
+  const malformed = /MALFORMED_FUNCTION_CALL|UNEXPECTED_TOOL_CALL|MALFORMED/.test(reason);
+  const empty = !result.toolCalls.length && String(result.text || '').trim() === '';
+  return { empty, malformed };
+}
+
 /**
  * 모델이 빈 텍스트를 돌려줬을 때, 지금까지의 실제 상태를 알리는 문장 (v0.5.3).
  * 예전에는 "확인했어요. 더 도와드릴 일이 있을까요?"라는, 실제 진행과 무관한 문구가 나갔다.
@@ -243,7 +336,12 @@ export function buildEmptyReply(
   }
   if (context.browserUsed) {
     const tail = reason ? ` (${reason})` : '';
-    return `브라우저 작업 중 다음 단계로 넘어가지 못했어요${tail}. 브라우저 탭의 화면 보기로 현재 상태를 확인해 보시겠어요?`;
+    const retried = result.escalatedTo
+      ? ` ${result.escalatedTo} 모델로 올려 ${result.emptyRetries}번 더 시도했지만 끝까지 가지 못했어요.`
+      : result.emptyRetries
+        ? ` ${result.emptyRetries}번 더 시도했지만 끝까지 가지 못했어요.`
+        : '';
+    return `브라우저 작업 중 다음 단계로 넘어가지 못했어요${tail}.${retried} 브라우저 탭의 화면 보기로 현재 상태를 확인해 보시겠어요?`;
   }
   if (result.tools.length) {
     const tail = reason ? ` (${reason})` : '';

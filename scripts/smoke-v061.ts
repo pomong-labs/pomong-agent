@@ -167,7 +167,8 @@ async function main(): Promise<void> {
   check('PIN 카드가 나간 턴에는 로그인 카드를 만들지 않는다', lockedTurn.card === null);
 
   /* 6) 버전 -------------------------------------------------------------- */
-  check('버전 0.6.1', APP_VERSION === '0.6.1', APP_VERSION);
+  // v0.6.2 이후에도 회귀 검사로 함께 돌 수 있게 0.6.x 를 받아들인다.
+  check('버전 0.6.x', /^0\.6\./.test(APP_VERSION), APP_VERSION);
 
   console.log(`\n${failures ? `❌ 실패 ${failures}건` : '✅ 전부 통과'}`);
   process.exit(failures ? 1 : 0);

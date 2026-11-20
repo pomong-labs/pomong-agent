@@ -1,4 +1,34 @@
-export type ProviderId = 'gemini' | 'openai' | 'claude';
+export type ProviderId = 'gemini' | 'openai' | 'claude' | 'exaone';
+
+/** v0.6.2: EXAONE(K-EXAONE 2.5) — LG AI연구원 무료 API, OpenAI 호환 */
+export const EXAONE_MODEL = 'k-exaone_v2.5';
+export const EXAONE_ENDPOINT = 'https://api.exaone.ai/v1/chat/completions';
+
+/** 사용자가 고르는 추론 강도(3단계) */
+export type ExaoneEffort = 'low' | 'medium' | 'high';
+export const EXAONE_EFFORTS: ExaoneEffort[] = ['low', 'medium', 'high'];
+
+/** 저장값 정규화(구버전·잘못된 값 방지) */
+export function exaoneEffort(value: unknown, fallback: ExaoneEffort = 'low'): ExaoneEffort {
+  const name = String(value || '').trim().toLowerCase();
+  return (EXAONE_EFFORTS as string[]).includes(name) ? (name as ExaoneEffort) : fallback;
+}
+
+/**
+ * 화면의 3단계 → EXAONE API가 받는 값.
+ * 공식 문서(2026-11)의 reasoning_effort 는 low / high / max 세 가지뿐이라
+ * 보통(medium)은 high, 높음(high)은 max 로 보낸다.
+ */
+export function exaoneApiEffort(effort: ExaoneEffort | undefined): 'low' | 'high' | 'max' {
+  if (effort === 'high') return 'max';
+  if (effort === 'medium') return 'high';
+  return 'low';
+}
+
+/** 프로바이더별 추가 설정(지금은 EXAONE 추론 강도만) */
+export interface ProviderOptions {
+  reasoningEffort?: ExaoneEffort;
+}
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -54,6 +84,12 @@ export const PROVIDERS: Record<ProviderId, { label: string; defaultModel: string
     models: ['claude-sonnet-4-5', 'claude-haiku-4-5', 'claude-opus-4-1'],
     console: 'https://console.anthropic.com/settings/keys',
   },
+  exaone: {
+    label: 'EXAONE',
+    defaultModel: EXAONE_MODEL,
+    models: [EXAONE_MODEL],
+    console: 'https://docs.exaone.ai/ko/docs/overview',
+  },
 };
 
 /** 모델 선택 바에서 쓰는 짧은 표시 이름 */
@@ -69,6 +105,7 @@ export const MODEL_LABELS: Record<string, string> = {
   'claude-sonnet-4-5': 'Sonnet 4.5',
   'claude-haiku-4-5': 'Haiku 4.5',
   'claude-opus-4-1': 'Opus 4.1',
+  'k-exaone_v2.5': 'K-EXAONE 2.5',
 };
 
 export interface ProviderTestResult {
@@ -104,6 +141,7 @@ const LEGACY_MODEL_MAP: Record<ProviderId, Record<string, string>> = {
   },
   openai: {},
   claude: {},
+  exaone: {},
 };
 
 /** 저장된 모델 이름을 현재 사용 가능한 모델로 정규화한다. */
@@ -172,10 +210,16 @@ function withCancel(limit: AbortSignal, signal?: AbortSignal): AbortSignal {
 
 function errorText(status: number, body: string): string {
   try {
-    const parsed = JSON.parse(body) as { error?: { message?: string } | string; message?: string };
+    const parsed = JSON.parse(body) as {
+      error?: { message?: string } | string;
+      message?: string;
+      description?: string;
+    };
     const msg =
       typeof parsed.error === 'string' ? parsed.error : parsed.error?.message || parsed.message || '';
     if (msg) return `${status}: ${msg}`;
+    // EXAONE은 실패를 {result_code, description} 로 돌려준다.
+    if (parsed.description) return `${status}: ${parsed.description}`;
   } catch {
     /* not json */
   }
@@ -207,6 +251,48 @@ export async function testProvider(provider: ProviderId, apiKey: string): Promis
       return { ok: true, message: 'OpenAI API 키가 확인되었습니다.', models: models.slice(0, 20) };
     }
 
+    if (provider === 'exaone') {
+      // EXAONE은 OpenAI 호환이라 /v1/models 로 키를 먼저 확인하고,
+      // 목록 주소가 막혀 있으면(404/405) 짧은 대화 요청으로 확인한다.
+      const listRes = await fetch('https://api.exaone.ai/v1/models', {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: timeout(15000),
+      });
+      const listBody = await listRes.text();
+      if (listRes.ok) {
+        let models: string[] = [];
+        try {
+          const data = JSON.parse(listBody) as { data?: { id?: string }[] };
+          models = (data.data || []).map((m) => String(m.id || '')).filter(Boolean);
+        } catch {
+          /* 목록이 비어 있어도 키는 유효하다 */
+        }
+        return {
+          ok: true,
+          message: 'EXAONE API 키가 확인되었습니다. (K-EXAONE 2.5 · 무료)',
+          models: models.filter((m) => m.includes('exaone')).slice(0, 10),
+        };
+      }
+      if (listRes.status !== 404 && listRes.status !== 405) {
+        return { ok: false, message: errorText(listRes.status, listBody) };
+      }
+      const res = await fetch(EXAONE_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model: EXAONE_MODEL,
+          messages: [{ role: 'user', content: 'ping' }],
+          max_tokens: 16,
+          reasoning_effort: 'low',
+          stream: false,
+        }),
+        signal: timeout(30000),
+      });
+      const body = await res.text();
+      if (!res.ok) return { ok: false, message: errorText(res.status, body) };
+      return { ok: true, message: 'EXAONE API 키가 확인되었습니다. (K-EXAONE 2.5 · 무료)', models: [EXAONE_MODEL] };
+    }
+
     const res = await fetch('https://api.anthropic.com/v1/models', {
       headers: { 'x-api-key': apiKey, 'anthropic-version': ANTHROPIC_VERSION },
       signal: timeout(15000),
@@ -226,6 +312,11 @@ export interface ChatResult {
   text: string;
   model: string;
   toolCalls: ToolCall[];
+  /**
+   * v0.6.2: 모델이 왜 멈췄는지(Gemini finishReason, OpenAI finish_reason, Claude stop_reason).
+   * 브라우저 작업 중 빈 응답(MALFORMED_FUNCTION_CALL·빈 STOP)을 알아채 재시도하는 데 쓴다.
+   */
+  finishReason?: string;
 }
 
 type ToolRunMessage = AgentMessage;
@@ -348,7 +439,7 @@ async function geminiStep(
       args: (p.functionCall?.args || {}) as Record<string, unknown>,
       signature: p.thoughtSignature,
     }));
-  return { text, model: modelName, toolCalls };
+  return { text, model: modelName, toolCalls, finishReason: data.candidates?.[0]?.finishReason };
 }
 
 /* ------------------------------------------------------------------ */
@@ -357,29 +448,39 @@ async function geminiStep(
 
 type OpenAiMessage = Record<string, unknown>;
 
-async function openAiStep(
-  modelName: string,
-  apiKey: string,
-  system: string,
-  turns: ToolRunMessage[],
-  tools?: ToolSpec[],
-  signal?: AbortSignal
-): Promise<ChatResult> {
+/**
+ * OpenAI 규격(chat/completions) 메시지 목록을 만든다.
+ * v0.6.2: EXAONE도 같은 규격이라 함께 쓴다(사진만 지원하지 않는다).
+ */
+function openAiMessages(turns: ToolRunMessage[], imageSupport: boolean): OpenAiMessage[] {
   const messages: OpenAiMessage[] = [];
-  if (system) messages.push({ role: 'system', content: system });
   for (const turn of turns) {
     if (turn.role === 'tool') {
       messages.push({ role: 'tool', tool_call_id: turn.toolCallId, content: turn.content });
     } else if (turn.role === 'user' && turn.parts?.some((p) => p.type === 'image')) {
-      // v0.5.2: 사진은 image_url(data URL)로 넘긴다.
-      messages.push({
-        role: 'user',
-        content: textOrParts(turn).map((part) =>
-          part.type === 'text'
-            ? { type: 'text', text: part.text }
-            : { type: 'image_url', image_url: { url: `data:${part.mime};base64,${part.dataBase64}` } }
-        ),
-      });
+      const parts = textOrParts(turn);
+      if (imageSupport) {
+        // v0.5.2: 사진은 image_url(data URL)로 넘긴다.
+        messages.push({
+          role: 'user',
+          content: parts.map((part) =>
+            part.type === 'text'
+              ? { type: 'text', text: part.text }
+              : { type: 'image_url', image_url: { url: `data:${part.mime};base64,${part.dataBase64}` } }
+          ),
+        });
+      } else {
+        // 글만 보는 모델(EXAONE): 사진 대신 안내 문구를 붙인다.
+        const text = parts
+          .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+          .map((p) => p.text)
+          .join('\n')
+          .trim();
+        messages.push({
+          role: 'user',
+          content: `${text ? `${text}\n\n` : ''}[첨부 사진] 이 모델은 사진을 볼 수 없습니다. 사진을 봐야 하는 작업이면 Gemini처럼 사진을 보는 모델로 바꿔 달라고 사용자에게 안내하세요.`,
+        });
+      }
     } else if (turn.role === 'assistant') {
       const msg: OpenAiMessage = { role: 'assistant', content: turn.content || null };
       if (turn.toolCalls?.length) {
@@ -394,6 +495,20 @@ async function openAiStep(
       messages.push({ role: 'user', content: turn.content });
     }
   }
+  return messages;
+}
+
+async function openAiStep(
+  modelName: string,
+  apiKey: string,
+  system: string,
+  turns: ToolRunMessage[],
+  tools?: ToolSpec[],
+  signal?: AbortSignal
+): Promise<ChatResult> {
+  const messages: OpenAiMessage[] = [];
+  if (system) messages.push({ role: 'system', content: system });
+  messages.push(...openAiMessages(turns, true));
 
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -414,6 +529,7 @@ async function openAiStep(
   const data = JSON.parse(body) as {
     choices?: {
       message?: { content?: string | null; tool_calls?: { id: string; function: { name: string; arguments: string } }[] };
+      finish_reason?: string;
     }[];
   };
   const message = data.choices?.[0]?.message;
@@ -426,7 +542,78 @@ async function openAiStep(
     }
     return { id: c.id || `openai-${Date.now()}-${i}`, name: c.function.name, args };
   });
-  return { text: (message?.content || '').trim(), model: modelName, toolCalls };
+  return { text: (message?.content || '').trim(), model: modelName, toolCalls, finishReason: data.choices?.[0]?.finish_reason };
+}
+
+/* ------------------------------------------------------------------ */
+/* EXAONE (K-EXAONE 2.5 · LG AI연구원 무료 API, OpenAI 호환)             */
+/* ------------------------------------------------------------------ */
+
+async function exaoneStep(
+  modelName: string,
+  apiKey: string,
+  system: string,
+  turns: ToolRunMessage[],
+  tools?: ToolSpec[],
+  options?: ProviderOptions,
+  signal?: AbortSignal
+): Promise<ChatResult> {
+  const messages: OpenAiMessage[] = [];
+  if (system) messages.push({ role: 'system', content: system });
+  // K-EXAONE 2.5는 텍스트 전용이다(사진은 안내 문구로 대체).
+  messages.push(...openAiMessages(turns, false));
+
+  const effort = exaoneEffort(options?.reasoningEffort);
+  const res = await fetch(EXAONE_ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: modelName || EXAONE_MODEL,
+      messages,
+      // 문서 권장값(일반·에이전트 공통): temperature 1.0, top_p 0.95,
+      // 이전 턴의 추론을 유지하는 preserve_thinking.
+      temperature: 1.0,
+      top_p: 0.95,
+      // max_tokens 에는 추론 토큰이 포함되므로 넉넉히 준다.
+      max_tokens: 4096,
+      reasoning_effort: exaoneApiEffort(effort),
+      chat_template_kwargs: { preserve_thinking: true },
+      stream: false,
+      tools: tools && tools.length
+        ? tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }))
+        : undefined,
+    }),
+    // 추론 모델이라 답이 늦을 수 있다(높음은 더 오래).
+    signal: withCancel(timeout(effort === 'high' ? 120_000 : 90_000), signal),
+  });
+  const body = await res.text();
+  if (!res.ok) throw new ProviderError(res.status, errorText(res.status, body));
+  const data = JSON.parse(body) as {
+    choices?: {
+      message?: {
+        content?: string | null;
+        reasoning_content?: string | null;
+        tool_calls?: { id?: string; function?: { name?: string; arguments?: string } }[];
+      };
+      finish_reason?: string;
+    }[];
+  };
+  const choice = data.choices?.[0];
+  const message = choice?.message;
+  // reasoning_content(내부 추론)는 사용자에게 보여 주지 않는다 — 최종 답변(content)만 쓴다.
+  const text = String(message?.content || '').replace(/^\s+/, '').trim();
+  const toolCalls: ToolCall[] = (message?.tool_calls || [])
+    .filter((c) => c?.function?.name)
+    .map((c, i) => {
+      let args: Record<string, unknown> = {};
+      try {
+        args = JSON.parse(c.function?.arguments || '{}') as Record<string, unknown>;
+      } catch {
+        args = {};
+      }
+      return { id: c.id || `exaone-${Date.now()}-${i}`, name: String(c.function?.name), args };
+    });
+  return { text, model: modelName || EXAONE_MODEL, toolCalls, finishReason: choice?.finish_reason };
 }
 
 /* ------------------------------------------------------------------ */
@@ -492,6 +679,7 @@ async function claudeStep(
   if (!res.ok) throw new ProviderError(res.status, errorText(res.status, body));
   const data = JSON.parse(body) as {
     content?: { type: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }[];
+    stop_reason?: string;
   };
   const blocks = data.content || [];
   const text = blocks
@@ -502,7 +690,7 @@ async function claudeStep(
   const toolCalls: ToolCall[] = blocks
     .filter((c) => c.type === 'tool_use' && c.name)
     .map((c, i) => ({ id: c.id || `claude-${Date.now()}-${i}`, name: String(c.name), args: c.input || {} }));
-  return { text, model: modelName, toolCalls };
+  return { text, model: modelName, toolCalls, finishReason: data.stop_reason };
 }
 
 /* ------------------------------------------------------------------ */
@@ -516,7 +704,8 @@ export async function runAgentStep(
   messages: AgentMessage[],
   tools?: ToolSpec[],
   allowFallback = false,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  providerOptions?: ProviderOptions
 ): Promise<ChatResult> {
   const modelName = normalizeModel(provider, model);
   const { system, turns } = splitSystem(messages);
@@ -544,16 +733,16 @@ export async function runAgentStep(
     throw lastError instanceof Error ? lastError : new Error('Gemini 응답을 받지 못했습니다.');
   }
 
-  // v0.5.2: OpenAI·Claude도 혼잡(429/5xx)·응답 지연이면 같은 모델로 한 번 더 시도한다.
+  // v0.5.2: OpenAI·Claude·EXAONE도 혼잡(429/5xx)·응답 지연이면 같은 모델로 한 번 더 시도한다.
   // (사용자에게 503이 그대로 노출되지 않게 하는 것이 목적 — 모델은 바꾸지 않는다)
   const attempts = allowFallback ? 2 : 1;
   let lastError: unknown = null;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 900));
     try {
-      return provider === 'openai'
-        ? await openAiStep(modelName, apiKey, system, turns, tools, signal)
-        : await claudeStep(modelName, apiKey, system, turns, tools, signal);
+      if (provider === 'openai') return await openAiStep(modelName, apiKey, system, turns, tools, signal);
+      if (provider === 'exaone') return await exaoneStep(modelName, apiKey, system, turns, tools, providerOptions, signal);
+      return await claudeStep(modelName, apiKey, system, turns, tools, signal);
     } catch (err) {
       lastError = err;
       if (!allowFallback || !isRetryableError(err)) throw err;
@@ -569,4 +758,19 @@ export async function runChat(
   messages: ChatMessage[]
 ): Promise<ChatResult> {
   return runAgentStep(provider, apiKey, model, messages as AgentMessage[], undefined, true);
+}
+
+/**
+ * v0.6.2: 브라우저 작업 중 모델이 빈 응답으로 멈췄을 때 올려 볼 상위 모델.
+ *
+ * 크몽 메시지함 작업에서 `gemini-3.1-flash-lite` 가 도구 호출 없이 빈 답을 돌려줘
+ * 루프가 그대로 끝나던 문제를 막기 위해, 경량(lite) 모델이면 같은 계열의 상위 플래시
+ * 모델로 올린다. 이미 상위 모델이면 null(같은 모델로 한 번 더 시도).
+ */
+export function higherTierModel(provider: ProviderId, model: string): string | null {
+  if (provider !== 'gemini') return null;
+  const name = normalizeModel(provider, model);
+  if (!/lite/i.test(name)) return null;
+  const target = PROVIDERS.gemini.models.find((m) => !/lite/i.test(m));
+  return target && target !== name ? target : 'gemini-3.8-flash';
 }

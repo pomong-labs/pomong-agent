@@ -21,8 +21,10 @@ import {
 } from './auth';
 import { currentStats, getHistory, startSampler } from './system';
 import {
+  EXAONE_EFFORTS,
   MODEL_LABELS,
   PROVIDERS,
+  exaoneEffort,
   getLastGoodGeminiModel,
   normalizeModel,
   runAgentStep,
@@ -30,6 +32,7 @@ import {
   testProvider,
   type AgentMessage,
   type AgentPart,
+  type ExaoneEffort,
   type ProviderId,
 } from './providers';
 import { TOOL_SPECS, TOOL_CATALOG, runTool, listTaskRows, toTaskView, normalizeDue, normalizePriority, type TaskRow } from './tools';
@@ -199,6 +202,8 @@ function normalizeCharacter(value: unknown, fallback: MascotId): MascotId {
 interface ProviderAccount {
   apiKeyEnc: string;
   connectedAt: string;
+  /** v0.6.2: EXAONE 추론 강도(low·medium·high) */
+  reasoningEffort?: ExaoneEffort;
 }
 
 interface LlmState {
@@ -251,6 +256,8 @@ interface ActiveConfig {
   model: string;
   apiKeyEnc: string | null;
   connectedAt: string | null;
+  /** v0.6.2: EXAONE용 추론 강도 */
+  reasoningEffort: ExaoneEffort;
 }
 
 function activeConfig(): ActiveConfig {
@@ -265,6 +272,7 @@ function activeConfig(): ActiveConfig {
     model,
     apiKeyEnc: account?.apiKeyEnc || null,
     connectedAt: account?.connectedAt || null,
+    reasoningEffort: exaoneEffort(account?.reasoningEffort),
   };
 }
 
@@ -283,6 +291,8 @@ function providerSummary() {
     connected: Boolean(state.accounts[id]?.apiKeyEnc),
     connectedAt: state.accounts[id]?.connectedAt || null,
     active: state.active.provider === id,
+    // v0.6.2: EXAONE 추론 강도 선택값(다른 프로바이더는 null)
+    reasoningEffort: id === 'exaone' ? exaoneEffort(state.accounts.exaone?.reasoningEffort) : null,
   }));
 }
 
@@ -1004,6 +1014,7 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
       sessionId: session,
       userRequest: input.prompt,
       signal: input.signal,
+      providerOptions: { reasoningEffort: config.reasoningEffort },
       onStep: (info) => {
         if (info.tools.length) setAgentState('working', info.tools.join(', '));
         else setAgentState('thinking', `${PROVIDERS[config.provider].label} ${info.index === 0 ? config.model : ''}`.trim());
@@ -1042,6 +1053,15 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
     const model = loop.model;
     let reply = loop.text;
     usedTools.push(...loop.tools);
+    // v0.6.2: 빈 응답·잘못된 함수 호출로 상위 모델에 다시 시도했다면 기록해 둔다.
+    if (loop.emptyRetries) {
+      addLog(
+        'warn',
+        loop.escalatedTo
+          ? `브라우저 작업 중 빈 응답 → ${loop.escalatedTo} 로 올려 ${loop.emptyRetries}번 다시 시도했습니다`
+          : `브라우저 작업 중 빈 응답 → 같은 모델로 ${loop.emptyRetries}번 다시 시도했습니다`
+      );
+    }
     if (loop.cancelled && !reply.trim()) {
       reply = '알겠어요, 작업을 중지했어요. 이어서 하려면 다시 말씀해 주세요.';
     }
@@ -1850,9 +1870,12 @@ app.get('/api/settings', requireAuth, (_req, res) => {
           label: PROVIDERS[config.provider].label,
           model: config.model,
           connectedAt: config.connectedAt,
+          reasoningEffort: config.reasoningEffort,
         }
       : null,
     providers: providerSummary(),
+    // v0.6.2: EXAONE 추론 강도 선택지
+    exaone: { efforts: EXAONE_EFFORTS },
   });
 });
 
@@ -1922,7 +1945,12 @@ app.post('/api/models/select', requireAuth, (req, res) => {
 });
 
 app.post('/api/settings/api-key', requireAuth, async (req, res) => {
-  const { provider, apiKey, model } = req.body as { provider?: ProviderId; apiKey?: string; model?: string };
+  const { provider, apiKey, model, reasoningEffort } = req.body as {
+    provider?: ProviderId;
+    apiKey?: string;
+    model?: string;
+    reasoningEffort?: ExaoneEffort;
+  };
   if (!provider || !(provider in PROVIDERS) || !apiKey?.trim()) {
     res.status(400).json({ ok: false, code: 'invalid_request', message: 'Provider와 API 키를 확인해 주세요.' });
     return;
@@ -1935,15 +1963,42 @@ app.post('/api/settings/api-key', requireAuth, async (req, res) => {
   const { encrypt, serverKey } = await import('./crypto');
   const state = llmState();
   const nextModel = normalizeModel(provider, model || (state.active.provider === provider ? state.active.model : ''));
+  const account: ProviderAccount = {
+    apiKeyEnc: encrypt(apiKey.trim(), serverKey()),
+    connectedAt: new Date().toISOString(),
+  };
+  // v0.6.2: EXAONE 추론 강도도 함께 저장한다(없으면 기존 값 유지).
+  const effort = reasoningEffort ? exaoneEffort(reasoningEffort) : state.accounts[provider]?.reasoningEffort;
+  if (provider === 'exaone' && effort) account.reasoningEffort = exaoneEffort(effort);
   saveLlmState({
     active: { provider, model: nextModel },
-    accounts: {
-      ...state.accounts,
-      [provider]: { apiKeyEnc: encrypt(apiKey.trim(), serverKey()), connectedAt: new Date().toISOString() },
-    },
+    accounts: { ...state.accounts, [provider]: account },
   });
   addLog('success', `${PROVIDERS[provider].label} 키를 저장했습니다`);
   res.json({ ok: true, message: result.message, model: nextModel });
+});
+
+/** v0.6.2: 키를 다시 넣지 않고 프로바이더별 설정(EXAONE 추론 강도)만 바꾼다. */
+app.post('/api/settings/provider-options', requireAuth, (req, res) => {
+  const { provider, reasoningEffort } = req.body as { provider?: ProviderId; reasoningEffort?: ExaoneEffort };
+  if (!provider || !(provider in PROVIDERS)) {
+    res.status(400).json({ ok: false, code: 'invalid_provider', message: 'AI 서비스를 확인해 주세요.' });
+    return;
+  }
+  if (provider !== 'exaone') {
+    res.status(400).json({ ok: false, code: 'not_supported', message: '이 AI에는 바꿀 설정이 없습니다.' });
+    return;
+  }
+  const effort = exaoneEffort(reasoningEffort);
+  const state = llmState();
+  const account = state.accounts.exaone;
+  if (!account?.apiKeyEnc) {
+    res.status(409).json({ ok: false, code: 'provider_not_connected', message: 'EXAONE 키를 먼저 연결해 주세요.' });
+    return;
+  }
+  saveLlmState({ ...state, accounts: { ...state.accounts, exaone: { ...account, reasoningEffort: effort } } });
+  addLog('info', `EXAONE 추론 강도 · ${effort}`);
+  res.json({ ok: true, reasoningEffort: effort });
 });
 
 /* --------------------------- automation --------------------------- */
@@ -2218,6 +2273,36 @@ app.post('/api/browser/sessions', requireAuth, async (req, res) => {
   }
 });
 
+/**
+ * v0.6.2: AI를 거치지 않고 브라우저를 바로 열어 사용자가 조작한다.
+ *   POST /api/browser/open { url?: 'naver.com' }
+ * 세션이 없으면 열고, 있으면 그 세션의 제어권을 사용자에게 넘긴다.
+ */
+app.post('/api/browser/open', requireAuth, async (req, res) => {
+  try {
+    const { url } = (req.body || {}) as { url?: string };
+    const opened = await browser.openForUser({ url });
+    res.json({ ok: true, session: opened.session, url: opened.url, note: opened.note });
+  } catch (err) {
+    res.status(400).json({ ok: false, code: 'browser_open_failed', message: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/** v0.6.2: 주소창에서 입력한 주소로 지금 화면을 바로 이동한다. */
+app.post('/api/browser/sessions/:id/navigate', requireAuth, async (req, res) => {
+  try {
+    const { url } = (req.body || {}) as { url?: string };
+    if (!url || !String(url).trim()) {
+      res.status(400).json({ ok: false, code: 'invalid_url', message: '이동할 주소를 입력해 주세요.' });
+      return;
+    }
+    const moved = await browser.navigateUser(req.params.id, String(url));
+    res.json({ ok: true, ...moved });
+  } catch (err) {
+    res.status(400).json({ ok: false, code: 'navigate_failed', message: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 app.delete('/api/browser/sessions/:id', requireAuth, async (req, res) => {
   await browser.closeSession(req.params.id).catch(() => undefined);
   res.json({ ok: true });
@@ -2473,6 +2558,7 @@ const server = app.listen(PORT, HOST, () => {
         toolsAllow: job.toolsAllow,
         unattended: true,
         deadline,
+        providerOptions: { reasoningEffort: config.reasoningEffort },
       });
       if (loop.needsApproval) {
         return {

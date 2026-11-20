@@ -22,6 +22,7 @@ import MascotFace from '../components/MascotFace';
 import {
   api,
   type AccentMode,
+  type ExaoneEffort,
   type PersonaId,
   type ProviderId,
   type PushStatus,
@@ -83,6 +84,8 @@ export default function SettingsPage() {
   const [provider, setProvider] = useState<ProviderId>('gemini');
   const [model, setModel] = useState('');
   const [apiKey, setApiKey] = useState('');
+  /** v0.6.2: EXAONE 추론 강도 (low·medium·high) */
+  const [effort, setEffort] = useState<ExaoneEffort>('low');
   const [keyBusy, setKeyBusy] = useState(false);
   const [keyMsg, setKeyMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -108,6 +111,7 @@ export default function SettingsPage() {
         setAccentColor(r.profile.accentColor || '#8B72F8');
         setProvider(r.active.provider);
         setModel(r.active.model);
+        setEffort(r.providers.find((p) => p.id === 'exaone')?.reasoningEffort || 'low');
       })
       .catch(() => undefined);
 
@@ -306,7 +310,12 @@ export default function SettingsPage() {
     setKeyBusy(true);
     setKeyMsg(null);
     try {
-      const r = await api.post<{ message: string }>('/api/settings/api-key', { provider, apiKey, model: model || undefined });
+      const r = await api.post<{ message: string }>('/api/settings/api-key', {
+        provider,
+        apiKey,
+        model: model || undefined,
+        reasoningEffort: provider === 'exaone' ? effort : undefined,
+      });
       setKeyMsg({ ok: true, text: r.message });
       setApiKey('');
       await load();
@@ -346,6 +355,25 @@ export default function SettingsPage() {
       : accentMode === 'custom'
         ? `직접 고른 색 ${normalizeHex(accentColor)}`
         : '기본 퍼플';
+  /** v0.6.2: EXAONE 추론 강도 — 문서 기준 low가 가장 빠르고 high/max가 정확하다. */
+  const effortChoices: { id: ExaoneEffort; label: string; hint: string }[] = [
+    { id: 'low', label: '낮음', hint: '가장 빠른 응답' },
+    { id: 'medium', label: '보통', hint: '속도·정확 균형' },
+    { id: 'high', label: '높음', hint: '정확·느림' },
+  ];
+  const exaoneConnected = Boolean(data?.providers.find((p) => p.id === 'exaone')?.connected);
+  const pickEffort = async (next: ExaoneEffort) => {
+    setEffort(next);
+    setKeyMsg(null);
+    if (!exaoneConnected) return;
+    try {
+      await api.post('/api/settings/provider-options', { provider: 'exaone', reasoningEffort: next });
+      await load();
+    } catch (err) {
+      setKeyMsg({ ok: false, text: err instanceof Error ? err.message : '추론 강도를 바꾸지 못했습니다.' });
+    }
+  };
+
   const themeChoices: { id: ThemeMode; label: string; hint: string; icon: typeof Sun }[] = [
     { id: 'light', label: '라이트', hint: '밝은 화면', icon: Sun },
     { id: 'dark', label: '다크', hint: '어두운 화면', icon: Moon },
@@ -537,7 +565,7 @@ export default function SettingsPage() {
             </span>
           </div>
 
-          <div className="mt-4 grid grid-cols-3 gap-2">
+          <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
             {themeChoices.map((opt) => {
               const active = theme === opt.id;
               const Icon = opt.icon;
@@ -679,6 +707,9 @@ export default function SettingsPage() {
                 }`}
               >
                 {p.label}
+                {p.id === 'exaone' ? (
+                  <span className="ml-1 rounded-md bg-[#EAFBF1] px-1.5 py-0.5 align-middle text-[10px] font-bold text-[#12B886]">무료</span>
+                ) : null}
                 <span
                   className={`absolute right-2 top-2 h-1.5 w-1.5 rounded-full ${p.connected ? 'bg-[#22C55E]' : 'bg-[#DAD6E6]'}`}
                   aria-hidden
@@ -710,6 +741,37 @@ export default function SettingsPage() {
               />
             </label>
           </div>
+
+          {provider === 'exaone' ? (
+            <div className="mt-3 rounded-2xl bg-[#F7FBFF] px-3.5 py-3 ring-1 ring-[#E7F1FE]">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[13px] font-semibold text-[#3B3947]">추론 강도</span>
+                <span className="text-[11px] text-[#8A8A9A]">높을수록 정확하지만 느려요</span>
+              </div>
+              <div className="mt-2 grid grid-cols-3 gap-2">
+                {effortChoices.map((choice) => (
+                  <button
+                    key={choice.id}
+                    type="button"
+                    onClick={() => void pickEffort(choice.id)}
+                    className={`rounded-xl border-[1.5px] px-2 py-2 text-center transition ${
+                      effort === choice.id
+                        ? 'border-[#9DC7FF] bg-white text-[#2F86D8]'
+                        : 'border-transparent bg-white/70 text-[#6B677A] hover:border-[#D7E7FB]'
+                    }`}
+                    aria-pressed={effort === choice.id}
+                  >
+                    <span className="block text-[13px] font-bold">{choice.label}</span>
+                    <span className="block text-[10.5px] text-[#9B98AB]">{choice.hint}</span>
+                  </button>
+                ))}
+              </div>
+              <p className="mt-2 text-[11px] leading-[1.55] text-[#7C86A0]">
+                K-EXAONE 2.5는 답하기 전에 항상 추론해요. 사진은 볼 수 없는 텍스트 모델이고, 무료 키는 30일마다
+                재발급이 필요해요.
+              </p>
+            </div>
+          ) : null}
 
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <button className="pa-btn-primary px-4 py-2.5" onClick={saveKey} disabled={keyBusy || !apiKey.trim()}>

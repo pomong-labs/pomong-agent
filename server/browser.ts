@@ -619,6 +619,86 @@ function leaseActive(r: BrowserSessionRow): boolean {
   return new Date(r.lease_expires_at).getTime() > Date.now();
 }
 
+/* ------------------------------------------------------------------ */
+/* 사용자가 직접 여는 브라우저 (v0.6.2)                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 사용자가 주소창에 입력한 값을 실제로 열 수 있는 주소로 바꾼다.
+ * `naver.com` → `https://naver.com` 처럼 https를 붙이고, 사이트별 로그인 주소 보정도 적용한다.
+ */
+export function normalizeAddress(input: string): { url: string; note: string | null } {
+  const raw = String(input || '').trim();
+  if (!raw) throw new Error('주소를 입력해 주세요.');
+  if (/^(about|data|javascript|file|blob):/i.test(raw)) throw new Error('이 주소는 열 수 없습니다. http·https 주소를 입력해 주세요.');
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw.replace(/^\/+/, '')}`;
+  let parsed: URL;
+  try {
+    parsed = new URL(withScheme);
+  } catch {
+    throw new Error('주소 형식이 아니에요. 예: naver.com');
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('http·https 주소만 열 수 있어요. 예: naver.com');
+  }
+  if (!parsed.hostname || (!parsed.hostname.includes('.') && parsed.hostname !== 'localhost')) {
+    throw new Error('주소 형식이 아니에요. 예: naver.com');
+  }
+  // 크몽 /login·무신사 /login 처럼 실제로 없는 주소는 메인으로 보정한다.
+  const fixed = normalizeUrl(parsed.toString());
+  return { url: fixed.url, note: fixed.note };
+}
+
+/** 주소창에서 입력한 주소로 지금 화면을 바로 이동한다(사람이 부르는 경로). */
+export async function navigateUser(
+  sessionId: string | undefined,
+  input: string
+): Promise<{ sessionId: string; url: string; title: string; note: string | null }> {
+  const session = sessionId ? row(sessionId) : activeSession();
+  if (!session) throw new Error('열린 브라우저 세션이 없습니다. 먼저 브라우저를 열어 주세요.');
+  const { url, note } = normalizeAddress(input);
+  const verdict = evaluateUrl(url);
+  if (verdict.level === 'block') throw new Error(`${verdict.host} 는 정책상 접근이 차단된 사이트입니다.`);
+  const s = await ensureLive(session.id);
+  let failure: string | null = null;
+  try {
+    await s.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  } catch (err) {
+    failure = err instanceof Error ? err.message.split('\n')[0].slice(0, 200) : String(err);
+  }
+  const finalUrl = s.page.url();
+  const title = await s.page.title().catch(() => '');
+  touch(session.id, { url: finalUrl, title });
+  logAction(session.id, 'user', 'browser.navigate', { url }, note || `이동: ${finalUrl}`, finalUrl);
+  void saveState(s);
+  // 리다이렉트 중 끊긴 경우(ERR_ABORTED)는 실제로는 열렸으므로 오류로 보지 않는다.
+  if (failure && !/aborted|interrupted|Navigation interrupted/i.test(failure)) {
+    throw new Error(`페이지를 열지 못했습니다: ${failure}`);
+  }
+  return { sessionId: session.id, url: finalUrl, title, note };
+}
+
+/**
+ * AI를 거치지 않고 브라우저를 바로 열어 사용자가 조작한다.
+ * 세션이 없으면 새로 열고, 있으면 그 세션을 그대로 쓰며 제어권을 사용자에게 넘긴다.
+ */
+export async function openForUser(
+  input: { url?: string } = {}
+): Promise<{ session: BrowserSessionView; url: string | null; note: string | null }> {
+  if (!BROWSER_ENABLED) throw new Error('이 서버에서는 브라우저 기능이 꺼져 있습니다(BROWSER_ENABLED=0).');
+  const created = await createSession();
+  let url: string | null = null;
+  let note: string | null = null;
+  if (input.url && input.url.trim()) {
+    const moved = await navigateUser(created.id, input.url);
+    url = moved.url;
+    note = moved.note;
+  }
+  await requestHandover('manual', '브라우저를 직접 열었어요', created.id);
+  const updated = row(created.id);
+  return { session: updated ? toSessionView(updated) : created, url, note };
+}
+
 /** 에이전트 액션 전 검사: 제어권 리스 + 도메인 정책 */
 function guardAgent(r: BrowserSessionRow, policy: PolicyLevel): void {
   if (leaseActive(r)) {
@@ -651,6 +731,8 @@ interface SnapshotData {
   sensitive: boolean;
   handover: HandoverReason | null;
   injection: boolean;
+  /** v0.6.2: 화면만 보고 판단한 로그인 상태(로그인 버튼·비밀번호 칸·계정 흔적) */
+  loginState: { hints: string[]; loginEntryVisible: boolean; passwordField: boolean };
 }
 
 const SNAPSHOT_LIMIT = 12_000;
@@ -726,7 +808,50 @@ async function takeSnapshot(page: Page): Promise<SnapshotData> {
     sensitive,
     handover,
     injection: looksLikeInjection(lower),
+    loginState: readLoginState(raw.list, raw.text),
   };
+}
+
+/**
+ * 화면 요소·글자만으로 로그인 상태를 판단한다(v0.6.2).
+ * `browser_open` 결과에 "이미 로그인되어 있습니다"를 실어 불필요한
+ * browser_click("로그인")을 막는 데 쓴다.
+ */
+export function readLoginState(
+  elements: { name: string; type?: string; sensitive?: boolean }[],
+  text: string
+): { hints: string[]; loginEntryVisible: boolean; passwordField: boolean } {
+  const flat = (value: string) => value.replace(/\s+/g, ' ').trim();
+  // name 은 "e12 로그인" 처럼 ref가 붙어 있다.
+  const labelOf = (name: string) => flat(name.replace(/^e\d+\s*/, ''));
+  const loginExact = /^(로그인|로그 인|로그인하기|login|log in|sign in|signin)$/i;
+  const loginEntryVisible = elements.some((el) => loginExact.test(labelOf(el.name)));
+  const passwordField = elements.some((el) => (el.type || '').toLowerCase() === 'password');
+  const body = flat(text).slice(0, 12_000);
+  const candidates: { test: RegExp; label: string }[] = [
+    { test: /(로그아웃|logout|sign out)/i, label: '로그아웃' },
+    { test: /(마이\s*페이지|my ?page)/i, label: '마이페이지' },
+    { test: /(메시지함|쪽지함|메시지\s*관리|받은\s*메시지|대화\s*목록)/i, label: '메시지함' },
+    { test: /(내\s*정보|계정\s*설정|프로필\s*설정|계정\s*관리)/i, label: '내 정보' },
+    { test: /(내\s*주문|주문\s*내역|구매\s*내역|장바구니)/i, label: '주문/장바구니' },
+    { test: /(알림\s*\d|새\s*알림|notification)/i, label: '알림' },
+  ];
+  const hints = candidates.filter((c) => c.test.test(body)).map((c) => c.label);
+  return { hints, loginEntryVisible, passwordField };
+}
+
+/** '이미 로그인'이라고 단정할 수 있는 근거(로그아웃·마이페이지·메시지함·내 정보) */
+const STRONG_LOGIN_HINTS = ['로그아웃', '마이페이지', '메시지함', '내 정보'];
+
+/**
+ * 모델에게 "이미 로그인되어 있다"고 알려 줄 문장 (v0.6.2).
+ * 로그인 버튼이 보이거나 비밀번호 칸이 있으면(로그인 화면) null.
+ */
+export function loginStateNote(read: { hints: string[]; loginEntryVisible: boolean; passwordField: boolean }): string | null {
+  if (read.passwordField || read.loginEntryVisible) return null;
+  const strong = read.hints.filter((h) => STRONG_LOGIN_HINTS.includes(h));
+  if (!strong.length) return null;
+  return `[로그인 상태: 이미 로그인되어 있습니다. 로그인 버튼을 누르지 말고 바로 요청한 메뉴(메시지함 등)로 이동하세요] (화면 근거: ${strong.join(', ')})`;
 }
 
 function formatSnapshot(data: SnapshotData, sessionId: string): string {
@@ -806,6 +931,10 @@ export async function openUrl(url: string, convId?: string): Promise<OpenResult>
   if (data.handover) {
     // 로그인·캡차 화면이면 자동으로 사람에게 넘길 준비를 한다(요청은 모델이 한다).
     notes.push(`※ 이 화면은 '${HANDOVER_LABELS[data.handover]}' 상태입니다. 필요한 부분을 사용자에게 넘기려면 browser_handover를 부르세요.`);
+  } else {
+    // v0.6.2: 이미 로그인된 화면이면 로그인 버튼을 다시 누르지 않게 알린다.
+    const loginNote = loginStateNote(data.loginState);
+    if (loginNote) notes.push(loginNote);
   }
   const suffix = notes.length ? `\n\n${notes.join('\n')}` : '';
   return {
@@ -2101,16 +2230,26 @@ export async function userInput(sessionId: string, payload: UserInputPayload): P
       break;
     case 'goto':
       if (payload.url) {
-        const verdict = evaluateUrl(payload.url);
+        // v0.6.2: 주소창에 `naver.com` 처럼 도메인만 써도 https 를 붙여 이동한다.
+        const target = normalizeAddress(String(payload.url));
+        const verdict = evaluateUrl(target.url);
         if (verdict.level === 'block') throw new Error('차단된 사이트입니다.');
-        await page.goto(payload.url, { timeout: 20_000 }).catch(() => undefined);
+        try {
+          await page.goto(target.url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+        } catch (err) {
+          const why = err instanceof Error ? err.message.split('\n')[0] : String(err);
+          if (!/aborted|interrupted|Navigation interrupted/i.test(why)) {
+            throw new Error(`페이지를 열지 못했습니다: ${why.slice(0, 180)}`);
+          }
+        }
       }
       break;
     default:
       throw new Error('알 수 없는 입력입니다.');
   }
-  if (!viewOnly) {
+  if (!viewOnly || session.control_owner === 'user') {
     // 핸드오버 중 사용자가 조작하는 동안 리스를 연장한다(무입력 5분 정지 대신 15분 고정).
+    // v0.6.2: 주소 이동·스크롤 같은 보기 입력도 사용자가 직접 열어 둔 세션이면 리스를 연장한다.
     touch(sessionId, { lease_expires_at: new Date(Date.now() + 15 * 60_000).toISOString(), url: page.url() });
   } else {
     touch(sessionId, { url: page.url() });
