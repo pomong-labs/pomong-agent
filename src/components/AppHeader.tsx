@@ -12,9 +12,13 @@ import { AGENT_STATE_META, type AgentState, useAppStore } from '../lib/store';
  * v0.6.6에서 바꾼 것
  * - 캐릭터를 76px → 48px(키보드 34px)로 한 단계 줄여 아래 말풍선을 덜 가린다.
  * - 아이콘–이름–배지 세로 간격을 6·4px로 좁혀 헤더 전체 높이를 슬림하게 만들었다.
- * - 페이드의 불투명 구간을 이름·배지가 끝나는 높이까지 넉넉히 덮어, 뒤쪽 말풍선 글씨가
- *   이름·배지 뒤로 비쳐 보이지 않게 했다.
  * - 페이드 시작색은 본문 배경과 같은 `--pa-surface`(= 상태바 색)라 위아래 색 경계가 보이지 않는다.
+ *
+ * v0.6.9에서 바꾼 것
+ * - 완전 불투명 구간을 112px → 40px(키보드 30px)로 확 줄였다. 상태바·☰·캡슐이 있는 맨 윗줄만
+ *   불투명하게 덮고, 캐릭터·이름·배지 뒤쪽은 78% → 40% → 투명으로 부드럽게 풀어 뒤쪽 채팅
+ *   말풍선이 훨씬 잘 비쳐 보이게 했다(페이드 전체 높이 168 → 124px).
+ * - 이름은 표면색 헤일로(text-shadow)로, 배지는 은은한 그림자로 가독성을 유지한다.
  *
  * - 좌우 버튼은 `absolute` 로 두어 가운데(캐릭터·이름·배지)가 화면 정중앙에 온다.
  * - 헤더 전체는 `pointer-events-none` 이라 그 위에서도 채팅 스크롤이 그대로 먹고,
@@ -49,19 +53,22 @@ export default function AppHeader({
   const buttonSize = compact ? 32 : 36;
   const sideTop = (avatar - buttonSize) / 2;
   const busy = visibleState === 'thinking' || visibleState === 'working' || visibleState === 'responding';
-  // 페이드: 배지가 끝나는 지점까지 불투명, 그 아래로 서서히 투명
-  const fadeSolid = compact ? 70 : 112;
-  const fadeHeight = compact ? 108 : 168;
+  // v0.6.9: 페이드 — 맨 윗줄(36~44px)만 불투명하게 덮고, 그 아래는 78% → 40% → 투명으로 푼다.
+  const fadeSolid = compact ? 30 : 40;
+  const fadeHeight = compact ? 96 : 124;
+  const fadeSpan = fadeHeight - fadeSolid;
+  const fade78 = Math.round(fadeSolid + fadeSpan * 0.34);
+  const fade40 = Math.round(fadeSolid + fadeSpan * 0.72);
 
   return (
     <header className="pointer-events-none absolute inset-x-0 top-0 z-30">
       {/* 상단 페이드 — 맨 위는 본문 배경·상태바와 같은 색(--pa-surface), 아래로 갈수록 투명해져
-          메시지가 스며들 듯 사라진다. 이름·배지가 끝나는 높이까지는 불투명하게 덮는다. */}
+          메시지가 스며들 듯 사라진다. v0.6.9: 불투명 구간은 맨 윗줄만, 그 아래는 78% → 40% → 투명. */}
       <div
         className="pointer-events-none absolute inset-x-0 top-0"
         style={{
           height: fadeHeight,
-          background: `linear-gradient(to bottom, var(--pa-surface) 0px, var(--pa-surface) ${fadeSolid}px, transparent ${fadeHeight}px)`,
+          background: `linear-gradient(to bottom, var(--pa-surface) 0px, var(--pa-surface) ${fadeSolid}px, color-mix(in srgb, var(--pa-surface) 78%, transparent) ${fade78}px, color-mix(in srgb, var(--pa-surface) 40%, transparent) ${fade40}px, transparent ${fadeHeight}px)`,
         }}
         aria-hidden
       />
@@ -172,7 +179,12 @@ export default function AppHeader({
               className={`max-w-[54vw] truncate text-center font-bold tracking-[-0.01em] sm:max-w-[220px] ${
                 compact ? 'mt-0.5 text-[12.5px]' : 'mt-1.5 text-[15px]'
               }`}
-              style={{ color: 'var(--pa-ink-strong)' }}
+              style={{
+                color: 'var(--pa-ink-strong)',
+                // v0.6.9: 배경이 비쳐도 이름이 읽히도록 표면색 헤일로를 준다(라이트·다크 공통).
+                textShadow:
+                  '0 1px 2px color-mix(in srgb, var(--pa-surface) 85%, transparent), 0 0 10px color-mix(in srgb, var(--pa-surface) 65%, transparent)',
+              }}
             >
               {profile.agentName || 'Pomong'}
             </h1>
@@ -182,7 +194,12 @@ export default function AppHeader({
               className={`relative flex min-w-0 items-center justify-center rounded-full transition-all duration-300 ease-out ${
                 compact ? 'mt-0.5 gap-1 px-2 py-[1px]' : 'mt-1 gap-1.5 px-2.5 py-[2px]'
               }`}
-              style={{ background: meta.bg, color: meta.text }}
+              style={{
+                background: meta.bg,
+                color: meta.text,
+                // v0.6.9: 페이드가 옅어져도 배지가 말풍선 위에서 또렷하게 떠 보이게 은은한 그림자.
+                boxShadow: '0 2px 10px color-mix(in srgb, var(--pa-surface) 40%, transparent)',
+              }}
               aria-live="polite"
             >
               <span

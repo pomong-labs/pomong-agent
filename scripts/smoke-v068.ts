@@ -54,17 +54,18 @@ async function main(): Promise<void> {
   /* 1) 버전 --------------------------------------------------------------- */
   const pkg = JSON.parse(read('package.json')) as { version: string };
   const compose = read('docker-compose.yml');
-  check('버전 0.6.8', pkg.version === '0.6.8', pkg.version);
+  check('버전 값 존재', /^\d+\.\d+\.\d+$/.test(pkg.version), pkg.version);
   check('server/config 버전', APP_VERSION === pkg.version, APP_VERSION);
-  check('docker-compose 이미지 태그', compose.includes('image: pomong-agent:0.6.8') && compose.includes('image: pomong-agent-browser:0.6.8'));
-  check('서비스 워커 캐시 버전', read('public/sw.js').includes('pomong-agent-v0.6.8'));
+  check('docker-compose 이미지 태그', compose.includes(`image: pomong-agent:${pkg.version}`) && compose.includes(`image: pomong-agent-browser:${pkg.version}`));
+  check('서비스 워커 캐시 버전', read('public/sw.js').includes(`pomong-agent-v${pkg.version}`));
   check('에셋 캐시 버전', ASSET_VERSION === pkg.version, ASSET_VERSION);
 
   /* 2) 하단 탭바 여백 ------------------------------------------------------- */
   const css = read('src/index.css');
   const tabbar = read('src/components/MobileTabBar.tsx');
   const safeBlock = css.slice(css.indexOf('.pb-safe {'), css.indexOf('.pt-safe {'));
-  check('pb-safe 가 타이트한 max() 값', /max\(10px,\s*calc\(var\(--safe-bottom\)\s*-\s*14px\)\)/.test(safeBlock), safeBlock.replace(/\s+/g, ' ').trim());
+  // v0.6.9 이후로 값은 더 조여졌다. 이 스모크는 "세이프 에어리어를 빼는 타이트한 max()" 형태만 고정한다.
+  check('pb-safe 가 타이트한 max() 값', /max\(\d+px,\s*calc\(var\(--safe-bottom\)\s*-\s*\d+px\)\)/.test(safeBlock), safeBlock.replace(/\s+/g, ' ').trim());
   check('pb-safe 에 옛 +8px 여백 없음', !/calc\(var\(--safe-bottom\)\s*\+\s*8px\)/.test(css));
   check('탭바가 pb-safe 사용', /className="[^"]*pb-safe/.test(tabbar));
   check('탭바는 화면 맨 아래 고정', tabbar.includes('pa-tabbar'));

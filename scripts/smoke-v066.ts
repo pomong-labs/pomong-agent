@@ -175,7 +175,9 @@ async function main(): Promise<void> {
   check('아이콘–이름 간격 축소', header.includes('mt-1.5 text-[15px]') && !header.includes('mt-2.5 text-[17px]'));
   check('이름–배지 간격 축소', header.includes("mt-1 text-[15px]") === false || header.includes('mt-1 gap-1.5 px-2.5'));
   check('헤더 높이 상수를 공유', header.includes('export const HEADER_SPACE') && chat.includes('HEADER_SPACE.normal'));
-  check('페이드가 이름·배지까지 불투명', header.includes('const fadeSolid = compact ? 70 : 112'));
+  // v0.6.9: 불투명 구간을 의도적으로 40px(키보드 30px)까지 줄였다. 값은 smoke-v069 가 고정하고,
+  // 여기서는 페이드가 키보드 유무로 나뉘는 구조만 본다.
+  check('페이드가 키보드 유무로 나뉜 상수', header.includes('const fadeSolid = compact ?') && header.includes('const fadeHeight = compact ?'));
   // v0.6.7: 페이드 시작색이 상태바가 아니라 본문 표면색(--pa-surface)이 되었다(두 값은 같다).
   check('페이드 시작색이 본문 표면색', header.includes('linear-gradient(to bottom, var(--pa-surface) 0px'));
 
