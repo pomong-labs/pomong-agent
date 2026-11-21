@@ -339,7 +339,15 @@ export async function changeContainerState(
     return { ok: false, error: `포몽 자신의 컨테이너는 ${normalized}할 수 없습니다 — ${verdict.reason}.` };
   }
   const query = normalized === 'stop' || normalized === 'restart' ? '?t=10' : '';
-  const res = await dockerRequestRaw(`/containers/${encodeURIComponent(fresh.id)}/${normalized}${query}`, { method: 'POST' });
+  /**
+   * v0.6.18: 도커의 stop·restart는 컨테이너가 SIGTERM을 받고 최대 10초를 기다린 뒤 끝난다.
+   * 기본 8초 타임아웃으로는 "도커 응답 시간 초과"로 실패해 승인 카드로 실행해도 안 된 것처럼 보였다.
+   * 유예 시간(10초) + 여유를 두어 실제 완료까지 기다린다.
+   */
+  const res = await dockerRequestRaw(`/containers/${encodeURIComponent(fresh.id)}/${normalized}${query}`, {
+    method: 'POST',
+    timeoutMs: normalized === 'stop' || normalized === 'restart' ? 40_000 : 20_000,
+  });
   if (res.status >= 400) {
     const detail = res.body.toString('utf8').slice(0, 300);
     return { ok: false, error: `${normalized} 실패(도커 응답 ${res.status})${detail ? `: ${detail}` : ''}` };

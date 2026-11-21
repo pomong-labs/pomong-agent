@@ -137,6 +137,11 @@ async function main(): Promise<void> {
     read('src/pages/Chat.tsx').includes('function ApprovalCard') && read('src/pages/Chat.tsx').includes('<ApprovalCard'),
   );
   check('대화방 승인 목록 전달', read('server/index.ts').includes('approvals.listForSession(session)'));
+  check(
+    '도커 상태 변경 타임아웃',
+    read('server/docker.ts').includes('40_000') && read('server/docker.ts').includes("normalized === 'stop'"),
+    'stop 유예 10초보다 긴 요청 타임아웃'
+  );
 
   /* 5) 개인정보 마스킹 ------------------------------------------------------ */
   const mask = await import('../server/privacy-mask');
