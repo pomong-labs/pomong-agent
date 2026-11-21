@@ -93,11 +93,11 @@ function seedMessages() {
   const db = new Database(path.join(DATA, 'pomong-agent.db'));
   const now = Date.now();
   const insert = db.prepare('INSERT INTO messages (session_id, role, content, meta, created_at) VALUES (?,?,?,?,?)');
-  insert.run('default', 'user', '오늘 인제 날씨 어때? 오후에 나가는데 우산 챙겨야 할까?', null, new Date(now - 1000 * 60 * 8).toISOString());
+  insert.run('default', 'user', '오늘 춘천 날씨 어때? 오후에 나가는데 우산 챙겨야 할까?', null, new Date(now - 1000 * 60 * 8).toISOString());
   insert.run(
     'default',
     'assistant',
-    '인제는 지금 3도에 흐린 하늘이에요. 오후 3시쯤부터 비 소식이 있으니 우산을 챙기시는 게 좋겠어요.\n\n- 기온 3° → 7° (체감 1°)\n- 오후 강수 확률 70%\n- 바람 약함',
+    '춘천은 지금 3도에 흐린 하늘이에요. 오후 3시쯤부터 비 소식이 있으니 우산을 챙기시는 게 좋겠어요.\n\n- 기온 3° → 7° (체감 1°)\n- 오후 강수 확률 70%\n- 바람 약함',
     null,
     new Date(now - 1000 * 60 * 7).toISOString()
   );
@@ -305,7 +305,7 @@ async function main() {
     await mp.screenshot({ path: path.join(OUT, '10-chat-light-mobile.png') });
     report.push(`모바일 상단바 중심 오프셋: ${JSON.stringify(await headerOffset(mp))}`);
     // 입력창에 긴 글을 넣어 상단바가 흔들리지 않는지
-    await mp.fill('textarea', '주말에 인제 날씨 알려줘');
+    await mp.fill('textarea', '주말에 춘천 날씨 알려줘');
     await mp.waitForTimeout(500);
     await mp.screenshot({ path: path.join(OUT, '11-chat-light-mobile-typing.png') });
     report.push(`입력 중 상단바 중심 오프셋: ${JSON.stringify(await headerOffset(mp))}`);

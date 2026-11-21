@@ -758,7 +758,7 @@ export const TOOL_SPECS: ToolSpec[] = [
   {
     name: 'dday_add',
     description:
-      'D-Day(기념일·결제일·시험일 등)를 등록한다. "전역 2027년 2월 24일로 디데이 추가해줘", "생일 매년 반복으로 넣어줘" 같은 요청에 쓴다. ' +
+      'D-Day(기념일·결제일·시험일 등)를 등록한다. "전역 2027년 5월 15일로 디데이 추가해줘", "생일 매년 반복으로 넣어줘" 같은 요청에 쓴다. ' +
       '날짜는 반드시 YYYY-MM-DD 형식으로 계산해 넣는다(오늘 날짜는 time_now로 확인). 매년 반복(생일·기념일·카드 결제일)이면 repeat_yearly를 true로 한다.',
     parameters: {
       type: 'object',
@@ -1920,7 +1920,7 @@ async function runToolInner(name: string, args: Record<string, unknown>, ctx: To
     }
     case 'dday_list': {
       const list = ddays.listDDays();
-      if (!list.length) return { content: '등록된 D-Day가 없습니다. "전역 2027-02-24로 디데이 추가해줘"처럼 등록할 수 있습니다.' };
+      if (!list.length) return { content: '등록된 D-Day가 없습니다. "전역 2027-05-15로 디데이 추가해줘"처럼 등록할 수 있습니다.' };
       return { content: `D-Day ${list.length}개\n${list.map((item) => `- ${ddays.ddayLine(item)}`).join('\n')}` };
     }
     case 'dday_add': {

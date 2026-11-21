@@ -408,8 +408,8 @@ async function main(): Promise<void> {
 
   /* 7) D-Day --------------------------------------------------------------- */
   check('오늘(KST) 형식', /^\d{4}-\d{2}-\d{2}$/.test(ddays.todayKst()));
-  check('날짜 정규화(점)', ddays.normalizeDateInput('2027.2.24') === '2027-02-24', String(ddays.normalizeDateInput('2027.2.24')));
-  check('날짜 정규화(한글)', ddays.normalizeDateInput('2027년 2월 24일') === '2027-02-24');
+  check('날짜 정규화(점)', ddays.normalizeDateInput('2027.5.15') === '2027-05-15', String(ddays.normalizeDateInput('2027.5.15')));
+  check('날짜 정규화(한글)', ddays.normalizeDateInput('2027년 5월 15일') === '2027-05-15');
   check('잘못된 날짜 거부', ddays.normalizeDateInput('2027-02-31') === null && ddays.normalizeDateInput('내일') === null);
   check('남은 일수 계산', ddays.daysUntil('2026-11-26', '2026-11-21') === 5, String(ddays.daysUntil('2026-11-26', '2026-11-21')));
   check('D-Day 표기', ddays.ddayLabel(0) === 'D-Day' && ddays.ddayLabel(14) === 'D-14' && ddays.ddayLabel(-3) === 'D+3');
@@ -417,9 +417,9 @@ async function main(): Promise<void> {
   check('매년 반복(올해 지남)', ddays.nextOccurrence('2005-11-20', true, '2026-11-21') === '2027-11-20');
   check('매년 반복(2월 29일 보정)', ddays.nextOccurrence('2004-02-29', true, '2026-01-05') === '2026-02-28');
 
-  const dday1 = ddays.createDDay({ title: '전역', date: '2027-02-24' });
+  const dday1 = ddays.createDDay({ title: '전역', date: '2027-05-15' });
   check('D-Day 등록', dday1.ok && dday1.dday.title === '전역');
-  check('D-Day 날짜 표기', dday1.ok && dday1.dday.dateLabel.includes('2027년 2월 24일'), dday1.ok ? dday1.dday.dateLabel : '');
+  check('D-Day 날짜 표기', dday1.ok && dday1.dday.dateLabel.includes('2027년 5월 15일'), dday1.ok ? dday1.dday.dateLabel : '');
   const dday2 = ddays.createDDay({ title: '생일', date: '2026-12-01', repeatYearly: true });
   check('매년 반복 등록', dday2.ok && dday2.dday.repeatYearly);
   const badDate = ddays.createDDay({ title: '테스트', date: '2027년 2월' });
@@ -471,13 +471,30 @@ async function main(): Promise<void> {
   check('할 일 화면에 D-Day 섹션', read('src/pages/Tasks.tsx').includes('/api/ddays') && read('src/pages/Tasks.tsx').includes('D-Day'));
   check('알림은 채팅방 말풍선+푸시', read('server/index.ts').includes('setParcelNotifier') && read('server/index.ts').includes('startParcelWatchLoop'));
 
+  // 개인 식별 문자열은 공개 저장소에 두지 않는다(오픈소스 배포 조건).
+  // 그래서 저장소에서는 개인정보의 '형태'를 검사하고, 유지보수자는 저장소 밖 패턴 파일을
+  // 지정해 실명·계정까지 함께 검사한다.
+  //   PII_PATTERNS_FILE=/절대/경로/pii-patterns.json   → [["라벨", "정규식"], ...]
+  const allow = /(?:you@naver\.com|pomong\.labs@gmail\.com|010-1234-5678|test-user@example\.com|홍길동)/;
+  const localFile = process.env.PII_PATTERNS_FILE;
+  const localPatterns: [string, RegExp][] =
+    localFile && fs.existsSync(localFile)
+      ? (JSON.parse(fs.readFileSync(localFile, 'utf8')) as [string, string][]).map(
+          ([label, src]) => [label, new RegExp(src)] as [string, RegExp]
+        )
+      : [];
   const patterns: [string, RegExp][] = [
-    ['이름', /김현준|현준/],
-    ['네이버 아이디', /hyunjun|kimhj050326/i],
-    ['깃허브 핸들', /khjkr/i],
-    ['전화번호', /4343-?5216/],
-    ['거주지 예시', /익산시 평동로/],
+    ['개인 메일 계정', /[A-Za-z0-9._%+-]+@(?:gmail|naver|daum|hanmail|nate|kakao)\.[A-Za-z.]{2,}/],
+    ['전화번호', /\b0\d{1,2}[-.\s]\d{3,4}[-.\s]\d{4}\b/],
+    ['주민등록번호', /\b\d{6}[-.\s]?[1-4]\d{6}\b/],
+    ['생년월일', /\b(?:199|200)\d[-./]?(?:0[1-9]|1[0-2])[-./]?(?:0[1-9]|[12]\d|3[01])\b/],
+    ...localPatterns,
   ];
+  // 문서·데모용으로 일부러 둔 더미 값만 허용한다.
+  const piiHit = (re: RegExp, body: string): boolean =>
+    (body.match(new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`)) ?? []).some(
+      (m) => !allow.test(m)
+    );
   const targets = walk(path.join(ROOT, 'src'))
     .concat(walk(path.join(ROOT, 'server')))
     .concat(walk(path.join(ROOT, 'scripts')))
@@ -491,7 +508,7 @@ async function main(): Promise<void> {
       const rel = path.relative(ROOT, file);
       if (rel.startsWith('scripts/smoke-')) continue;
       if (rel.startsWith('public/sw.js')) continue;
-      if (re.test(fs.readFileSync(file, 'utf8'))) hits.push(rel);
+      if (piiHit(re, fs.readFileSync(file, 'utf8'))) hits.push(rel);
     }
     check(`개인정보(${label}) 0건`, hits.length === 0, hits.join(', '));
   }

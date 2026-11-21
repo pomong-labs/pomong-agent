@@ -94,18 +94,18 @@ async function main() {
   try {
     const mx = await import('../server/memory-extract');
     assert.equal(mx.shouldExtract('안녕', '안녕하세요!'), false);
-    assert.equal(mx.shouldExtract('오늘 인제 날씨 어때?', '맑고 12도입니다.'), false);
+    assert.equal(mx.shouldExtract('오늘 춘천 날씨 어때?', '맑고 12도입니다.'), false);
     assert.equal(mx.shouldExtract('[시스템] 이어서 하세요', '네 이어서 할게요'), false);
-    assert.equal(mx.shouldExtract('나는 지금 군 복무 중이고 취사병이야', '군 복무 중이시군요. 취사병 근무 화이팅이에요!'), true);
+    assert.equal(mx.shouldExtract('나는 지금 대학생이고 아르바이트를 하고 있어', '대학생이시군요. 아르바이트와 학업을 함께 하시는군요!'), true);
     const parsed = mx.parseExtraction(
-      '```json\n[{"category":"profile","content":"군 복무 중인 취사병이다","importance":4},{"category":"weird","content":"","importance":9}]\n```'
+      '```json\n[{"category":"profile","content":"회사원이고 서울에 산다","importance":4},{"category":"weird","content":"","importance":9}]\n```'
     );
     assert.equal(parsed.length, 1);
     assert.equal(parsed[0].category, 'profile');
     assert.equal(parsed[0].importance, 4);
     const existing = ['아침 7시에 일어난다', '아침 브리핑은 서울 날씨로 받는다'];
-    assert.equal(mx.isDuplicate('군 복무 중인 취사병이다', existing), true);
-    assert.equal(mx.isDuplicate('군 복무 중인 취사병이다!', existing), true);
+    assert.equal(mx.isDuplicate('회사원이고 서울에 산다', existing), true);
+    assert.equal(mx.isDuplicate('회사원이고 서울에 산다!', existing), true);
     assert.equal(mx.isDuplicate('서든어택을 즐겨 한다', existing), false);
     ok('자동 기억 추출 필터·JSON 파싱·중복(문구/토큰) 제거');
   } catch (err) {

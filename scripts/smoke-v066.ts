@@ -224,13 +224,30 @@ async function main(): Promise<void> {
   check('템플릿 추가 버튼', toolsPage.includes('api.post<{ existing: boolean }>(`/api/skills/templates/'));
 
   /* 10) 개인정보 0건 ------------------------------------------------------- */
+  // 개인 식별 문자열은 공개 저장소에 두지 않는다(오픈소스 배포 조건).
+  // 그래서 저장소에서는 개인정보의 '형태'를 검사하고, 유지보수자는 저장소 밖 패턴 파일을
+  // 지정해 실명·계정까지 함께 검사한다.
+  //   PII_PATTERNS_FILE=/절대/경로/pii-patterns.json   → [["라벨", "정규식"], ...]
+  const allow = /(?:you@naver\.com|pomong\.labs@gmail\.com|010-1234-5678|test-user@example\.com|홍길동)/;
+  const localFile = process.env.PII_PATTERNS_FILE;
+  const localPatterns: [string, RegExp][] =
+    localFile && fs.existsSync(localFile)
+      ? (JSON.parse(fs.readFileSync(localFile, 'utf8')) as [string, string][]).map(
+          ([label, src]) => [label, new RegExp(src)] as [string, RegExp]
+        )
+      : [];
   const patterns: [string, RegExp][] = [
-    ['이름', /김현준|현준/],
-    ['네이버 아이디', /hyunjun|kimhj050326/i],
-    ['깃허브 핸들', /khjkr/i],
-    ['전화번호', /4343-?5216/],
-    ['거주지 예시', /익산시 평동로/],
+    ['개인 메일 계정', /[A-Za-z0-9._%+-]+@(?:gmail|naver|daum|hanmail|nate|kakao)\.[A-Za-z.]{2,}/],
+    ['전화번호', /\b0\d{1,2}[-.\s]\d{3,4}[-.\s]\d{4}\b/],
+    ['주민등록번호', /\b\d{6}[-.\s]?[1-4]\d{6}\b/],
+    ['생년월일', /\b(?:199|200)\d[-./]?(?:0[1-9]|1[0-2])[-./]?(?:0[1-9]|[12]\d|3[01])\b/],
+    ...localPatterns,
   ];
+  // 문서·데모용으로 일부러 둔 더미 값만 허용한다.
+  const piiHit = (re: RegExp, body: string): boolean =>
+    (body.match(new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`)) ?? []).some(
+      (m) => !allow.test(m)
+    );
   const targets = walk(path.join(ROOT, 'src'))
     .concat(walk(path.join(ROOT, 'server')))
     .concat(walk(path.join(ROOT, 'scripts')))
@@ -245,7 +262,7 @@ async function main(): Promise<void> {
       if (rel.startsWith('scripts/smoke-')) continue; // 검사 패턴 자체는 제외
       if (rel.startsWith('public/sw.js')) continue;
       const text = fs.readFileSync(file, 'utf8');
-      if (re.test(text)) hits.push(rel);
+      if (piiHit(re, text)) hits.push(rel);
     }
     check(`개인정보(${label}) 0건`, hits.length === 0, hits.join(', '));
   }

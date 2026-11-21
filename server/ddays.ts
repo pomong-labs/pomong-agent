@@ -32,7 +32,7 @@ export interface DDayView {
   days: number;
   /** D-Day · D-14 · D+3 */
   label: string;
-  /** 2027년 2월 24일 (수) */
+  /** 2027년 5월 15일 (토) */
   dateLabel: string;
   createdAt: string;
   updatedAt: string | null;
@@ -157,7 +157,7 @@ export function createDDay(input: CreateDDayInput): { ok: true; dday: DDayView }
   if (!title) return { ok: false, error: 'D-Day 이름을 입력해 주세요.' };
   const date = normalizeDateInput(input.date);
   if (!date) {
-    return { ok: false, error: '날짜를 YYYY-MM-DD 형식으로 알려 주세요(예: 2027-02-24).' };
+    return { ok: false, error: '날짜를 YYYY-MM-DD 형식으로 알려 주세요(예: 2027-05-15).' };
   }
   const count = (db.prepare('SELECT COUNT(*) AS n FROM ddays').get() as { n: number }).n;
   if (count >= MAX_DDAYS) return { ok: false, error: `D-Day는 최대 ${MAX_DDAYS}개까지 저장할 수 있습니다.` };
