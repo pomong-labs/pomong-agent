@@ -55,7 +55,8 @@ async function main(): Promise<void> {
 
   /* 1) 버전 --------------------------------------------------------------- */
   // v0.6.19: 버전 검사는 0.6.x 형식으로 둔다(이후 패치에서도 회귀 확인용으로 계속 돈다).
-  check('버전 0.6.x', /^0\.6\.\d+$/.test(pkg.version), pkg.version);
+  // v0.7.0: 0.6 이상이면 통과(이후 릴리스에서도 회귀 확인용으로 계속 돈다).
+  check('버전 0.6.x 이상', Number(pkg.version.split('.')[0]) > 0 || Number(pkg.version.split('.')[1] || 0) >= 6, pkg.version);
   check('server/config 버전', APP_VERSION === pkg.version, APP_VERSION);
   check('에셋 버전', ASSET_VERSION === pkg.version, ASSET_VERSION);
   check(

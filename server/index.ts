@@ -42,7 +42,7 @@ import * as jobs from './jobs';
 import * as watchers from './watchers';
 import * as browser from './browser';
 import * as policy from './policy';
-import { publish, recentEvents, subscribe } from './events';
+import { publish, publishDelta, recentEvents, subscribe } from './events';
 import { runAgentLoop, buildEmptyReply } from './agent-loop';
 import * as memory from './memory';
 import * as services from './services';
@@ -67,6 +67,9 @@ import * as reactions from './reactions';
 import * as ddays from './ddays';
 import * as parcelWatch from './parcel-watch';
 import * as approvals from './approvals';
+import * as checkpoints from './checkpoints';
+import * as traces from './traces';
+import { DEFAULT_CONTEXT_BUDGET } from './context-budget';
 import { guardExternalText } from './guardrails';
 import { maskingEnabled, setMaskingEnabled } from './privacy-mask';
 import type { TaskRunView } from './task-runs';
@@ -1100,6 +1103,18 @@ interface ChatTurnInput {
   trigger?: 'login_card' | 'vault_unlock';
   /** v0.5.4: '■ 중지' 버튼으로 끊을 수 있는 신호 */
   signal?: AbortSignal;
+  /**
+   * v0.7.0: 중단된 턴을 이어서 한다.
+   * 저장된 대화·이미 실행한 도구 결과를 그대로 쓰므로, 같은 도구를 두 번 실행하지 않는다.
+   */
+  resume?: {
+    turnId: string;
+    provider: ProviderId;
+    model: string;
+    conversation: AgentMessage[];
+    doneTools: Record<string, { name: string; content: string }>;
+    step: number;
+  };
 }
 
 interface ChatTurnResult {
@@ -1117,6 +1132,18 @@ interface ChatTurnResult {
   provider: ProviderId;
   tools: string[];
   taskRun: TaskRunView | null;
+  /** v0.7.0: 이번 턴의 관측성 정보(모델·토큰·비용·루프 감지 수) */
+  observability?: {
+    traceId: string;
+    inputTokens: number;
+    outputTokens: number;
+    costUsd: number;
+    costKrw: number;
+    durationMs: number;
+    loopBreaks: number;
+    compactions: number;
+    streamed: boolean;
+  };
 }
 
 /**
@@ -1135,7 +1162,7 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
     (m) => m.role === 'user' && Boolean(m.parts?.some((p) => p.type === 'image' || p.type === 'pdf'))
   );
   const route = routeFor(input.prompt, hasImage);
-  const config = {
+  let config = {
     provider: route.provider,
     model: route.model,
     apiKeyEnc: route.apiKeyEnc ?? activeConfig().apiKeyEnc,
@@ -1147,6 +1174,24 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
       'info',
       `작업별 모델 자동 선택 · ${TASK_KIND_META[route.taskKind].label} → ${PROVIDERS[route.provider].label} ${route.model}`
     );
+  }
+  /** v0.7.0: 재개는 중단된 때의 프로바이더·모델·키로 이어서 한다(문맥·도구 결과가 그 모델 기준). */
+  if (input.resume) {
+    const account = llmState().accounts[input.resume.provider];
+    if (account?.apiKeyEnc) {
+      config = {
+        provider: input.resume.provider,
+        model: normalizeModel(input.resume.provider, input.resume.model),
+        apiKeyEnc: account.apiKeyEnc,
+        connectedAt: null,
+        reasoningEffort: exaoneEffort(account.reasoningEffort),
+      };
+    } else {
+      addLog('warn', '이어서 하기: 이전에 쓴 AI 키가 없어 현재 모델로 이어갑니다');
+    }
+  }
+  if (!config.apiKeyEnc) {
+    throw new Error(`${PROVIDERS[config.provider].label} 키가 연결되어 있지 않습니다.`);
   }
   const { decrypt, serverKey } = await import('./crypto');
   const apiKey = decrypt(String(config.apiKeyEnc), serverKey());
@@ -1178,6 +1223,82 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
   /** v0.6.15: 이번 턴에 만든 그림 첨부 id — 답변 말풍선에 붙띄다 */
   const generatedImages: string[] = [];
   const turnStartedAt = new Date().toISOString();
+
+  /* ---------------- v0.7.0: 트레이스 · 체크포인트 · 스트리밍 ---------------- */
+  const turnId = input.resume?.turnId || crypto.randomUUID();
+  const turnStartedMs = Date.now();
+  const traceId = traces.startTrace({
+    sessionId: session,
+    turnId,
+    userPrompt: input.prompt,
+    provider: config.provider,
+    model: config.model,
+    trigger: input.trigger,
+  });
+  let traceClosed = false;
+  const closeTrace = (
+    status: 'done' | 'failed' | 'cancelled' | 'approval',
+    extra: { model?: string; loopBreaks?: number; compacted?: number; escalated?: boolean; error?: string | null } = {}
+  ): void => {
+    if (traceClosed) return;
+    traceClosed = true;
+    try {
+      traces.finishTrace(traceId, { status, durationMs: Date.now() - turnStartedMs, ...extra });
+    } catch (err) {
+      addLog('warn', `트레이스 마무리 실패: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+  let checkpointId: string | null = null;
+  const saveCheckpoint = (
+    snapshot: Parameters<NonNullable<Parameters<typeof runAgentLoop>[0]['onCheckpoint']>>[0]
+  ): void => {
+    try {
+      checkpointId = checkpoints.startCheckpoint({
+        id: checkpointId || undefined,
+        sessionId: session,
+        turnId,
+        provider: config.provider,
+        model: snapshot.model || config.model,
+        userPrompt: input.prompt,
+        step: snapshot.step,
+        status: snapshot.status,
+        conversation: snapshot.conversation,
+        toolsUsed: snapshot.toolsUsed,
+        doneTools: snapshot.doneTools,
+        reply: snapshot.reply,
+      });
+    } catch (err) {
+      addLog('warn', `체크포인트 저장 실패: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+  let streamedAny = false;
+  let deltaBuffer = '';
+  let deltaTimer: NodeJS.Timeout | null = null;
+  const flushDelta = (): void => {
+    if (deltaTimer) {
+      clearTimeout(deltaTimer);
+      deltaTimer = null;
+    }
+    if (!deltaBuffer) return;
+    const text = deltaBuffer;
+    deltaBuffer = '';
+    publishDelta({ session, turnId, text });
+  };
+  const pushDelta = (text: string): void => {
+    if (!text) return;
+    streamedAny = true;
+    deltaBuffer += text;
+    // 60ms 마다 묶어서 보낸다 — 조각마다 SSE를 쓰면 아이폰에서 낭비가 크다.
+    if (!deltaTimer) deltaTimer = setTimeout(flushDelta, 60);
+  };
+  const resetStream = (): void => {
+    deltaBuffer = '';
+    if (deltaTimer) {
+      clearTimeout(deltaTimer);
+      deltaTimer = null;
+    }
+    publishDelta({ session, turnId, reset: true });
+  };
 
   let runId: string | null = null;
   const openSteps = new Map<string, string[]>();
@@ -1226,7 +1347,52 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
       userRequest: input.prompt,
       signal: input.signal,
       providerOptions: { reasoningEffort: config.reasoningEffort },
+      // v0.7.0: 중단된 턴 이어서 하기
+      ...(input.resume
+        ? {
+            turnId,
+            resumeConversation: input.resume.conversation,
+            replayResults: input.resume.doneTools,
+          }
+        : { turnId }),
+      // v0.7.0 1) 실시간 토큰 스트리밍 — 화면 말풍선에 한 조각씩 흘려보낸다.
+      onDelta: pushDelta,
+      onStreamReset: resetStream,
+      streaming: true,
+      // v0.7.0 2) 컨텍스트 압축·예산
+      contextBudget: DEFAULT_CONTEXT_BUDGET,
+      onContext: (report) => {
+        addLog(
+          'info',
+          `컨텍스트 관리 · ${report.before.toLocaleString('en-US')}→${report.after.toLocaleString('en-US')} 토큰 (예산 ${report.budget.toLocaleString('en-US')}, 축약 ${report.trimmed}건${report.compacted ? `, 압축 ${report.foldedMessages}메시지` : ''})`
+        );
+      },
+      // v0.7.0 5) 스텝 체크포인트
+      onCheckpoint: saveCheckpoint,
+      // v0.7.0 6) 실행 트레이스
+      onStepUsage: (info) => {
+        try {
+          traces.recordTraceStep({
+            traceId,
+            seq: info.seq,
+            kind: 'model',
+            provider: info.provider,
+            model: info.model,
+            inputTokens: info.usage?.inputTokens ?? info.estimatedInputTokens,
+            outputTokens: info.usage?.outputTokens ?? info.estimatedOutputTokens,
+            durationMs: info.durationMs,
+            tools: info.tools,
+            escalated: info.escalated,
+            error: info.error,
+          });
+        } catch (err) {
+          addLog('warn', `트레이스 기록 실패: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      },
       onStep: (info) => {
+        // 다음 스텝의 답변은 새 구간으로 보여 준다(이전 스텝의 미리보기와 섞이지 않게).
+        flushDelta();
+        resetStream();
         if (info.tools.length) setAgentState('working', info.tools.join(', '));
         else setAgentState('thinking', `${PROVIDERS[config.provider].label} ${info.index === 0 ? config.model : ''}`.trim());
       },
@@ -1280,6 +1446,8 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
     const model = loop.model;
     let reply = loop.text;
     usedTools.push(...loop.tools);
+    // v0.7.0: 스트리밍으로 보낸 미리보기를 확정한다(답변 말풍선이 대신한다).
+    flushDelta();
     // v0.6.2: 빈 응답·잘못된 함수 호출로 상위 모델에 다시 시도했다면 기록해 둔다.
     if (loop.emptyRetries) {
       addLog(
@@ -1288,6 +1456,10 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
           ? `브라우저 작업 중 빈 응답 → ${loop.escalatedTo} 로 올려 ${loop.emptyRetries}번 다시 시도했습니다`
           : `브라우저 작업 중 빈 응답 → 같은 모델로 ${loop.emptyRetries}번 다시 시도했습니다`
       );
+    }
+    // v0.7.0: 루프를 끊었으면 로그·트레이스에 이유를 남긴다.
+    if (loop.loopBreaks) {
+      addLog('warn', `루프 감지 ${loop.loopBreaks}회${loop.loopStopped ? ' (작업 중단)' : ''} · ${loop.loopStopped || '전략 전환 안내'}`);
     }
     if (loop.cancelled && !reply.trim()) {
       reply = '알겠어요, 작업을 중지했어요. 이어서 하려면 다시 말씀해 주세요.';
@@ -1403,6 +1575,26 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
       createdAt: new Date().toISOString(),
       ...(turnImages.length ? { attachments: turnImages } : {}),
     };
+    // v0.7.0: 이번 턴을 관측성 기록에 마무리한다.
+    closeTrace(loop.cancelled ? 'cancelled' : loop.approval ? 'approval' : 'done', {
+      model,
+      loopBreaks: loop.loopBreaks,
+      compacted: loop.compactions,
+      escalated: Boolean(loop.escalatedTo),
+    });
+    // v0.7.0: 완료된 턴은 체크포인트를 done 으로 닫는다(복구 목록에 남기지 않는다).
+    if (checkpointId) {
+      try {
+        checkpoints.updateCheckpoint(checkpointId, {
+          step: loop.steps,
+          reply,
+          model,
+          status: loop.cancelled ? 'cancelled' : loop.approval ? 'approval' : 'done',
+        });
+      } catch {
+        /* 체크포인트 마무리 실패가 답변을 막지 않는다 */
+      }
+    }
     // 다른 기기·다른 탭에도 답변이 바로 뜨게 하고, 앱을 안 보고 있으면 푸시로도 알린다.
     publish({
       type: 'chat',
@@ -1412,12 +1604,41 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
     });
     // v0.5.4: 대화가 끝난 뒤 백그라운드에서 오래 기억할 사실만 골라 저장한다(응답을 기다리게 하지 않는다).
     if (!input.trigger) void extractMemoriesAfterTurn(session, input.prompt, reply);
-    return { assistantMessage, model, provider: config.provider, tools: usedTools, taskRun };
+    // v0.7.0: 이번 턴의 토큰·비용을 응답에 함께 돌려준다(화면·관제실에서 바로 보인다).
+    const cost = traces.estimateCost(model, loop.usage.inputTokens, loop.usage.outputTokens);
+    return {
+      assistantMessage,
+      model,
+      provider: config.provider,
+      tools: usedTools,
+      taskRun,
+      observability: {
+        traceId,
+        inputTokens: loop.usage.inputTokens,
+        outputTokens: loop.usage.outputTokens,
+        costUsd: cost.usd,
+        costKrw: cost.krw,
+        durationMs: Date.now() - turnStartedMs,
+        loopBreaks: loop.loopBreaks,
+        compactions: loop.compactions,
+        streamed: streamedAny,
+      },
+    };
   } catch (err) {
     if (runId) taskRuns.finishRun(runId, 'failed');
     const message2 = err instanceof Error ? err.message : String(err);
     addLog('error', `AI 호출 실패: ${message2.slice(0, 120)}`);
     setAgentState('error', message2.slice(0, 160));
+    // v0.7.0: 실패한 턴도 트레이스·체크포인트에 남긴다(무엇이 얼마를 쓰고 실패했는지).
+    flushDelta();
+    closeTrace('failed', { error: message2 });
+    if (checkpointId) {
+      try {
+        checkpoints.updateCheckpoint(checkpointId, { status: 'failed' });
+      } catch {
+        /* ignore */
+      }
+    }
     throw err;
   }
 }
@@ -1565,6 +1786,8 @@ app.post('/api/chat/messages', requireAuth, async (req, res) => {
       provider: result.provider,
       tools: result.tools,
       taskRun: result.taskRun,
+      // v0.7.0: 이번 턴의 토큰·비용·루프 감지 정보(화면에서 바로 보여 줄 수 있다)
+      observability: result.observability,
     });
   } catch (err) {
     const message2 = err instanceof Error ? err.message : String(err);
@@ -1618,6 +1841,114 @@ app.post('/api/chat/stop', requireAuth, (req, res) => {
 app.get('/api/chat/running', requireAuth, (req, res) => {
   const session = String(req.query.session || 'default');
   res.json({ ok: true, running: liveTurns.has(session) });
+});
+
+/* --------------------- v0.7.0: 중단 복구(Resume) -------------------- */
+
+/** 이어서 할 수 있는 작업(서버가 멈춰 'interrupted' 로 남은 턴) */
+app.get('/api/chat/resumable', requireAuth, (req, res) => {
+  const session = req.query.session ? String(req.query.session) : null;
+  if (session) {
+    res.json({ ok: true, checkpoint: checkpoints.resumableForSession(session) });
+    return;
+  }
+  res.json({ ok: true, checkpoints: checkpoints.listResumable(10) });
+});
+
+/**
+ * 중단된 턴을 이어서 한다.
+ * 저장된 대화 스냅샷으로 루프를 다시 시작하고, 이미 실행한 도구는 결과를 재사용한다.
+ */
+app.post('/api/chat/resume', requireAuth, async (req, res) => {
+  const session = String((req.body as { session?: string })?.session || 'default');
+  const requestedId = String((req.body as { checkpointId?: string })?.checkpointId || '');
+  if (liveTurns.has(session)) {
+    res.status(409).json({ ok: false, code: 'turn_running', message: '이 대화방은 지금 작업 중이라 이어서 할 수 없습니다.' });
+    return;
+  }
+  let record = requestedId ? checkpoints.getCheckpoint(requestedId) : null;
+  if (record && record.sessionId !== session) record = null;
+  if (!record) {
+    const fallback = checkpoints.resumableForSession(session);
+    record = fallback ? checkpoints.getCheckpoint(fallback.id) : null;
+  }
+  if (!record || record.status !== 'interrupted') {
+    res.status(404).json({ ok: false, code: 'no_checkpoint', message: '이어서 할 작업이 없습니다.' });
+    return;
+  }
+  const config = activeConfig();
+  if (!config.apiKeyEnc) {
+    res.status(409).json({
+      ok: false,
+      code: 'no_provider',
+      message: `${PROVIDERS[config.provider].label} 키가 연결되어 있지 않습니다.`,
+    });
+    return;
+  }
+
+  const controller = new AbortController();
+  liveTurns.set(session, controller);
+  liveTurnStartedAt.set(session, new Date().toISOString());
+  chatSessions.ensureSession(session);
+  chatSessions.touchSession(session);
+  addLog('info', `중단된 작업을 이어서 합니다 · ${record.userPrompt.slice(0, 40)} (${record.step}단계부터)`);
+  try {
+    const result = await runInLane('chat', `${session.slice(0, 12)} · 재개`, () =>
+      runChatTurn({
+        session,
+        history: [],
+        prompt: record.userPrompt || '이어서 해 주세요.',
+        signal: controller.signal,
+        resume: {
+          turnId: record.turnId,
+          provider: (record.provider || 'gemini') as ProviderId,
+          model: record.model || config.model,
+          conversation: record.conversation,
+          doneTools: record.doneTools,
+          step: record.step,
+        },
+      })
+    );
+    res.json({
+      ok: true,
+      message: result.assistantMessage,
+      model: result.model,
+      provider: result.provider,
+      tools: result.tools,
+      taskRun: result.taskRun,
+      observability: result.observability,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (controller.signal.aborted) {
+      res.json({ ok: false, code: 'cancelled', message: '작업을 중지했어요.' });
+      return;
+    }
+    res.status(502).json({ ok: false, code: 'resume_failed', message: `이어서 하지 못했습니다. (${message.slice(0, 180)})` });
+  } finally {
+    if (liveTurns.get(session) === controller) {
+      liveTurns.delete(session);
+      liveTurnStartedAt.delete(session);
+    }
+  }
+});
+
+/* ---------------- v0.7.0: 실행 트레이스 · 토큰/비용 관제 ---------------- */
+
+app.get('/api/observability/traces', requireAuth, (req, res) => {
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit || 20)));
+  const session = req.query.session ? String(req.query.session) : undefined;
+  res.json({ ok: true, traces: traces.recentTraces(limit, session), prices: traces.DEFAULT_PRICES, usdKrw: traces.usdKrwRate() });
+});
+
+app.get('/api/observability/traces/:id', requireAuth, (req, res) => {
+  const trace = traces.traceById(req.params.id);
+  res.json({ ok: true, trace, steps: trace ? traces.traceSteps(trace.id) : [] });
+});
+
+app.get('/api/observability/summary', requireAuth, (req, res) => {
+  const days = Math.min(90, Math.max(1, Number(req.query.days || 7)));
+  res.json({ ok: true, summary: traces.traceSummary(days) });
 });
 
 /**
@@ -3166,6 +3497,17 @@ function startExaoneExpiryWatch(): void {
 
 const server = app.listen(PORT, HOST, () => {
   startSampler(3000);
+  /**
+   * v0.7.0: 지난번 실행이 '진행 중'인 채로 끝났다면(배포·크래시) 복구 대기로 바꾼다.
+   * 그러면 사용자가 채팅에서 [이어서 하기]을 누를 수 있다.
+   */
+  try {
+    checkpoints.markInterruptedOnBoot();
+    checkpoints.prune(7);
+    traces.prune(30);
+  } catch (err) {
+    addLog('warn', `복구 대기 정리 실패: ${err instanceof Error ? err.message : String(err)}`);
+  }
   addLog('success', `Pomong Agent v${APP_VERSION} 가동`);
   // v0.6.0: noVNC 중계기·서버 감시·재시작 감지를 위해 이번 기동 시각을 남긴다.
   (globalThis as unknown as { __pomongBootAt?: string }).__pomongBootAt = new Date().toISOString();

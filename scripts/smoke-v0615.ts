@@ -58,7 +58,8 @@ async function main(): Promise<void> {
   const pkg = JSON.parse(read('package.json')) as { version: string };
   const compose = read('docker-compose.yml');
   // v0.6.16 이후: 버전 표기가 한 값으로 모여 있는지만 본다.
-  check('버전 0.6.x', /^0\.6\.\d+$/.test(pkg.version), pkg.version);
+  // v0.7.0: 0.6 이상이면 통과(이후 릴리스에서도 회귀 확인용으로 계속 돈다).
+  check('버전 0.6.x 이상', Number(pkg.version.split('.')[0]) > 0 || Number(pkg.version.split('.')[1] || 0) >= 6, pkg.version);
   check('server/config 버전', APP_VERSION === pkg.version, APP_VERSION);
   check(
     'docker-compose 이미지 태그',

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Box, Cpu, Database, Globe, HardDrive, MemoryStick, Menu, RefreshCw, Terminal } from 'lucide-react';
 import Gauge from '../components/Gauge';
 import Mascot from '../components/Mascot';
-import { api, type SystemStats } from '../lib/api';
+import { api, type SystemStats, type AgentTrace, type AgentTraceSummary } from '../lib/api';
 import { formatTime, formatUptime, statusLabel } from '../lib/format';
 
 type ViewMode = 'ring' | 'bar' | 'graph';
@@ -273,6 +273,7 @@ export default function Monitor() {
               </div>
             </div>
             <WorkloadCard />
+            <ObservabilityCard />
           </>
         )}
       </div>
@@ -483,6 +484,155 @@ function SystemDetail({ stats, history }: { stats: SystemStats; history: { t: nu
           </div>
         ))}
       </dl>
+    </div>
+  );
+}
+
+/**
+ * v0.7.0: AI 실행 트레이스 · 토큰/비용 관측성 카드
+ *
+ * "이번 답변에 얼마가 들었나"를 볼 수 있어야 비용이 새는 곳을 찾을 수 있다.
+ * 턴별 모델·토큰·예상 비용·시간과, 모델별 합계를 한 카드에 보여 준다.
+ */
+function ObservabilityCard() {
+  const [summary, setSummary] = useState<AgentTraceSummary | null>(null);
+  const [traces, setTraces] = useState<AgentTrace[]>([]);
+  const [days, setDays] = useState(7);
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const [s, t] = await Promise.all([
+          api.get<{ summary: AgentTraceSummary }>(`/api/observability/summary?days=${days}`),
+          api.get<{ traces: AgentTrace[] }>('/api/observability/traces?limit=8'),
+        ]);
+        if (!alive) return;
+        setSummary(s.summary);
+        setTraces(t.traces || []);
+      } catch {
+        /* ignore */
+      }
+    };
+    void load();
+    const id = window.setInterval(load, 15000);
+    return () => {
+      alive = false;
+      window.clearInterval(id);
+    };
+  }, [days]);
+
+  const won = (value: number) => `${value < 10 ? value.toFixed(1) : Math.round(value).toLocaleString('ko-KR')}원`;
+  const tokens = (value: number) => (value >= 1000 ? `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}k` : String(value));
+  const seconds = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)}초` : `${Math.round(ms)}ms`);
+
+  return (
+    <div className="pa-card mt-3 p-4 lg:mt-5 lg:p-6">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 className="text-[16px] font-bold text-[#1F1D2B] lg:text-[19px]">AI 실행 트레이스</h2>
+          <p className="mt-0.5 text-[12px] text-[#9B98AB]">
+            턴마다 쓴 모델·토큰·예상 비용·시간을 기록해요. 단가는 추정치라 설정에서 바꿀 수 있어요.
+          </p>
+        </div>
+        <div className="flex rounded-full bg-[#F4F3F9] p-1">
+          {[1, 7, 30].map((value) => (
+            <button
+              key={value}
+              onClick={() => setDays(value)}
+              className={`rounded-full px-3 py-1 text-[12px] font-semibold transition ${
+                days === value ? 'bg-white text-[#7C63F6] shadow-sm' : 'text-[#8A8A9A]'
+              }`}
+            >
+              {value === 1 ? '오늘' : `${value}일`}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {[
+          { label: '실행 턴', value: summary ? `${summary.turns}` : '-', detail: `${days}일` },
+          {
+            label: '토큰',
+            value: summary ? tokens(summary.inputTokens + summary.outputTokens) : '-',
+            detail: summary ? `입력 ${tokens(summary.inputTokens)} · 출력 ${tokens(summary.outputTokens)}` : '',
+          },
+          { label: '예상 비용', value: summary ? won(summary.costKrw) : '-', detail: summary ? `$${summary.costUsd.toFixed(3)}` : '' },
+          {
+            label: '평균 시간',
+            value: summary ? seconds(summary.avgDurationMs) : '-',
+            detail: summary ? `실패율 ${summary.failureRate}%` : '',
+          },
+        ].map((item) => (
+          <div key={item.label} className="rounded-2xl bg-[#FAF9FD] px-3 py-2.5">
+            <p className="text-[11.5px] text-[#9B98AB]">{item.label}</p>
+            <p className="mt-0.5 text-[17px] font-bold text-[#1F1D2B]">{item.value}</p>
+            <p className="truncate text-[11px] text-[#A8A5B8]">{item.detail}</p>
+          </div>
+        ))}
+      </div>
+
+      {summary?.byModel.length ? (
+        <div className="mt-3 rounded-2xl bg-[#FAF9FD] px-3.5 py-2.5">
+          {(open ? summary.byModel : summary.byModel.slice(0, 3)).map((row) => (
+            <div key={`${row.provider}:${row.model}`} className="flex items-center gap-2 py-1 text-[12px]">
+              <span className="w-[42%] truncate font-semibold text-[#4B4856]">{row.model || row.provider}</span>
+              <span className="w-[16%] text-right text-[#9B98AB]">{row.turns}턴</span>
+              <span className="w-[22%] text-right text-[#6B677A]">{tokens(row.inputTokens + row.outputTokens)} tok</span>
+              <span className="w-[20%] text-right font-semibold text-[#7C63F6]">{won(row.costUsd * (summary.usdKrw || 1380))}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="mt-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-[13.5px] font-bold text-[#3B3947]">최근 실행</h3>
+          <button className="text-[12px] font-medium text-[#8B72F6]" onClick={() => setOpen((v) => !v)}>
+            {open ? '접기' : '모델별 자세히'}
+          </button>
+        </div>
+        <ul className="mt-1 divide-y divide-[#F5F3FA]">
+          {traces.length === 0 ? (
+            <li className="py-3 text-[12.5px] text-[#A8A5B8]">아직 기록된 실행이 없습니다. 대화를 시작하면 여기에 쌓여요.</li>
+          ) : null}
+          {traces.map((trace) => (
+            <li key={trace.id} className="py-2.5">
+              <div className="flex items-center gap-2">
+                <span
+                  className={`shrink-0 rounded-full px-2 py-0.5 text-[10.5px] font-bold ${
+                    trace.status === 'done'
+                      ? 'bg-[#EAFBF1] text-[#0F9668]'
+                      : trace.status === 'failed'
+                        ? 'bg-[#FFF1F1] text-[#D9534F]'
+                        : trace.status === 'approval'
+                          ? 'bg-[#FFF8EC] text-[#B98A24]'
+                          : 'bg-[#F1EFF8] text-[#8A8A9A]'
+                  }`}
+                >
+                  {trace.status === 'done' ? '완료' : trace.status === 'failed' ? '실패' : trace.status === 'approval' ? '승인 대기' : trace.status === 'cancelled' ? '중지' : '진행'}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-[12.5px] text-[#4B4856]">
+                  {trace.userPrompt.replace(/\s+/g, ' ').slice(0, 48) || '(요청 없음)'}
+                </span>
+                <span className="shrink-0 text-[11.5px] font-semibold text-[#7C63F6]">{won(trace.costKrw)}</span>
+              </div>
+              <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 pl-1 text-[11px] text-[#A8A5B8]">
+                <span>{trace.model || trace.provider}</span>
+                <span>· {trace.steps}스텝</span>
+                <span>· {tokens(trace.inputTokens)}/{tokens(trace.outputTokens)} tok</span>
+                <span>· {seconds(trace.durationMs)}</span>
+                {trace.loopBreaks ? <span className="text-[#C98A14]">· 루프 {trace.loopBreaks}회 차단</span> : null}
+                {trace.compacted ? <span>· 압축 {trace.compacted}회</span> : null}
+                {trace.escalated ? <span className="text-[#C98A14]">· 모델 상향</span> : null}
+                {trace.error ? <span className="text-[#D9534F]">· {trace.error.slice(0, 40)}</span> : null}
+              </div>
+            </li>
+          ))}
+        </ul>
+      </div>
     </div>
   );
 }

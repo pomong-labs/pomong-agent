@@ -570,6 +570,76 @@ CREATE INDEX IF NOT EXISTS idx_pending_approvals_session ON pending_approvals(se
 `);
 
 /* ------------------------------------------------------------------ */
+/* v0.7.0 schema: 실행 트레이스(토큰·비용) · 스텝 체크포인트(중단 복구)      */
+/* 기존 대화·설정은 건드리지 않고 새 테이블만 더한다.                       */
+/* ------------------------------------------------------------------ */
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS agent_traces (
+  id             TEXT PRIMARY KEY,
+  session_id     TEXT NOT NULL,
+  turn_id        TEXT NOT NULL,
+  user_prompt    TEXT,
+  provider       TEXT,
+  model          TEXT,
+  status         TEXT NOT NULL DEFAULT 'running',
+  steps          INTEGER NOT NULL DEFAULT 0,
+  tools          TEXT,
+  input_tokens   INTEGER NOT NULL DEFAULT 0,
+  output_tokens  INTEGER NOT NULL DEFAULT 0,
+  cost_usd       REAL NOT NULL DEFAULT 0,
+  cost_krw       REAL NOT NULL DEFAULT 0,
+  duration_ms    INTEGER NOT NULL DEFAULT 0,
+  escalated      INTEGER NOT NULL DEFAULT 0,
+  loop_breaks    INTEGER NOT NULL DEFAULT 0,
+  compacted      INTEGER NOT NULL DEFAULT 0,
+  error          TEXT,
+  created_at     TEXT NOT NULL,
+  ended_at       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_agent_traces_created ON agent_traces(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_traces_session ON agent_traces(session_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS agent_trace_steps (
+  id             TEXT PRIMARY KEY,
+  trace_id       TEXT NOT NULL,
+  seq            INTEGER NOT NULL DEFAULT 0,
+  kind           TEXT NOT NULL DEFAULT 'model',
+  provider       TEXT,
+  model          TEXT,
+  input_tokens   INTEGER NOT NULL DEFAULT 0,
+  output_tokens  INTEGER NOT NULL DEFAULT 0,
+  cost_usd       REAL NOT NULL DEFAULT 0,
+  duration_ms    INTEGER NOT NULL DEFAULT 0,
+  tools          TEXT,
+  escalated      INTEGER NOT NULL DEFAULT 0,
+  error          TEXT,
+  created_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_trace_steps ON agent_trace_steps(trace_id, seq);
+
+CREATE TABLE IF NOT EXISTS agent_checkpoints (
+  id           TEXT PRIMARY KEY,
+  session_id   TEXT NOT NULL,
+  turn_id      TEXT NOT NULL,
+  step         INTEGER NOT NULL DEFAULT 0,
+  status       TEXT NOT NULL DEFAULT 'running',
+  provider     TEXT,
+  model        TEXT,
+  user_prompt  TEXT,
+  conversation TEXT,
+  tools_used   TEXT,
+  done_tools   TEXT,
+  reply        TEXT,
+  created_at   TEXT NOT NULL,
+  updated_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_checkpoints_turn ON agent_checkpoints(turn_id, step DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_checkpoints_session ON agent_checkpoints(session_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_checkpoints_status ON agent_checkpoints(status, updated_at DESC);
+`);
+
+/* ------------------------------------------------------------------ */
 /* Settings                                                            */
 /* ------------------------------------------------------------------ */
 

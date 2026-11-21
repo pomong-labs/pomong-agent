@@ -1,5 +1,5 @@
 /* Pomong Agent service worker — keeps the app installable, always fresh, and receives web push. */
-const VERSION = 'pomong-agent-v0.6.19';
+const VERSION = 'pomong-agent-v0.7.0';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();

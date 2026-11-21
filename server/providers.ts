@@ -313,6 +313,11 @@ export async function testProvider(provider: ProviderId, apiKey: string): Promis
   }
 }
 
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+}
+
 export interface ChatResult {
   text: string;
   model: string;
@@ -322,6 +327,10 @@ export interface ChatResult {
    * 브라우저 작업 중 빈 응답(MALFORMED_FUNCTION_CALL·빈 STOP)을 알아채 재시도하는 데 쓴다.
    */
   finishReason?: string;
+  /** v0.7.0: 프로바이더가 돌려준 실제 토큰 사용량(관측성·비용 계산용) */
+  usage?: TokenUsage;
+  /** v0.7.0: 실시간 스트리밍으로 답변을 받았는지 */
+  streamed?: boolean;
 }
 
 type ToolRunMessage = AgentMessage;
@@ -353,15 +362,27 @@ function textOrParts(turn: { content: string; parts?: AgentPart[] }): AgentPart[
   return turn.content ? [{ type: 'text', text: turn.content }] : [];
 }
 
-async function geminiStep(
-  modelName: string,
-  apiKey: string,
+/** Gemini 요청 본문(스트리밍·비스트리밍 공통) */
+function geminiBody(
   system: string,
-  turns: ToolRunMessage[],
-  tools?: ToolSpec[],
-  signal?: AbortSignal
-): Promise<ChatResult> {
-  // Gemini는 같은 역할의 턴이 연달아 오면 합쳐서 보낸다.
+  contents: { role: 'user' | 'model'; parts: GeminiPart[] }[],
+  tools?: ToolSpec[]
+): Record<string, unknown> {
+  return {
+    systemInstruction: system ? { parts: [{ text: system }] } : undefined,
+    contents,
+    tools: tools && tools.length
+      ? [{ functionDeclarations: tools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })) }]
+      : undefined,
+    generationConfig: { temperature: 0.7, maxOutputTokens: 1600 },
+  };
+}
+
+/**
+ * 대화 → Gemini contents.
+ * Gemini는 같은 역할의 턴이 연달아 오면 합쳐서 보낸다.
+ */
+function geminiContents(turns: ToolRunMessage[]): { role: 'user' | 'model'; parts: GeminiPart[] }[] {
   const contents: { role: 'user' | 'model'; parts: GeminiPart[] }[] = [];
   for (const turn of turns) {
     if (turn.role === 'tool') {
@@ -411,20 +432,37 @@ async function geminiStep(
       contents.push({ role: 'user', parts: userParts });
     }
   }
+  return contents;
+}
+
+/** Gemini 파트 → 도구 호출 목록 */
+function geminiToolCalls(parts: GeminiPart[], prefix: string): ToolCall[] {
+  return parts
+    .filter((p) => p.functionCall?.name)
+    .map((p, i) => ({
+      id: `${prefix}-${Date.now()}-${i}`,
+      name: String(p.functionCall?.name),
+      args: (p.functionCall?.args || {}) as Record<string, unknown>,
+      signature: p.thoughtSignature,
+    }));
+}
+
+async function geminiStep(
+  modelName: string,
+  apiKey: string,
+  system: string,
+  turns: ToolRunMessage[],
+  tools?: ToolSpec[],
+  signal?: AbortSignal
+): Promise<ChatResult> {
+  const contents = geminiContents(turns);
 
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(apiKey)}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        systemInstruction: system ? { parts: [{ text: system }] } : undefined,
-        contents,
-        tools: tools && tools.length
-          ? [{ functionDeclarations: tools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })) }]
-          : undefined,
-        generationConfig: { temperature: 0.7, maxOutputTokens: 1600 },
-      }),
+      body: JSON.stringify(geminiBody(system, contents, tools)),
       // 모델이 응답하지 않고 매달려 있으면 다음 후보로 빨리 넘어가도록 시도당 시간을 제한한다.
       signal: withCancel(timeout(25000), signal),
     }
@@ -433,6 +471,7 @@ async function geminiStep(
   if (!res.ok) throw new ProviderError(res.status, errorText(res.status, body));
   const data = JSON.parse(body) as {
     candidates?: { content?: { parts?: GeminiPart[] }; finishReason?: string }[];
+    usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number };
   };
   const parts = data.candidates?.[0]?.content?.parts || [];
   const text = parts.map((p) => p.text || '').join('').trim();
@@ -444,7 +483,24 @@ async function geminiStep(
       args: (p.functionCall?.args || {}) as Record<string, unknown>,
       signature: p.thoughtSignature,
     }));
-  return { text, model: modelName, toolCalls, finishReason: data.candidates?.[0]?.finishReason };
+  return {
+    text,
+    model: modelName,
+    toolCalls,
+    finishReason: data.candidates?.[0]?.finishReason,
+    usage: geminiUsage(data.usageMetadata),
+  };
+}
+
+/** v0.7.0: Gemini usageMetadata → 공통 토큰 사용량 */
+function geminiUsage(
+  meta: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number } | undefined
+): TokenUsage | undefined {
+  if (!meta) return undefined;
+  const inputTokens = Number(meta.promptTokenCount || 0);
+  const outputTokens = Number(meta.candidatesTokenCount || 0);
+  if (!inputTokens && !outputTokens) return undefined;
+  return { inputTokens, outputTokens };
 }
 
 /* ------------------------------------------------------------------ */
@@ -547,6 +603,7 @@ async function openAiStep(
       message?: { content?: string | null; tool_calls?: { id: string; function: { name: string; arguments: string } }[] };
       finish_reason?: string;
     }[];
+    usage?: { prompt_tokens?: number; completion_tokens?: number };
   };
   const message = data.choices?.[0]?.message;
   const toolCalls: ToolCall[] = (message?.tool_calls || []).map((c, i) => {
@@ -558,7 +615,22 @@ async function openAiStep(
     }
     return { id: c.id || `openai-${Date.now()}-${i}`, name: c.function.name, args };
   });
-  return { text: (message?.content || '').trim(), model: modelName, toolCalls, finishReason: data.choices?.[0]?.finish_reason };
+  return {
+    text: (message?.content || '').trim(),
+    model: modelName,
+    toolCalls,
+    finishReason: data.choices?.[0]?.finish_reason,
+    usage: openAiUsage(data.usage),
+  };
+}
+
+/** v0.7.0: OpenAI 규격 usage → 공통 토큰 사용량 (EXAONE도 같은 모양) */
+function openAiUsage(usage: { prompt_tokens?: number; completion_tokens?: number } | undefined): TokenUsage | undefined {
+  if (!usage) return undefined;
+  const inputTokens = Number(usage.prompt_tokens || 0);
+  const outputTokens = Number(usage.completion_tokens || 0);
+  if (!inputTokens && !outputTokens) return undefined;
+  return { inputTokens, outputTokens };
 }
 
 /* ------------------------------------------------------------------ */
@@ -613,6 +685,7 @@ async function exaoneStep(
       };
       finish_reason?: string;
     }[];
+    usage?: { prompt_tokens?: number; completion_tokens?: number };
   };
   const choice = data.choices?.[0];
   const message = choice?.message;
@@ -629,7 +702,13 @@ async function exaoneStep(
       }
       return { id: c.id || `exaone-${Date.now()}-${i}`, name: String(c.function?.name), args };
     });
-  return { text, model: modelName || EXAONE_MODEL, toolCalls, finishReason: choice?.finish_reason };
+  return {
+    text,
+    model: modelName || EXAONE_MODEL,
+    toolCalls,
+    finishReason: choice?.finish_reason,
+    usage: openAiUsage(data.usage),
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -638,14 +717,8 @@ async function exaoneStep(
 
 type ClaudeContent = Record<string, unknown>;
 
-async function claudeStep(
-  modelName: string,
-  apiKey: string,
-  system: string,
-  turns: ToolRunMessage[],
-  tools?: ToolSpec[]
-  , signal?: AbortSignal
-): Promise<ChatResult> {
+/** 대화 → Claude messages (스트리밍·비스트리밍 공통) */
+function claudeMessages(turns: ToolRunMessage[]): { role: 'user' | 'assistant'; content: ClaudeContent[] }[] {
   const messages: { role: 'user' | 'assistant'; content: ClaudeContent[] }[] = [];
   const push = (role: 'user' | 'assistant', blocks: ClaudeContent[]) => {
     const last = messages[messages.length - 1];
@@ -681,6 +754,18 @@ async function claudeStep(
       push('user', [{ type: 'text', text: turn.content }]);
     }
   }
+  return messages;
+}
+
+async function claudeStep(
+  modelName: string,
+  apiKey: string,
+  system: string,
+  turns: ToolRunMessage[],
+  tools?: ToolSpec[]
+  , signal?: AbortSignal
+): Promise<ChatResult> {
+  const messages = claudeMessages(turns);
 
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -702,6 +787,7 @@ async function claudeStep(
   const data = JSON.parse(body) as {
     content?: { type: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }[];
     stop_reason?: string;
+    usage?: { input_tokens?: number; output_tokens?: number };
   };
   const blocks = data.content || [];
   const text = blocks
@@ -712,7 +798,511 @@ async function claudeStep(
   const toolCalls: ToolCall[] = blocks
     .filter((c) => c.type === 'tool_use' && c.name)
     .map((c, i) => ({ id: c.id || `claude-${Date.now()}-${i}`, name: String(c.name), args: c.input || {} }));
-  return { text, model: modelName, toolCalls, finishReason: data.stop_reason };
+  return {
+    text,
+    model: modelName,
+    toolCalls,
+    finishReason: data.stop_reason,
+    usage: data.usage
+      ? { inputTokens: Number(data.usage.input_tokens || 0), outputTokens: Number(data.usage.output_tokens || 0) }
+      : undefined,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Streaming (v0.7.0)                                                  */
+/* ------------------------------------------------------------------ */
+
+/** 스트리밍 중 클라이언트에 조각을 흘려보내는 통로 */
+export interface StreamHooks {
+  /** 답변 텍스트 조각(이미 개인정보 자리표시자가 원래 값으로 되돌아간 상태) */
+  onDelta?: (text: string) => void;
+  /** 같은 스텝에서 첫 시도를 버리고 다시 시작할 때(부분 텍스트가 중복되지 않게 화면을 비운다) */
+  onReset?: () => void;
+}
+
+/**
+ * SSE 본문을 읽어 `data:` 페이로드만 넘긴다.
+ * 프로바이더마다 이벤트 모양은 달라도 전송 형식은 같다(data: JSON 한 줄 + 빈 줄).
+ */
+async function readSse(res: Response, onData: (payload: string) => void): Promise<void> {
+  const feed = (chunk: string): void => {
+    for (const line of chunk.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('data:')) continue;
+      const payload = trimmed.slice(5).trim();
+      if (!payload || payload === '[DONE]') continue;
+      onData(payload);
+    }
+  };
+  if (!res.body) {
+    feed(await res.text());
+    return;
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+    let index = buffer.indexOf('\n\n');
+    while (index >= 0) {
+      feed(buffer.slice(0, index));
+      buffer = buffer.slice(index + 2);
+      index = buffer.indexOf('\n\n');
+    }
+  }
+  buffer += decoder.decode();
+  if (buffer.trim()) feed(buffer);
+}
+
+type TextSink = (text: string) => void;
+
+/** Gemini 스트리밍 한 번 */
+async function geminiStreamAttempt(
+  modelName: string,
+  apiKey: string,
+  system: string,
+  turns: ToolRunMessage[],
+  tools: ToolSpec[] | undefined,
+  signal: AbortSignal | undefined,
+  onText: TextSink
+): Promise<ChatResult> {
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      body: JSON.stringify(geminiBody(system, geminiContents(turns), tools)),
+      signal: withCancel(timeout(90000), signal),
+    }
+  );
+  if (!res.ok) {
+    const body = await res.text();
+    throw new ProviderError(res.status, errorText(res.status, body));
+  }
+  let text = '';
+  let finishReason: string | undefined;
+  let usage: TokenUsage | undefined;
+  const parts: GeminiPart[] = [];
+  await readSse(res, (payload) => {
+    let data: {
+      candidates?: { content?: { parts?: GeminiPart[] }; finishReason?: string }[];
+      usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number };
+    };
+    try {
+      data = JSON.parse(payload) as typeof data;
+    } catch {
+      return;
+    }
+    const candidate = data.candidates?.[0];
+    for (const part of candidate?.content?.parts || []) {
+      if (typeof part.text === 'string' && part.text) {
+        text += part.text;
+        onText(part.text);
+      }
+      if (part.functionCall?.name || part.thoughtSignature) parts.push(part);
+    }
+    if (candidate?.finishReason) finishReason = candidate.finishReason;
+    const meta = geminiUsage(data.usageMetadata);
+    if (meta) usage = meta;
+  });
+  return {
+    text: text.trim(),
+    model: modelName,
+    toolCalls: geminiToolCalls(parts, 'gemini'),
+    finishReason,
+    usage,
+    streamed: true,
+  };
+}
+
+/** OpenAI 규격(OpenAI·EXAONE) 스트리밍 한 번 */
+async function openAiStreamAttempt(
+  endpoint: string,
+  modelName: string,
+  apiKey: string,
+  system: string,
+  turns: ToolRunMessage[],
+  tools: ToolSpec[] | undefined,
+  signal: AbortSignal | undefined,
+  onText: TextSink,
+  extra: Record<string, unknown>,
+  timeoutMs: number,
+  idPrefix: string
+): Promise<ChatResult> {
+  const messages: OpenAiMessage[] = [];
+  if (system) messages.push({ role: 'system', content: system });
+  messages.push(...openAiMessages(turns, idPrefix === 'openai'));
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}`, Accept: 'text/event-stream' },
+    body: JSON.stringify({
+      model: modelName,
+      messages,
+      stream: true,
+      stream_options: { include_usage: true },
+      tools: tools && tools.length
+        ? tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }))
+        : undefined,
+      ...extra,
+    }),
+    signal: withCancel(timeout(timeoutMs), signal),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new ProviderError(res.status, errorText(res.status, body));
+  }
+  let text = '';
+  let finishReason: string | undefined;
+  let usage: TokenUsage | undefined;
+  const calls: { id: string; name: string; args: string }[] = [];
+  await readSse(res, (payload) => {
+    let data: {
+      choices?: {
+        delta?: {
+          content?: string | null;
+          tool_calls?: { index?: number; id?: string; function?: { name?: string; arguments?: string } }[];
+        };
+        finish_reason?: string | null;
+      }[];
+      usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
+    };
+    try {
+      data = JSON.parse(payload) as typeof data;
+    } catch {
+      return;
+    }
+    const choice = data.choices?.[0];
+    const piece = choice?.delta?.content;
+    if (typeof piece === 'string' && piece) {
+      text += piece;
+      onText(piece);
+    }
+    for (const call of choice?.delta?.tool_calls || []) {
+      const index = typeof call.index === 'number' ? call.index : calls.length;
+      if (!calls[index]) calls[index] = { id: '', name: '', args: '' };
+      if (call.id) calls[index].id = call.id;
+      if (call.function?.name) calls[index].name += call.function.name;
+      if (call.function?.arguments) calls[index].args += call.function.arguments;
+    }
+    if (choice?.finish_reason) finishReason = choice.finish_reason;
+    if (data.usage) usage = openAiUsage(data.usage) || usage;
+  });
+  const toolCalls: ToolCall[] = calls
+    .filter((call) => call && call.name)
+    .map((call, index) => {
+      let args: Record<string, unknown> = {};
+      try {
+        args = JSON.parse(call.args || '{}') as Record<string, unknown>;
+      } catch {
+        args = {};
+      }
+      return { id: call.id || `${idPrefix}-${Date.now()}-${index}`, name: call.name, args };
+    });
+  return { text: text.trim(), model: modelName, toolCalls, finishReason, usage, streamed: true };
+}
+
+/** Claude 스트리밍 한 번 */
+async function claudeStreamAttempt(
+  modelName: string,
+  apiKey: string,
+  system: string,
+  turns: ToolRunMessage[],
+  tools: ToolSpec[] | undefined,
+  signal: AbortSignal | undefined,
+  onText: TextSink
+): Promise<ChatResult> {
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': ANTHROPIC_VERSION,
+      Accept: 'text/event-stream',
+    },
+    body: JSON.stringify({
+      model: modelName,
+      max_tokens: 1600,
+      temperature: 0.7,
+      system: system || undefined,
+      messages: claudeMessages(turns),
+      stream: true,
+      tools: tools && tools.length
+        ? tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters }))
+        : undefined,
+    }),
+    signal: withCancel(timeout(90000), signal),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new ProviderError(res.status, errorText(res.status, body));
+  }
+  let text = '';
+  let finishReason: string | undefined;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  const blocks = new Map<number, { id: string; name: string; json: string }>();
+  await readSse(res, (payload) => {
+    let data: {
+      type?: string;
+      index?: number;
+      content_block?: { type?: string; id?: string; name?: string };
+      delta?: { type?: string; text?: string; partial_json?: string; stop_reason?: string };
+      message?: { usage?: { input_tokens?: number; output_tokens?: number } };
+      usage?: { input_tokens?: number; output_tokens?: number };
+    };
+    try {
+      data = JSON.parse(payload) as typeof data;
+    } catch {
+      return;
+    }
+    if (data.type === 'message_start') {
+      inputTokens = Number(data.message?.usage?.input_tokens || 0);
+      outputTokens = Number(data.message?.usage?.output_tokens || 0);
+      return;
+    }
+    if (data.type === 'content_block_start' && data.content_block?.type === 'tool_use') {
+      blocks.set(Number(data.index || 0), {
+        id: String(data.content_block.id || ''),
+        name: String(data.content_block.name || ''),
+        json: '',
+      });
+      return;
+    }
+    if (data.type === 'content_block_delta') {
+      if (data.delta?.type === 'text_delta' && data.delta.text) {
+        text += data.delta.text;
+        onText(data.delta.text);
+      } else if (data.delta?.type === 'input_json_delta' && data.delta.partial_json) {
+        const block = blocks.get(Number(data.index || 0));
+        if (block) block.json += data.delta.partial_json;
+      }
+      return;
+    }
+    if (data.type === 'message_delta') {
+      if (data.delta?.stop_reason) finishReason = data.delta.stop_reason;
+      if (data.usage) {
+        inputTokens = Number(data.usage.input_tokens || inputTokens);
+        outputTokens = Number(data.usage.output_tokens || outputTokens);
+      }
+    }
+  });
+  const toolCalls: ToolCall[] = [...blocks.values()]
+    .filter((block) => block.name)
+    .map((block, index) => {
+      let args: Record<string, unknown> = {};
+      try {
+        args = JSON.parse(block.json || '{}') as Record<string, unknown>;
+      } catch {
+        args = {};
+      }
+      return { id: block.id || `claude-${Date.now()}-${index}`, name: block.name, args };
+    });
+  return {
+    text: text.trim(),
+    model: modelName,
+    toolCalls,
+    finishReason,
+    usage: inputTokens || outputTokens ? { inputTokens, outputTokens } : undefined,
+    streamed: true,
+  };
+}
+
+/**
+ * 스트리밍 시도 자체를 못 하거나(400·404) 끊기면 비스트리밍으로 폴백한다.
+ * 이미 화면에 조각을 보냈다면 onReset 으로 비운 뒤 다시 시작한다(글자 중복 방지).
+ */
+function makeTextSink(hooks: StreamHooks, beforeRestart: () => void): { sink: TextSink; sent: () => boolean; reset: () => void } {
+  let sentAny = false;
+  return {
+    sink: (text: string) => {
+      if (!text) return;
+      sentAny = true;
+      hooks.onDelta?.(text);
+    },
+    sent: () => sentAny,
+    reset: () => {
+      sentAny = false;
+      beforeRestart();
+    },
+  };
+}
+
+interface StreamRunOptions {
+  allowFallback?: boolean;
+  signal?: AbortSignal;
+  providerOptions?: ProviderOptions;
+}
+
+async function streamAgentStepRaw(
+  provider: ProviderId,
+  apiKey: string,
+  model: string,
+  messages: AgentMessage[],
+  tools: ToolSpec[] | undefined,
+  hooks: StreamHooks,
+  options: StreamRunOptions
+): Promise<ChatResult> {
+  const modelName = normalizeModel(provider, model);
+  const { system, turns } = splitSystem(messages);
+  const allowFallback = options.allowFallback !== false;
+
+  const attempt = async (candidate: string): Promise<ChatResult> => {
+    const handle = makeTextSink(hooks, () => hooks.onReset?.());
+    try {
+      if (provider === 'gemini') {
+        return await geminiStreamAttempt(candidate, apiKey, system, turns, tools, options.signal, handle.sink);
+      }
+      if (provider === 'openai') {
+        return await openAiStreamAttempt(
+          'https://api.openai.com/v1/chat/completions',
+          candidate,
+          apiKey,
+          system,
+          turns,
+          tools,
+          options.signal,
+          handle.sink,
+          { temperature: 0.7, max_tokens: 1600 },
+          90000,
+          'openai'
+        );
+      }
+      if (provider === 'exaone') {
+        const effort = exaoneEffort(options.providerOptions?.reasoningEffort);
+        return await openAiStreamAttempt(
+          EXAONE_ENDPOINT,
+          candidate || EXAONE_MODEL,
+          apiKey,
+          system,
+          turns,
+          tools,
+          options.signal,
+          handle.sink,
+          {
+            temperature: 1.0,
+            top_p: 0.95,
+            max_tokens: 4096,
+            reasoning_effort: exaoneApiEffort(effort),
+            chat_template_kwargs: { preserve_thinking: true },
+          },
+          effort === 'high' ? 150000 : 120000,
+          'exaone'
+        );
+      }
+      return await claudeStreamAttempt(candidate, apiKey, system, turns, tools, options.signal, handle.sink);
+    } catch (err) {
+      // 조각을 이미 보냈다면 화면을 비우고, 다음 시도(폴백)가 처음부터 다시 그리게 한다.
+      if (handle.sent()) handle.reset();
+      throw err;
+    }
+  };
+
+  /** 스트리밍이 불가능하거나(400·404) 스트림이 깨지면 비스트리밍 결과를 그대로 흘려보낸다. */
+  const fallbackToBuffered = async (): Promise<ChatResult> => {
+    const result = await runAgentStepRaw(
+      provider,
+      apiKey,
+      modelName,
+      messages,
+      tools,
+      allowFallback,
+      options.signal,
+      options.providerOptions
+    );
+    if (result.text && hooks.onDelta) hooks.onDelta(result.text);
+    return { ...result, streamed: false };
+  };
+
+  if (provider === 'gemini') {
+    const candidates = allowFallback ? geminiCandidates(modelName) : [modelName];
+    const startedAt = Date.now();
+    let lastError: unknown = null;
+    for (const candidate of candidates) {
+      if (lastError && Date.now() - startedAt > 75000) break;
+      try {
+        const result = await attempt(candidate);
+        lastGoodGeminiModel = result.model;
+        return result;
+      } catch (err) {
+        lastError = err;
+        if (!allowFallback || !isRetryableError(err)) break;
+      }
+    }
+    /**
+     * 스트리밍이 어떤 이유로든 끝내 실패하면(프로바이더가 스트림을 안 열어 주거나, 중간에 끊기거나)
+     * 답변을 잃지 않도록 비스트리밍 호출로 한 번 더 간다. 이미 보낸 조각은 위에서 화면을 비웠다.
+     */
+    return fallbackToBuffered();
+  }
+
+  const attempts = allowFallback ? 2 : 1;
+  for (let index = 0; index < attempts; index += 1) {
+    if (index > 0) await new Promise((resolve) => setTimeout(resolve, 900));
+    try {
+      return await attempt(modelName);
+    } catch (err) {
+      if (!allowFallback || !isRetryableError(err)) break;
+    }
+  }
+  return fallbackToBuffered();
+}
+
+/**
+ * v0.7.0: 스트리밍 에이전트 스텝.
+ * 호출부(agent-loop)는 이 함수만 부르면 ① 개인정보 마스킹 ② 프로바이더별 스트리밍
+ * ③ 실패 시 비스트리밍 폴백 ④ 조각 되돌리기(마스킹 복원) 를 모두 처리해 준다.
+ */
+export async function runAgentStepStreaming(
+  provider: ProviderId,
+  apiKey: string,
+  model: string,
+  messages: AgentMessage[],
+  tools: ToolSpec[] | undefined,
+  hooks: StreamHooks,
+  options: StreamRunOptions = {}
+): Promise<ChatResult> {
+  const masker = createMaskerIfEnabled();
+  const outgoing = masker ? messages.map((message) => maskAgentMessage(message, masker)) : messages;
+  if (!masker) {
+    return streamAgentStepRaw(provider, apiKey, model, outgoing, tools, hooks, options);
+  }
+  /**
+   * 마스킹 자리표시자(`[전화번호 1]`)가 조각 경계에서 잘리면 복원이 안 된다.
+   * 그래서 아직 닫히지 않은 `[` 뒤쪽은 잠깐 붙잡아 두었다가 다음 조각과 합쳐 내보낸다.
+   */
+  let raw = '';
+  let sent = 0;
+  const flush = (final: boolean): void => {
+    let end = raw.length;
+    if (!final) {
+      const open = raw.lastIndexOf('[');
+      if (open >= 0) {
+        const tail = raw.slice(open);
+        if (!tail.includes(']') && tail.length < 60) end = open;
+      }
+    }
+    if (end <= sent) return;
+    const piece = raw.slice(sent, end);
+    sent = end;
+    if (piece) hooks.onDelta?.(masker.restore(piece));
+  };
+  const forward: StreamHooks = {
+    onDelta: (text: string) => {
+      raw += text;
+      flush(false);
+    },
+    onReset: () => {
+      raw = '';
+      sent = 0;
+      hooks.onReset?.();
+    },
+  };
+  const result = await streamAgentStepRaw(provider, apiKey, model, outgoing, tools, forward, options);
+  flush(true);
+  return { ...result, text: masker.restore(result.text), toolCalls: result.toolCalls.map((call) => ({ ...call, args: restoreDeep(call.args, masker) })) };
 }
 
 /* ------------------------------------------------------------------ */

@@ -12,6 +12,7 @@ import {
   type TaskRun,
   type ApprovalRequest,
   type VaultUnlockRequest,
+  type ResumableCheckpoint,
 } from './api';
 import { decideTurnOutcome, isBusyState, isNetworkError } from './network';
 import { applyStoredTheme, applyTheme, watchSystemTheme } from './theme';
@@ -48,6 +49,8 @@ interface AppStoreValue {
   /** 지난 대화에 붙은 작업 카드 */
   taskRuns: TaskRun[];
   sending: boolean;
+  /** v0.7.0: 지금 도착하고 있는 답변 조각(실시간 스트리밍 미리보기) */
+  streamText: string;
   /** 서버 작업이 이어지는 중이라 연결을 다시 붙여 지켜보는 상태 (v0.5.5) */
   recovering: boolean;
   /** 이번 턴이 시작된 시각(ms) — 채팅방마다 따로 센다 */
@@ -81,6 +84,10 @@ interface AppStoreValue {
   deleteSession: (id: string) => Promise<void>;
   /** AI 답변·작업 중지 */
   stop: () => Promise<void>;
+  /** v0.7.0: 서버가 중단된 턴 — 이어서 하기 제안 */
+  resumable: ResumableCheckpoint | null;
+  resumeTurn: () => Promise<{ ok: boolean; message?: string }>;
+  dismissResume: () => void;
   send: (text: string, attachmentIds?: string[], replyTo?: ReplyTarget | null, attachmentViews?: ChatAttachment[]) => Promise<void>;
   clearChat: () => Promise<void>;
   draft: string;
@@ -124,6 +131,8 @@ interface SessionRuntime {
   liveTask: TaskRun | null;
   startedAt: number | null;
   error: string;
+  /** v0.7.0: 실시간 스트리밍으로 도착한 답변 미리보기 */
+  streamText: string;
 }
 
 const EMPTY_RUNTIME: SessionRuntime = {
@@ -132,6 +141,7 @@ const EMPTY_RUNTIME: SessionRuntime = {
   liveTask: null,
   startedAt: null,
   error: '',
+  streamText: '',
 };
 
 const EMPTY_MESSAGES: ChatMessage[] = [];
@@ -275,6 +285,11 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   const recovering = runtime.recovering;
   const turnStart = runtime.startedAt;
   const error = runtime.error;
+  /** v0.7.0: 도착 중인 답변 조각(스트리밍 미리보기) */
+  const streamText = runtime.streamText;
+  /** v0.7.0: 서버가 중단된 턴을 알려 오면 이어서 하기를 제안한다 */
+  const [resumable, setResumable] = useState<ResumableCheckpoint | null>(null);
+  const [resumeDismissed, setResumeDismissed] = useState<Record<string, boolean>>({});
 
   /** 전송 요청이 실제로 진행 중인 방 — 화면 반영(렌더) 전에 연타를 막는 동기 가드 */
   const inFlightRef = useRef<Set<string>>(new Set());
@@ -785,6 +800,19 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     const onMessage = (ev: MessageEvent) => {
       try {
         const event = JSON.parse(ev.data) as { type?: string; data?: Record<string, unknown> };
+        /**
+         * v0.7.0: 답변 스트리밍 조각 — 그 대화방의 칸에만 쌓는다.
+         * reset 은 같은 스텝을 처음부터 다시 그리라는 신호(재시도·다음 스텝).
+         */
+        if (event.type === 'chat_delta') {
+          const eventSession = event.data?.session ? String(event.data.session) : activeSessionRef.current;
+          const text = typeof event.data?.text === 'string' ? (event.data.text as string) : '';
+          const reset = event.data?.reset === true;
+          if (!text && !reset) return;
+          const current = runtimeRef.current[eventSession]?.streamText || '';
+          patchRuntime(eventSession, { streamText: reset ? text : `${current}${text}` });
+          return;
+        }
         if (event.type === 'task') {
           const run = event.data?.run as TaskRun | undefined;
           if (run) {
@@ -923,7 +951,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       const session = activeSessionRef.current;
       if ((!content && !ids.length) || isSending(session)) return;
       inFlightRef.current.add(session);
-      patchRuntime(session, { sending: true, recovering: false, startedAt: Date.now(), error: '' });
+      patchRuntime(session, { sending: true, recovering: false, startedAt: Date.now(), error: '', streamText: '' });
       setDraft('');
       // 끊겼을 때 "이 요청 전에 있던 마지막 메시지"를 기준점으로 삼아 새 답장을 가려낸다.
       const sessionMessages = messagesRef.current[session] ?? EMPTY_MESSAGES;
@@ -986,7 +1014,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       } finally {
         inFlightRef.current.delete(session);
         if (!handedOff) {
-          patchRuntime(session, { sending: false, recovering: false, liveTask: null, startedAt: null });
+          patchRuntime(session, { sending: false, recovering: false, liveTask: null, startedAt: null, streamText: '' });
         }
         void refreshSessions();
         window.setTimeout(() => {
@@ -996,6 +1024,61 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     },
     [isSending, loadMessages, loadLoginCards, patchMessages, patchRuns, patchRuntime, refreshModels, refreshSessions, setDraft, watchServerTurn]
   );
+
+  /**
+   * v0.7.0: 중단된 턴 이어서 하기.
+   * 서버가 저장한 스텝 스냅샷으로 다시 시작하고, 이미 실행한 도구는 결과를 재사용한다.
+   */
+  const resumeTurn = useCallback(async (): Promise<{ ok: boolean; message?: string }> => {
+    const session = activeSessionRef.current;
+    if (!resumable || isSending(session)) return { ok: false, message: '이어서 할 작업이 없습니다.' };
+    inFlightRef.current.add(session);
+    patchRuntime(session, { sending: true, recovering: false, startedAt: Date.now(), error: '', streamText: '' });
+    try {
+      const res = await api.post<{ message: ChatMessage; taskRun?: TaskRun | null }>('/api/chat/resume', {
+        session,
+        checkpointId: resumable.id,
+      });
+      patchMessages(session, (prev) => mergeMessages(prev, [res.message]));
+      if (res.taskRun) {
+        const run = res.taskRun;
+        patchRuns(session, (prev) => mergeTaskRuns(prev, [run]));
+      }
+      setResumable(null);
+      return { ok: true };
+    } catch (err) {
+      patchRuntime(session, { error: err instanceof Error ? err.message : '이어서 하지 못했습니다.' });
+      void loadMessages(session);
+      return { ok: false, message: err instanceof Error ? err.message : '이어서 하지 못했습니다.' };
+    } finally {
+      inFlightRef.current.delete(session);
+      patchRuntime(session, { sending: false, recovering: false, liveTask: null, startedAt: null, streamText: '' });
+      void refreshSessions();
+    }
+  }, [isSending, loadMessages, patchMessages, patchRuns, patchRuntime, refreshSessions, resumable]);
+
+  /** 이어서 하기 제안을 이번 방에서만 치운다 */
+  const dismissResume = useCallback(() => {
+    if (resumable) setResumeDismissed((prev) => ({ ...prev, [resumable.turnId]: true }));
+    setResumable(null);
+  }, [resumable]);
+
+  /** 서버가 '중단된 턴'을 갖고 있는지 확인한다(작업 중이 아닐 때만). */
+  useEffect(() => {
+    if (sending) return;
+    let alive = true;
+    void api
+      .get<{ checkpoint: ResumableCheckpoint | null }>(`/api/chat/resumable?session=${encodeURIComponent(activeSession)}`)
+      .then((r) => {
+        if (!alive) return;
+        const checkpoint = r.checkpoint || null;
+        setResumable(checkpoint && !resumeDismissed[checkpoint.turnId] ? checkpoint : null);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [activeSession, sending, resumeDismissed]);
 
   const clearChat = useCallback(async () => {
     const session = activeSessionRef.current;
@@ -1104,6 +1187,10 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       liveTask,
       taskRuns,
       sending,
+      streamText,
+      resumable,
+      resumeTurn,
+      dismissResume,
       recovering,
       turnStart,
       error,
@@ -1148,6 +1235,10 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       liveTask,
       taskRuns,
       sending,
+      streamText,
+      resumable,
+      resumeTurn,
+      dismissResume,
       recovering,
       turnStart,
       error,

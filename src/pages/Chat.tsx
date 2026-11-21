@@ -284,6 +284,12 @@ export default function Chat() {
     messages,
     messagesLoaded,
     sending,
+    /** v0.7.0: 실시간 스트리밍 미리보기 */
+    streamText,
+    /** v0.7.0: 서버가 중단된 턴을 알려 오면 이어서 하기 제안 */
+    resumable,
+    resumeTurn,
+    dismissResume,
     recovering,
     error,
     aiReady,
@@ -729,9 +735,51 @@ export default function Chat() {
             <ApprovalCard key={request.id} request={request} onApprove={approveTask} onCancel={cancelApproval} />
           ))}
 
+          {/* v0.7.0: 서버가 재시작되어 중단된 작업 — 이어서 하기 제안 */}
+          {resumable && !sending ? (
+            <div className="animate-fade-up rounded-[22px] bg-[#FFFBF2] px-4 py-3.5 ring-1 ring-[#F6E5C8]">
+              <p className="text-[13.5px] font-bold text-[#9A6B1E]">중단된 작업이 있어요</p>
+              <p className="mt-1 line-clamp-2 text-[12.5px] leading-relaxed text-[#8A7350]">
+                “{resumable.userPrompt.replace(/\s+/g, ' ').slice(0, 90)}” · {resumable.step}단계까지 진행했어요. 서버가 다시 시작되어 잠시 멈췄는데, 그 지점에서 이어서 할까요?
+              </p>
+              <div className="mt-2.5 flex gap-2">
+                <button
+                  type="button"
+                  className="flex-1 rounded-full bg-[#F0A93B] px-3 py-2 text-[12.5px] font-bold text-white transition active:scale-[0.99]"
+                  onClick={() => void resumeTurn()}
+                >
+                  이어서 하기
+                </button>
+                <button
+                  type="button"
+                  className="rounded-full bg-white px-3 py-2 text-[12.5px] font-semibold text-[#9A6B1E] ring-1 ring-[#F0DDBB] transition active:scale-[0.99]"
+                  onClick={dismissResume}
+                >
+                  그만두기
+                </button>
+              </div>
+            </div>
+          ) : null}
+
           {sending ? (
             <div className="space-y-2.5">
               {shownLive ? <TaskCard run={shownLive} live startMs={turnStart ?? undefined} /> : null}
+              {streamText ? (
+                <div className="flex items-start gap-2.5 lg:gap-3.5">
+                  <div className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#FFF0F5] ring-1 ring-[#FFE4EE] sm:flex lg:h-11 lg:w-11">
+                    <Mascot name="pimong-think" size={26} />
+                  </div>
+                  <div className="min-w-0 max-w-[86%]">
+                    <div className="selectable-text whitespace-pre-wrap break-words rounded-[24px] rounded-bl-lg bg-white px-4 py-3 text-[15px] leading-relaxed text-[#2A2A35] shadow-card ring-1 ring-[#F6F4FB] sm:text-[16px]">
+                      {streamText}
+                      <span className="ml-0.5 inline-block h-[1em] w-[2px] translate-y-[2px] animate-pulse rounded-full bg-[#B9A8FF] align-baseline" />
+                    </div>
+                    <p className="mt-1 pl-1 text-[11.5px] font-medium text-[#B4B1C2]">
+                      답변을 쓰는 중{turnSeconds > 0 ? ` · ${turnSeconds}초` : ''}
+                    </p>
+                  </div>
+                </div>
+              ) : (
               <div className="flex items-start gap-2.5 lg:gap-3.5">
               <div className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#FFF0F5] ring-1 ring-[#FFE4EE] sm:flex lg:h-11 lg:w-11">
                 <Mascot name="pimong-think" size={26} />
@@ -751,6 +799,7 @@ export default function Chat() {
                 ) : null}
               </div>
             </div>
+              )}
             </div>
           ) : null}
 

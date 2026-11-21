@@ -263,6 +263,75 @@ export interface ReplyTarget {
   createdAt: string;
 }
 
+/* ------------------------------------------------------------------ */
+/* v0.7.0: 하네스 관측성 · 중단 복구                                     */
+/* ------------------------------------------------------------------ */
+
+/** 이번 턴의 토큰·비용·루프 감지 정보(채팅 응답에 함께 온다) */
+export interface ChatTurnObservability {
+  traceId: string;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+  costKrw: number;
+  durationMs: number;
+  loopBreaks: number;
+  compactions: number;
+  streamed: boolean;
+}
+
+/** 실행 트레이스 한 건(관제실 카드) */
+export interface AgentTrace {
+  id: string;
+  sessionId: string;
+  turnId: string;
+  userPrompt: string;
+  provider: string;
+  model: string;
+  status: 'running' | 'done' | 'failed' | 'cancelled' | 'approval';
+  steps: number;
+  tools: string[];
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+  costKrw: number;
+  durationMs: number;
+  escalated: boolean;
+  loopBreaks: number;
+  compacted: number;
+  error: string | null;
+  createdAt: string;
+  endedAt: string | null;
+}
+
+export interface AgentTraceSummary {
+  days: number;
+  turns: number;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+  costKrw: number;
+  avgDurationMs: number;
+  failureRate: number;
+  byModel: { model: string; provider: string; turns: number; inputTokens: number; outputTokens: number; costUsd: number }[];
+  byDay: { day: string; turns: number; inputTokens: number; outputTokens: number; costUsd: number }[];
+  usdKrw: number;
+}
+
+/** 중단된 턴(이어서 하기 제안) */
+export interface ResumableCheckpoint {
+  id: string;
+  sessionId: string;
+  turnId: string;
+  step: number;
+  provider: string;
+  model: string;
+  userPrompt: string;
+  toolsUsed: string[];
+  status: 'running' | 'done' | 'failed' | 'cancelled' | 'approval' | 'interrupted';
+  updatedAt: string;
+}
+
 /** v0.6.3: 메일 발송 확인 카드 내용(답변 meta.mailDraft) */
 export interface MailDraftCard {
   id: string;

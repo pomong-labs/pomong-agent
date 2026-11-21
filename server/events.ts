@@ -14,6 +14,7 @@ export type AppEventType =
   | 'info'
   | 'chat'
   | 'chat_message'
+  | 'chat_delta'
   | 'chat_reaction'
   | 'task'
   | 'login_request'
@@ -60,6 +61,24 @@ export function publish(event: Omit<AppEvent, 'id' | 'at'>, options: { push?: bo
 
 export function recentEvents(limit = 20): AppEvent[] {
   return buffer.slice(-limit).reverse();
+}
+
+/**
+ * v0.7.0: 답변 스트리밍 조각 전용 통로.
+ *
+ * 한 턴에 수백 개의 조각이 오기 때문에 이벤트 버퍼에 쌓지 않고(최근 이벤트를 밀어내지 않게),
+ * 푸시 알림도 보내지 않는다. 연결된 화면에만 바로 써 준다.
+ */
+export function publishDelta(data: Record<string, unknown>): void {
+  if (!clients.size) return;
+  const payload = `event: message\ndata: ${JSON.stringify({ type: 'chat_delta', data, at: new Date().toISOString() })}\n\n`;
+  for (const client of clients) {
+    try {
+      client.write(payload);
+    } catch {
+      clients.delete(client);
+    }
+  }
 }
 
 export function subscribe(res: Response): void {
