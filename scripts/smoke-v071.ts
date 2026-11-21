@@ -370,8 +370,42 @@ async function main(): Promise<void> {
   check('화면 — 자동 이어짐 안내', read('src/pages/Browser.tsx').includes('AI가 바로 이어서 진행합니다'));
   check('취소 시 자동 재개 없음', !read('server/index.ts').includes('cancelHandoverFollowUp'));
 
-  /* 10) 개인정보 비노출 ---------------------------------------------------- */
-  console.log('\n[10] 개인정보 비노출');
+  /* 10) 작업 중 사용자 말풍선 유지 ---------------------------------------- */
+  console.log('\n[10] 작업 중 사용자 말풍선 유지');
+  const { mergeMessages } = await import('../src/lib/chat-merge');
+  const optimisticMessage = {
+    id: -1700000000000,
+    role: 'user' as const,
+    content: '깃허브 메시지함 확인해줘',
+    meta: null,
+    createdAt: '2026-11-21T10:00:00.000Z',
+  };
+  const assistantMessage = {
+    id: 501,
+    role: 'assistant' as const,
+    content: '확인 중이에요',
+    meta: null,
+    createdAt: '2026-11-21T10:00:05.000Z',
+  };
+  check('낙관적 말풍선 유지 — 서버 사본 전 폴링', mergeMessages([optimisticMessage], [assistantMessage]).some((m) => m.id === optimisticMessage.id));
+  check('빈 동기화 결과에 지우지 않음', mergeMessages([optimisticMessage], []).length === 1);
+  const savedUser = { ...optimisticMessage, id: 500 };
+  const afterSave = mergeMessages([optimisticMessage], [savedUser, assistantMessage]);
+  check('서버 사본 오면 임시 말풍선만 정리(중복 없음)', afterSave.length === 2 && afterSave[0].id === 500 && afterSave[1].id === 501);
+  check('id 순서 보존', afterSave.every((m, i) => i === 0 || afterSave[i - 1].id < m.id));
+
+  const chatSource2 = read('src/pages/Chat.tsx');
+  check('Chat — 맨 아래 추적 가드(atBottomRef)', chatSource2.includes('atBottomRef') && chatSource2.includes('onScroll={onScroll}'));
+  check('Chat — 보낼 때 내 말풍선 고정', chatSource2.includes('atBottomRef.current = true;'));
+  const postRoute = serverSource.slice(serverSource.indexOf("app.post('/api/chat/messages'"));
+  const insertAt = postRoute.indexOf('INSERT INTO messages(session_id, role, content, meta, created_at, reply_to_id)');
+  const loopAt = postRoute.indexOf("runInLane('chat'");
+  check('서버 — 루프 전에 사용자 메시지 저장', insertAt > 0 && loopAt > 0 && insertAt < loopAt, `insert ${insertAt} < loop ${loopAt}`);
+  const publishAt = postRoute.indexOf("type: 'chat_message'");
+  check('서버 — 저장 직후 화면(SSE)에 사용자 말풍선 알림', publishAt > 0 && publishAt < loopAt);
+
+  /* 11) 개인정보 비노출 ---------------------------------------------------- */
+  console.log('\n[11] 개인정보 비노출');
   const scanTargets = [
     ...walk(path.join(ROOT, 'server')),
     ...walk(path.join(ROOT, 'src')),

@@ -497,8 +497,22 @@ export default function Chat() {
     else el.scrollTop = top;
   }, []);
 
+  /**
+   * v0.7.1: 사용자가 이미 맨 아래(≈140px 안)를 보고 있는지 기억해 둔다.
+   * 작업 카드·스트리밍 말풍선이 자라날 때마다 강제로 맨 아래로 고정하면,
+   * 방금 보낸 내 말풍선이 화면 위로 밀려나 “사라진 것처럼” 보였다(IMG_3675).
+   */
+  const atBottomRef = useRef(true);
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 140;
+  };
+
   // 새 메시지/응답 대기 → 맨 아래로. (이미지·폰트가 늦게 로드돼 높이가 늘어나는 경우 한 번 더)
+  // v0.7.1: 사용자가 위를 보고 있으면 따라가지 않는다 — 보던 말풍선이 사라지지 않게.
   useEffect(() => {
+    if (!atBottomRef.current) return;
     pinToBottom('smooth');
     const raf = requestAnimationFrame(() => pinToBottom('auto'));
     const t = window.setTimeout(() => pinToBottom('auto'), 140);
@@ -537,6 +551,9 @@ export default function Chat() {
     if ((!draft.trim() && !pending.length) || sending || uploading) return;
     if (dictationRef.current) stopDictation();
     const ids = pending.map((p) => p.id);
+    // v0.7.1: 내가 보낸 말풍선은 항상 보이게 — 맨 아래로 붙이고 기준을 되돌린다.
+    atBottomRef.current = true;
+    pinToBottom('smooth');
     // v0.6.12: 낙관적 말풍선에 사진·파일을 바로 그리도록 첨부 뷰를 함께 넘긴다.
     void send(draft, ids, replyTo, pending.map((p) => p.view));
     setReplyTo(null);
@@ -645,6 +662,7 @@ export default function Chat() {
       {/* messages */}
       <div
         ref={scrollRef}
+        onScroll={onScroll}
         className="pa-scroll min-h-0 flex-1 overflow-y-auto px-4 pb-8 lg:px-10 lg:pb-10"
         style={{ paddingTop: keyboardOpen ? HEADER_SPACE.compact : HEADER_SPACE.normal }}
       >

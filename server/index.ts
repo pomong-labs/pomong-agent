@@ -1772,6 +1772,30 @@ app.post('/api/chat/messages', requireAuth, async (req, res) => {
     .run(session, 'user', text, null, now, replyTo ? replyTo.id : null);
   const userMessageId = Number(userInfo.lastInsertRowid);
   const savedAttachments = ids.length ? attachments.attachToMessage(ids, userMessageId, session) : [];
+  /**
+   * v0.7.1: 사용자 말풍선을 **에이전트 루프 전에** DB에 넣고 바로 화면(SSE)에도 알린다.
+   * 예전에는 화면이 낙관적 말풍선만 들고 있었기 때문에, 작업 중 폴링·동기화가 한 번만
+   * 어긋나도 방금 보낸 말풍선이 잠깐 사라졌다(IMG_3675). 이제 서버 사본이 생기자마자
+   * 모든 창(다른 기기 포함)에 같은 id로 확정되어, 새로고침·폴링에도 사라지지 않는다.
+   * (push 알림은 나가지 않는다 — chat_message 는 푸시 대상이 아니다)
+   */
+  publish({
+    type: 'chat_message',
+    title: '보낸 메시지',
+    body: '',
+    data: {
+      session,
+      message: {
+        id: userMessageId,
+        role: 'user',
+        content: text,
+        meta: null,
+        attachments: savedAttachments,
+        replyTo,
+        createdAt: now,
+      },
+    },
+  });
   // 첨부만 보냈으면 모델에게는 그 사실을 알려 준다.
   const prompt = text || '첨부한 파일을 확인해 주세요.';
   const history = buildModelHistory(session);

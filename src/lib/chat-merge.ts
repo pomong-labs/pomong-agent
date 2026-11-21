@@ -1,12 +1,17 @@
 import type { ChatMessage, TaskRun } from './api';
 
 /**
- * 대화·작업 카드 병합 (v0.6.4)
+ * 대화·작업 카드 병합 (v0.6.4 → v0.7.1)
  *
  * 채팅 한 칸에는 세 갈래에서 같은 메시지가 도착한다.
  *   ① 내가 보낸 낙관적 말풍선(음수 id)  ② SSE 실시간 이벤트  ③ POST 응답·새로고침 스냅샷
  * 예전에는 목록을 통째로 갈아 끼워서, 응답이 도착할 때 말풍선이 잠깐 사라졌다 다시 나타났다(깜빡임).
  * 여기서는 **id 기준으로 합치기만** 하고, 이미 서버에 저장된 내 말풍선이 오면 낙관적 말풍선을 조용히 걷어낸다.
+ *
+ * v0.7.1 보장(IMG_3675):
+ *   · 들어온 목록에 내 말풍선의 서버 사본이 **없으면** 낙관적 말풍선을 절대 지우지 않는다.
+ *     → 작업 중 폴링·SSE·복구 스냅샷이 돌아도 방금 보낸 말풍선이 사라지지 않는다.
+ *   · 서버 사본이 오면 같은 내용의 낙관적 말풍선만 걷어내므로 두 개로 겹치지도 않는다.
  *
  * 화면(store)과 스모크 테스트가 같은 함수를 쓰도록 순수 함수로 따로 두었다.
  */
@@ -14,8 +19,10 @@ import type { ChatMessage, TaskRun } from './api';
 /** 같은 id 는 서버 쪽 내용을 남기고, 아직 서버에 없는 말풍선은 그대로 붙여 둔다. */
 export function mergeMessages(prev: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
   if (!incoming.length) return prev;
-  // 서버가 이미 저장한 내 말풍선이면 낙관적(음수 id) 말풍선은 버린다(잠깐 두 개로 보이는 깜빡임 방지).
-  const savedContents = new Set(incoming.filter((m) => m.role === 'user').map((m) => `${m.role}:${m.content}`));
+  // 서버가 이미 저장한 내 말풍선(양수 id)만 '확정'으로 본다.
+  const savedContents = new Set(
+    incoming.filter((m) => m.role === 'user' && m.id > 0).map((m) => `${m.role}:${m.content}`)
+  );
   const optimistic = prev.filter((m) => m.id < 0 && !savedContents.has(`${m.role}:${m.content}`));
   const byId = new Map<number, ChatMessage>();
   for (const m of prev) if (m.id > 0) byId.set(m.id, m);
