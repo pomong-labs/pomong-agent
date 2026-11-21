@@ -684,6 +684,75 @@ CREATE INDEX IF NOT EXISTS idx_memory_links_b ON memory_links(b_id);
 `);
 
 /* ------------------------------------------------------------------ */
+/* v0.7.2 schema: 에이전트 명함(Agent Card) · 게스트 대화                 */
+/* 기존 테이블은 건드리지 않고 새 테이블만 더한다(data/ 무손실).            */
+/* 게스트 대화에는 주인 대화(messages)를 절대 섞지 않는다.                 */
+/* ------------------------------------------------------------------ */
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS agent_cards (
+  id                   TEXT PRIMARY KEY,
+  slug                 TEXT NOT NULL UNIQUE,
+  title                TEXT NOT NULL,
+  purpose              TEXT NOT NULL DEFAULT 'intro',
+  bio_text             TEXT NOT NULL DEFAULT '',
+  system_guide         TEXT NOT NULL DEFAULT '',
+  quick_prompts_json   TEXT NOT NULL DEFAULT '[]',
+  collect_fields_json  TEXT NOT NULL DEFAULT '[]',
+  custom_domain        TEXT,
+  pin_hash             TEXT,
+  max_turns_per_session INTEGER NOT NULL DEFAULT 20,
+  daily_limit          INTEGER NOT NULL DEFAULT 100,
+  daily_count          INTEGER NOT NULL DEFAULT 0,
+  daily_date           TEXT,
+  model_override       TEXT,
+  expires_at           TEXT,
+  enabled              INTEGER NOT NULL DEFAULT 1,
+  created_at           TEXT NOT NULL,
+  updated_at           TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_cards_enabled ON agent_cards(enabled, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_cards_domain ON agent_cards(custom_domain);
+
+CREATE TABLE IF NOT EXISTS guest_sessions (
+  id               TEXT PRIMARY KEY,
+  card_id          TEXT NOT NULL,
+  visitor_name     TEXT,
+  visitor_contact  TEXT,
+  ip_hash          TEXT,
+  turn_count       INTEGER NOT NULL DEFAULT 0,
+  blocked_count    INTEGER NOT NULL DEFAULT 0,
+  summary_text     TEXT,
+  structured_json  TEXT,
+  status           TEXT NOT NULL DEFAULT 'active',
+  created_at       TEXT NOT NULL,
+  updated_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_guest_sessions_card ON guest_sessions(card_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_guest_sessions_ip ON guest_sessions(ip_hash, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS guest_messages (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT NOT NULL,
+  role       TEXT NOT NULL,
+  content    TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_guest_messages_session ON guest_messages(session_id, id);
+`);
+
+{
+  // 초기 설계안에서 빠졌던 열을 더해도 기존 행은 그대로 남는다(무손실).
+  const cardCols = columnsOf('agent_cards');
+  if (!cardCols.has('model_override')) db.exec('ALTER TABLE agent_cards ADD COLUMN model_override TEXT');
+  if (!cardCols.has('daily_date')) db.exec('ALTER TABLE agent_cards ADD COLUMN daily_date TEXT');
+  if (!cardCols.has('custom_domain')) db.exec('ALTER TABLE agent_cards ADD COLUMN custom_domain TEXT');
+  const sessionCols = columnsOf('guest_sessions');
+  if (!sessionCols.has('blocked_count')) db.exec('ALTER TABLE guest_sessions ADD COLUMN blocked_count INTEGER NOT NULL DEFAULT 0');
+  db.exec('DELETE FROM guest_messages WHERE session_id NOT IN (SELECT id FROM guest_sessions)');
+}
+
+/* ------------------------------------------------------------------ */
 /* Settings                                                            */
 /* ------------------------------------------------------------------ */
 

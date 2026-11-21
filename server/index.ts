@@ -75,6 +75,8 @@ import { guardExternalText } from './guardrails';
 import { maskingEnabled, setMaskingEnabled } from './privacy-mask';
 import type { TaskRunView } from './task-runs';
 import { HANDOVER_RESUME_COOLDOWN_MS, handoverResumeDecision, handoverResumeTrigger } from './handover-resume';
+import * as agentCards from './agent-cards';
+import QRCode from 'qrcode';
 
 ensureDataDir();
 
@@ -383,6 +385,120 @@ app.use((_req, res, next) => {
   res.setHeader('Referrer-Policy', 'no-referrer');
   next();
 });
+
+/* ------------------------------------------------------------------ */
+/* v0.7.2: 커스텀 도메인 격리                                          */
+/*                                                                     */
+/* 명함 전용 도메인(card.example.com)으로 들어온 요청은 **공개 명함    */
+/* 리소스만** 통과시키고, 로그인·금고·도구·대화·기억·설정 등 주인      */
+/* 경로는 전부 404로 막는다. 주소를 몰라도 관리 화면에 닿을 수 없게    */
+/* 하는 것이 목적이다. 등록되지 않은 호스트(IP 접속 등)는 기존처럼     */
+/* 서비스 전체가 열린다.                                               */
+/* ------------------------------------------------------------------ */
+
+/** 메인 서비스 호스트 — 여기서는 격리를 걸지 않는다(환경변수로 추가 가능). */
+const MAIN_SERVICE_HOSTS = new Set(
+  (process.env.MAIN_HOSTS || 'pm-agent.kro.kr,www.pm-agent.kro.kr')
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean)
+);
+
+/** Host/X-Forwarded-Host 에서 포트를 뗀 호스트 이름 */
+function requestHost(req: Request): string {
+  const forwarded = (req.headers['x-forwarded-host'] as string | undefined)?.split(',')[0]?.trim();
+  const raw = forwarded || req.headers.host || '';
+  return raw.toLowerCase().replace(/:\d+$/, '');
+}
+
+/** 명함 전용 도메인에서 열어 주는 경로 화이트리스트 */
+const CARD_HOST_PATHS: RegExp[] = [
+  /^\/$/,
+  /^\/c\/[a-z0-9-]+$/,
+  /^\/assets\//,
+  /^\/sw\.js$/,
+  /^\/manifest(?:[\w.-]*\.json|\.webmanifest)?$/,
+  /^\/api\/public\/card\//,
+  /^\/mascots\//,
+  /^\/fonts\//,
+  /^\/icons\//,
+  /^\/splash\//,
+  /^\/favicon\.ico$/,
+  /^\/robots\.txt$/,
+  /^\/pomong-labs-logo(?:-dark)?\.png$/,
+  /^\/brand-mark\.svg$/,
+];
+
+function cardHostBlockedHtml(): string {
+  return `<!doctype html><html lang="ko"><head><meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex" />
+<title>찾을 수 없음 · ${APP_NAME}</title>
+<style>
+  body{margin:0;min-height:100vh;display:grid;place-items:center;background:#FBFBFD;color:#2A2A35;
+       font-family:"Spoqa Han Sans Neo","Apple SD Gothic Neo",system-ui,-apple-system,sans-serif}
+  .card{background:#fff;border-radius:28px;padding:44px 36px;max-width:380px;text-align:center;
+        box-shadow:0 18px 60px rgba(124,99,246,.12)}
+  .badge{display:inline-flex;align-items:center;gap:8px;background:#FFF1F5;color:#E2568B;font-weight:600;
+         border-radius:999px;padding:8px 16px;font-size:13px}
+  h1{font-size:21px;margin:18px 0 8px}
+  p{color:#8A8A9A;line-height:1.6;font-size:14px;margin:0}
+</style></head><body><div class="card">
+<div class="badge">404 · Not Found</div>
+<h1>이 주소에서는 열리지 않아요</h1>
+<p>여기는 공개 명함만 열리는 주소예요.<br/>명함 링크로 다시 들어와 주세요.</p>
+</div></body></html>`;
+}
+
+app.use((req, res, next) => {
+  const host = requestHost(req);
+  if (!host || MAIN_SERVICE_HOSTS.has(host)) {
+    next();
+    return;
+  }
+  const card = agentCards.getCardByDomain(host);
+  if (!card) {
+    // 등록되지 않은 호스트는 기존 서비스 그대로 둔다(IP·내부 접속).
+    next();
+    return;
+  }
+  const path = req.path;
+  const allowed = CARD_HOST_PATHS.some((pattern) => pattern.test(path));
+  const slugMatch = /^\/c\/([a-z0-9-]+)$/.exec(path);
+  // 이 도메인에 묶인 명함 하나만 열린다(다른 명함 주소로 넘어가면 404).
+  if (!allowed || (slugMatch && slugMatch[1] !== card.slug)) {
+    if (path.startsWith('/api/')) {
+      res.status(404).json({ ok: false, code: 'not_found', message: '이 도메인에서는 공개 명함만 열립니다.' });
+      return;
+    }
+    res.status(404).type('html').send(cardHostBlockedHtml());
+    return;
+  }
+  if (path === '/') {
+    // 명함 도메인 루트 → 그 도메인의 기본 명함으로.
+    res.redirect(302, `/c/${card.slug}`);
+    return;
+  }
+  res.setHeader('X-Robots-Tag', 'noindex');
+  next();
+});
+
+/** 표시용 에이전트 이름·마스코트(주인 개인정보가 아닌 브랜드 값만) */
+function cardBrand(): agentCards.Brand {
+  const p = profile();
+  return { agentName: p.agentName, character: p.character };
+}
+
+function requestIp(req: Request): string {
+  const forwarded = (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim();
+  return forwarded || req.socket.remoteAddress || 'unknown';
+}
+
+function requestBaseUrl(req: Request): string {
+  const proto = ((req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0] || req.protocol || 'https').trim();
+  const host = (req.headers['x-forwarded-host'] as string | undefined)?.split(',')[0]?.trim() || req.headers.host || '';
+  return host ? `${proto}://${host}` : '';
+}
 
 /* ---------------------------- health ------------------------------ */
 
@@ -3596,6 +3712,202 @@ app.delete('/api/policies/:pattern', requireAuth, (req, res) => {
   res.json({ ok: true, policies: policy.listPolicies() });
 });
 
+/* ------------------------- v0.7.2 공개 명함 ------------------------ */
+/*
+ * 손님용 API — 로그인 없이 열린다. 모든 경로에 IP 별 분당 한도를 걸고,
+ * AI 호출 전에 0원 필터를 통과시킨다(server/agent-cards.ts).
+ */
+
+function findPublicCard(slug: string): agentCards.AgentCard | null {
+  const card = agentCards.getCardBySlug(slug);
+  return card && card.enabled ? card : card; // 비활성 명함도 안내 화면을 위해 돌려준다
+}
+
+app.get('/api/public/card/:slug', (req, res) => {
+  const card = agentCards.getCardBySlug(req.params.slug);
+  if (!card) {
+    res.status(404).json({ ok: false, code: 'card_not_found', message: '이 명함을 찾을 수 없습니다.' });
+    return;
+  }
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ ok: true, card: agentCards.publicCard(card, cardBrand()) });
+});
+
+app.get('/api/public/card/:slug/session/:sessionId', (req, res) => {
+  const card = findPublicCard(req.params.slug);
+  if (!card) {
+    res.status(404).json({ ok: false, code: 'card_not_found', message: '이 명함을 찾을 수 없습니다.' });
+    return;
+  }
+  const ipHash = agentCards.hashIp(requestIp(req));
+  const limited = agentCards.checkRate(`${ipHash}:session`);
+  if (!limited.allowed) {
+    res.status(429).json({ ok: false, code: 'rate_limit', message: '잠시 후 다시 시도해 주세요.' });
+    return;
+  }
+  const session = agentCards.publicSessionView(card, req.params.sessionId);
+  if (!session) {
+    res.status(404).json({ ok: false, code: 'session_not_found', message: '대화를 찾을 수 없습니다.' });
+    return;
+  }
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ ok: true, ...session });
+});
+
+app.post('/api/public/card/:slug/verify-pin', (req, res) => {
+  const card = findPublicCard(req.params.slug);
+  if (!card) {
+    res.status(404).json({ ok: false, code: 'card_not_found', message: '이 명함을 찾을 수 없습니다.' });
+    return;
+  }
+  const ipHash = agentCards.hashIp(requestIp(req));
+  const limited = agentCards.checkRate(`${ipHash}:pin`);
+  if (!limited.allowed) {
+    res.status(429).json({ ok: false, code: 'rate_limit', message: `잠시 후 다시 시도해 주세요(${limited.retryAfterSec}초).` });
+    return;
+  }
+  const result = agentCards.verifyPin(card, (req.body as { pin?: string })?.pin);
+  if (!result.ok) {
+    res.status(403).json({ ok: false, code: 'pin_invalid', message: result.message || 'PIN을 확인하지 못했습니다.' });
+    return;
+  }
+  res.json({ ok: true, pass: result.pass });
+});
+
+app.post('/api/public/card/:slug/chat', async (req, res) => {
+  const card = findPublicCard(req.params.slug);
+  if (!card) {
+    res.status(404).json({ ok: false, code: 'card_not_found', message: '이 명함을 찾을 수 없습니다.' });
+    return;
+  }
+  const body = (req.body || {}) as { sessionId?: string; message?: string; pass?: string };
+  try {
+    const outcome = await agentCards.guestChat({
+      card,
+      brand: cardBrand(),
+      sessionId: body.sessionId,
+      message: body.message,
+      pass: body.pass,
+      ipHash: agentCards.hashIp(requestIp(req)),
+    });
+    if (!outcome.ok) {
+      const status = outcome.code === 'rate_limit' ? 429 : outcome.code === 'pin_required' || outcome.code === 'pin_expired' ? 403 : 400;
+      res.status(status).json(outcome);
+      return;
+    }
+    res.json(outcome);
+  } catch (err) {
+    addLog('error', `공개 명함 대화 처리 오류: ${err instanceof Error ? err.message : String(err)}`);
+    res.status(500).json({ ok: false, code: 'server_error', message: '잠시 후 다시 시도해 주세요.' });
+  }
+});
+
+app.post('/api/public/card/:slug/submit', async (req, res) => {
+  const card = findPublicCard(req.params.slug);
+  if (!card) {
+    res.status(404).json({ ok: false, code: 'card_not_found', message: '이 명함을 찾을 수 없습니다.' });
+    return;
+  }
+  const body = (req.body || {}) as { sessionId?: string; name?: string; contact?: string; note?: string; fields?: Record<string, string>; pass?: string };
+  try {
+    const result = await agentCards.submitGuestSession(card, cardBrand(), {
+      sessionId: body.sessionId,
+      name: body.name,
+      contact: body.contact,
+      note: body.note,
+      fields: body.fields,
+      pass: body.pass,
+      ipHash: agentCards.hashIp(requestIp(req)),
+    });
+    res.status(result.ok ? 200 : 400).json(result);
+  } catch (err) {
+    addLog('error', `공개 명함 제출 처리 오류: ${err instanceof Error ? err.message : String(err)}`);
+    res.status(500).json({ ok: false, code: 'server_error', message: '잠시 후 다시 시도해 주세요.' });
+  }
+});
+
+/* --------------------- v0.7.2 주인 관리 (인증) --------------------- */
+
+function ownerCardView(card: agentCards.AgentCard, req: Request) {
+  const base = requestBaseUrl(req);
+  const path = `/c/${card.slug}`;
+  return {
+    ...card,
+    links: {
+      path,
+      url: base ? `${base}${path}` : path,
+      domain: card.customDomain ? `https://${card.customDomain}/` : null,
+    },
+  };
+}
+
+app.get('/api/agent-cards', requireAuth, (req, res) => {
+  res.json({
+    ok: true,
+    cards: agentCards.listCards().map((card) => ownerCardView(card, req)),
+    purposes: agentCards.CARD_PURPOSES.map((id) => ({ id, ...agentCards.PURPOSE_META[id] })),
+  });
+});
+
+app.post('/api/agent-cards', requireAuth, (req, res) => {
+  const result = agentCards.createCard((req.body || {}) as agentCards.CardInput);
+  if ('error' in result) {
+    res.status(400).json({ ok: false, code: 'invalid_card', message: result.error });
+    return;
+  }
+  res.json({ ok: true, card: ownerCardView(result.card, req) });
+});
+
+app.put('/api/agent-cards/:id', requireAuth, (req, res) => {
+  const result = agentCards.updateCard(req.params.id, (req.body || {}) as agentCards.CardInput);
+  if ('error' in result) {
+    res.status(400).json({ ok: false, code: 'invalid_card', message: result.error });
+    return;
+  }
+  res.json({ ok: true, card: ownerCardView(result.card, req) });
+});
+
+app.delete('/api/agent-cards/:id', requireAuth, (req, res) => {
+  const result = agentCards.deleteCard(req.params.id);
+  if (!result.ok) {
+    res.status(404).json({ ok: false, code: 'not_found', message: '명함을 찾을 수 없습니다.' });
+    return;
+  }
+  publish({ type: 'info', title: '에이전트 명함 삭제', body: '', data: { cardId: req.params.id } }, { push: false });
+  res.json({ ok: true, removedSessions: result.removedSessions });
+});
+
+app.get('/api/agent-cards/:id/sessions', requireAuth, (req, res) => {
+  const card = agentCards.getCard(req.params.id);
+  if (!card) {
+    res.status(404).json({ ok: false, code: 'not_found', message: '명함을 찾을 수 없습니다.' });
+    return;
+  }
+  const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 20));
+  res.json({ ok: true, card: ownerCardView(card, req), sessions: agentCards.listSessions(card.id, limit) });
+});
+
+app.post('/api/agent-cards/:id/qr', requireAuth, async (req, res) => {
+  const card = agentCards.getCard(req.params.id);
+  if (!card) {
+    res.status(404).json({ ok: false, code: 'not_found', message: '명함을 찾을 수 없습니다.' });
+    return;
+  }
+  const base = requestBaseUrl(req);
+  const url = card.customDomain ? `https://${card.customDomain}/` : `${base}/c/${card.slug}`;
+  try {
+    const dataUrl = await QRCode.toDataURL(url, {
+      margin: 1,
+      width: 512,
+      errorCorrectionLevel: 'M',
+      color: { dark: '#1B1923', light: '#FFFFFF' },
+    });
+    res.json({ ok: true, url, dataUrl });
+  } catch (err) {
+    res.status(500).json({ ok: false, code: 'qr_failed', message: err instanceof Error ? err.message : 'QR을 만들지 못했습니다.' });
+  }
+});
+
 /* ------------------------------ static ---------------------------- */
 
 // 본문 크기 초과(첨부 15MB 초과 등)는 스택 대신 한 줄 안내로 돌려준다.
@@ -3701,6 +4013,64 @@ migrateLlmState();
 activeConfig();
 // 지난번에 실제로 응답한 Gemini 모델을 기억해 두고 우선 시도한다.
 setLastGoodGeminiModel(getJson<string | null>('gemini.lastGoodModel', null));
+
+/*
+ * v0.7.2: 공개 명함의 게스트 대화 러너.
+ *  - 도구 목록을 넘기지 않는다(tools: undefined) → 기억·금고·메일·브라우저·쉘을 부를 수 없다.
+ *  - 시스템 프롬프트는 그 명함의 소개·지침에서만 만든다(주인 프로필·기억은 들어가지 않는다).
+ *  - 모델은 주인 설정을 따르되, 명함에 지정한 모델이 연결돼 있으면 그걸 쓴다.
+ */
+agentCards.setGuestLlmRunner(async (request) => {
+  const startedAt = Date.now();
+  const base = activeConfig();
+  let provider: ProviderId = base.provider;
+  let model = base.model;
+  let apiKeyEnc = base.apiKeyEnc;
+  const override = (request.card.modelOverride || '').trim();
+  if (override) {
+    const slash = override.indexOf('/');
+    const wantedProvider = slash > 0 ? override.slice(0, slash) : '';
+    const wantedModel = (slash > 0 ? override.slice(slash + 1) : override).trim();
+    const state = llmState();
+    const connected = (Object.keys(PROVIDERS) as ProviderId[]).filter((id) => Boolean(state.accounts[id]?.apiKeyEnc));
+    const pick = wantedProvider
+      ? connected.find((id) => id === wantedProvider && wantedModel)
+      : connected.find((id) => PROVIDERS[id].models.includes(wantedModel));
+    if (pick) {
+      provider = pick;
+      model = wantedModel || PROVIDERS[pick].defaultModel;
+      apiKeyEnc = state.accounts[pick]?.apiKeyEnc || null;
+    }
+  }
+  if (!apiKeyEnc) {
+    return { text: '', provider, model, error: 'AI 키가 연결되어 있지 않습니다.', durationMs: Date.now() - startedAt };
+  }
+  try {
+    const { decrypt: decryptKey, serverKey: key } = await import('./crypto');
+    const apiKey = decryptKey(apiKeyEnc, key());
+    const messages: AgentMessage[] = [
+      { role: 'system', content: request.system },
+      ...request.messages.map((item) => ({ role: item.role, content: item.content }) as AgentMessage),
+    ];
+    const result = await runAgentStep(provider, apiKey, model, messages, undefined, true);
+    return {
+      text: result.text,
+      provider,
+      model: result.model || model,
+      inputTokens: result.usage?.inputTokens || 0,
+      outputTokens: result.usage?.outputTokens || 0,
+      durationMs: Date.now() - startedAt,
+    };
+  } catch (err) {
+    return {
+      text: '',
+      provider,
+      model,
+      error: err instanceof Error ? err.message : String(err),
+      durationMs: Date.now() - startedAt,
+    };
+  }
+});
 
 /**
  * v0.6.3: EXAONE 무료 키(30일) 만료 안내.

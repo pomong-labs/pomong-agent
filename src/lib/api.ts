@@ -803,3 +803,78 @@ export interface FileItem {
   sessionId: string | null;
   exists: boolean;
 }
+
+/* ------------------------------------------------------------------ */
+/* v0.7.2 — 에이전트 명함(Agent Card)                                    */
+/* ------------------------------------------------------------------ */
+
+export type CardPurpose = 'intro' | 'meeting' | 'survey' | 'custom';
+
+export interface CollectField {
+  key: string;
+  label: string;
+  kind: 'text' | 'email' | 'phone' | 'longtext' | 'date';
+  required: boolean;
+  hint?: string;
+}
+
+export interface AgentCard {
+  id: string;
+  slug: string;
+  title: string;
+  purpose: CardPurpose;
+  bioText: string;
+  systemGuide: string;
+  quickPrompts: string[];
+  collectFields: CollectField[];
+  customDomain: string | null;
+  pinRequired: boolean;
+  maxTurnsPerSession: number;
+  dailyLimit: number;
+  dailyCount: number;
+  dailyDate: string | null;
+  modelOverride: string | null;
+  expiresAt: string | null;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+  sessions?: number;
+  lastSessionAt?: string | null;
+  links?: { path: string; url: string; domain: string | null };
+}
+
+export interface GuestSessionView {
+  id: string;
+  cardId: string;
+  visitorName: string | null;
+  visitorContact: string | null;
+  turnCount: number;
+  blockedCount: number;
+  summary: string | null;
+  structured: Record<string, string> | null;
+  status: 'active' | 'submitted' | 'blocked';
+  createdAt: string;
+  updatedAt: string;
+  messages: { role: 'user' | 'assistant'; content: string; at: string }[];
+}
+
+/** 손님 화면이 보는 공개 정보 — 주인 개인정보는 들어 있지 않다. */
+export interface PublicCardInfo {
+  slug: string;
+  title: string;
+  purpose: CardPurpose;
+  purposeLabel: string;
+  bioText: string;
+  agentName: string;
+  character: string;
+  quickPrompts: string[];
+  collectFields: CollectField[];
+  pinRequired: boolean;
+  turnsLimit: number;
+  remainingToday: number;
+  dailyLimit: number;
+  expiresAt: string | null;
+  enabled: boolean;
+  expired: boolean;
+  dailyExhausted: boolean;
+}

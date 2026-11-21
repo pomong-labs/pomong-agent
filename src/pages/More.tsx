@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlarmClock, Brain, ChevronRight, FolderOpen, Globe, LayoutGrid, ListChecks, Lock, LogOut, Settings as SettingsIcon, Wrench } from 'lucide-react';
+import { AlarmClock, Brain, ChevronRight, FolderOpen, Globe, IdCard, LayoutGrid, ListChecks, Lock, LogOut, Settings as SettingsIcon, Wrench } from 'lucide-react';
 import Mascot from '../components/Mascot';
 import { api } from '../lib/api';
 
 export default function More() {
   const navigate = useNavigate();
-  const [version, setVersion] = useState('0.7.0');
+  const [version, setVersion] = useState('0.7.2');
 
   useEffect(() => {
     api
@@ -22,6 +22,8 @@ export default function More() {
 
   const items = [
     { label: '파일함', desc: '받은 파일 · AI 결과물 모아 보기', icon: FolderOpen, to: '/files', tint: '#F1ECFF', color: '#7C63F6' },
+    // v0.7.2: 공개 명함 — 손님에게 건넬 링크·QR·커스텀 도메인
+    { label: '에이전트 명함', desc: '공개 링크로 손님 응대 · 용건 접수', icon: IdCard, to: '/agent-cards', tint: '#FFEFF5', color: '#E2568B' },
     // v0.6.6: 도구 관리자 — 기본 도구 ON/OFF + 나만의 지침 도구
     { label: '도구(스킬) 관리', desc: '기본 도구 끄기 · 나만의 지침 만들기', icon: Wrench, to: '/tools', tint: '#EAFBF1', color: '#12B886' },
     { label: '할 일', desc: '오늘의 태스크 관리', icon: ListChecks, to: '/tasks', tint: '#EFF7FF', color: '#4A90FF' },

@@ -5,11 +5,13 @@ import Mascot, { brandLogoUrl } from './components/Mascot';
 import { api, ApiError } from './lib/api';
 import { preloadMascotAssets } from './lib/preload';
 import { AppStoreProvider, useAppStore } from './lib/store';
+import AgentCards from './pages/AgentCards';
 import Automation from './pages/Automation';
 import Browser from './pages/Browser';
 import Chat from './pages/Chat';
 import Login from './pages/Login';
 import FilesPage from './pages/Files';
+import GuestCard from './pages/GuestCard';
 import MemoryPage from './pages/Memory';
 import MemoryGraphPage from './pages/MemoryGraph';
 import Monitor from './pages/Monitor';
@@ -137,7 +139,11 @@ const SPLASH_MIN_MS = 620;
 const SPLASH_MAX_WAIT_MS = 1600;
 const SPLASH_FADE_MS = 300;
 
-export default function App() {
+/**
+ * 주인용 앱 — 로그인·스플래시·앱 셸이 있는 기존 화면.
+ * v0.7.2: 공개 명함(`/c/:slug`)은 이 껍데기 밖에서 따로 그린다(스토어·SSE·인증 호출 없음).
+ */
+function PrivateApp() {
   useNotificationDeepLink();
   /** PWA 실행이면 이미 네이티브 스플래시가 떴다 — 처음부터 'done'으로 시작해 건너뛴다 */
   const [splash, setSplash] = useState<'show' | 'fading' | 'done'>(() => (standalonePwa() ? 'done' : 'show'));
@@ -199,10 +205,25 @@ export default function App() {
             <Route path="settings" element={<SettingsPage />} />
             <Route path="files" element={<FilesPage />} />
             <Route path="more" element={<More />} />
+            {/* v0.7.2: 더보기 → 에이전트 명함 */}
+            <Route path="agent-cards" element={<AgentCards />} />
           </Route>
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </AppStoreProvider>
+  );
+}
+
+/**
+ * v0.7.2 — 라우터 최상단.
+ * 손님용 공개 명함은 인증·앱 셸·스토어를 전혀 거치지 않는 별도 화면이다.
+ */
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/c/:slug" element={<GuestCard />} />
+      <Route path="*" element={<PrivateApp />} />
+    </Routes>
   );
 }
