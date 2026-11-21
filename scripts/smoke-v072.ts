@@ -262,6 +262,10 @@ async function main(): Promise<void> {
     check('위조 통행증 거부', !cards.passValid(pinCard, 'forged.token').ok);
     const noPass = await cards.guestChat({ card: pinCard, brand, message: '안녕하세요', ipHash: 'ip-pin' });
     check('통행증 없으면 대화 거부', noPass.code === 'pin_required');
+    const cleared = cards.updateCard(pinCard.id, { clearPin: true });
+    check('PIN 끄기', 'card' in cleared && !cleared.card.pinRequired);
+    const opened = cards.updateCard(pinCard.id, { pin: '9911' });
+    check('PIN 다시 걸기', 'card' in opened && opened.card.pinRequired);
   }
 
   const expiredCard = (() => {

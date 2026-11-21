@@ -77,7 +77,11 @@ export default function GuestCard() {
 
   /* 테마 — 손님 기기 설정(라이트/다크)을 따르고, 포인트 컬러는 이 명함 캐릭터 색 */
   useEffect(() => {
-    applyTheme({ theme: 'system', accentMode: 'character', accentColor: '#8B72F8', character: card?.character || 'pimong' });
+    // 손님 기기 설정을 따르되, 이 브라우저의 저장된 테마(주인 설정)는 건드리지 않는다.
+    applyTheme(
+      { theme: 'system', accentMode: 'character', accentColor: '#8B72F8', character: card?.character || 'pimong' },
+      { persist: false }
+    );
   }, [card?.character]);
 
   useEffect(() => {

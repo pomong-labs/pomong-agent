@@ -265,7 +265,10 @@ function storeTheme(settings: ThemeSettings, resolved: 'light' | 'dark', vars: R
 let lastApplied: ThemeSettings | null = null;
 
 /** 지금 화면에 테마를 적용하고, 다음 새로고침 때 깜빡이지 않게 저장한다. */
-export function applyTheme(settings: ThemeSettings): { resolved: 'light' | 'dark'; base: string } {
+export function applyTheme(
+  settings: ThemeSettings,
+  options: { persist?: boolean } = {}
+): { resolved: 'light' | 'dark'; base: string } {
   const resolved = resolveTheme(settings.theme);
   const base = accentBaseFor(settings);
   if (typeof document === 'undefined') return { resolved, base };
@@ -278,7 +281,8 @@ export function applyTheme(settings: ThemeSettings): { resolved: 'light' | 'dark
   // 테마 모드 3종을 CSS에서도 구분할 수 있게 둔다(기기 설정 따름 표시 등).
   root.dataset.themeMode = settings.theme;
   lastApplied = settings;
-  storeTheme(settings, resolved, vars);
+  // v0.7.2: 손님용 공개 명함처럼 이 기기의 저장값을 바꾸면 안 되는 화면은 persist:false 로 칠한다.
+  if (options.persist !== false) storeTheme(settings, resolved, vars);
   // iOS 상태 표시줄·주소창 색도 테마에 맞춘다.
   // v0.6.7: 상태바 색 = 본문 표면색(--pa-surface)과 같은 값. media 쿼리로 나뉜 메타도 **모두** 맞춘다.
   const top = vars['--pa-top'];

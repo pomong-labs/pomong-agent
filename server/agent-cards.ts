@@ -343,6 +343,8 @@ function normalizeDomain(raw: unknown): string | null {
     .replace(/\/.*$/, '')
     .replace(/:\d+$/, '');
   if (!value) return null;
+  // 서버 IP 를 도메인으로 등록하면 그 IP 로 들어오는 관리 경로까지 막히므로 IP 는 받지 않는다.
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(value)) return null;
   if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/.test(value)) return null;
   return value.slice(0, 120);
 }
@@ -752,6 +754,8 @@ export function updateCard(id: string, input: CardInput): { card: AgentCard } | 
     new Date().toISOString(),
     id
   );
+  // COALESCE 는 NULL 을 '그대로 두기'로 해석하므로, PIN 끄기는 따로 지운다.
+  if (input.clearPin) db.prepare('UPDATE agent_cards SET pin_hash = NULL WHERE id = ?').run(id);
   return { card: cardById(id) as AgentCard };
 }
 
