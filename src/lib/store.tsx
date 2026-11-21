@@ -780,6 +780,19 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
           patchMessages(eventSession, (prev) => (prev.some((m) => m.id === message.id) ? prev : mergeMessages(prev, [message])));
           return;
         }
+        if (event.type === 'chat_reaction') {
+          // v0.6.15: 비서가 단 말풍선 리액션을 바로 반영한다(새로고침 없이).
+          const messageId = Number(event.data?.messageId);
+          const emojiList = Array.isArray(event.data?.reactions) ? (event.data?.reactions as string[]) : [];
+          if (!Number.isFinite(messageId) || messageId <= 0) return;
+          const eventSession = event.data?.session ? String(event.data.session) : activeSessionRef.current;
+          patchMessages(eventSession, (prev) =>
+            prev.some((m) => m.id === messageId)
+              ? prev.map((m) => (m.id === messageId ? { ...m, reactions: emojiList } : m))
+              : prev
+          );
+          return;
+        }
         if (event.type === 'vault_unlock_request') {
           const request = event.data?.request as VaultUnlockRequest | undefined;
           if (!request || !request.id) return;

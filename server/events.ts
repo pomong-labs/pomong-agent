@@ -14,6 +14,7 @@ export type AppEventType =
   | 'info'
   | 'chat'
   | 'chat_message'
+  | 'chat_reaction'
   | 'task'
   | 'login_request'
   | 'vault_unlock_request'

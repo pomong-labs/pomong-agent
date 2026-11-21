@@ -1,6 +1,6 @@
 {
   "name": "pomong-agent",
-  "version": "0.6.14",
+  "version": "0.6.15",
   "private": true,
   "description": "Pomong Agent — a self-hosted personal AI assistant OS with BYOK multi-LLM, server monitoring and an encrypted vault.",
   "license": "MIT",
@@ -27,6 +27,7 @@
     "lucide-react": "^0.469.0",
     "nodemailer": "^6.10.1",
     "playwright-core": "^1.65.1",
+    "qrcode": "^1.5.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.28.1",
@@ -37,6 +38,7 @@
     "@types/express": "^4.17.21",
     "@types/node": "^22.10.5",
     "@types/nodemailer": "^8.0.2",
+    "@types/qrcode": "^1.5.5",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@types/web-push": "^3.6.4",

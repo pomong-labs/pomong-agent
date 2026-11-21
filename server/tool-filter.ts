@@ -16,6 +16,7 @@ export type ToolGroup =
   | 'web'
   | 'memory'
   | 'files'
+  | 'image'
   | 'automation'
   | 'server'
   | 'weather'
@@ -30,6 +31,8 @@ export const CORE_TOOLS = [
   'tasks_list',
   'tasks_add',
   'tasks_complete',
+  // v0.6.15: 자연스러운 순간에 말풍선 리액션을 달 수 있게 늘 켜 둔다.
+  'react_to_message',
 ];
 
 export const TOOL_GROUPS: Record<ToolGroup, string[]> = {
@@ -52,6 +55,8 @@ export const TOOL_GROUPS: Record<ToolGroup, string[]> = {
   web: ['web_search'],
   memory: ['memory_delete', 'chat_history_search'],
   files: ['attachment_read', 'file_save'],
+  // v0.6.15: 그림 생성·편집·QR(결과는 파일함에도 저장된다)
+  image: ['generate_image', 'edit_image', 'create_qr'],
   automation: ['job_create', 'automation_list', 'watch_create'],
   server: ['server_stats'],
   weather: ['weather_get'],
@@ -67,6 +72,10 @@ const INTENT_PATTERNS: { group: ToolGroup; re: RegExp }[] = [
   { group: 'web', re: /(검색|찾아\s*(줘|봐|보)|알아봐|최신|뉴스|가격|최저가|비교|추천|정보\s*좀|어디서\s*팔)/i },
   { group: 'memory', re: /(기억|저번|예전|지난번|잊어|기억나)/i },
   { group: 'files', re: /(첨부|파일|사진|이미지|pdf|문서|스크린샷)/i },
+  {
+    group: 'image',
+    re: /((그림|그려|이미지|사진|로고|아이콘|일러스트|포스터|썸네일|배너|이모티콘)[\s\S]{0,12}(만들|생성|그려|바꿔|편집|수정|고쳐))|(만들|그려|바꿔|고쳐)[\s\S]{0,8}(그림|이미지)|qr\s*코드|큐알|qr|와이파이\s*(연결|qr)/i,
+  },
   { group: 'automation', re: /(예약\s*(실행|작업|만들)|매일|매주|매시간|자동화|스케줄|워치|감시|정기적|알림\s*만들)/i },
   { group: 'server', re: /(서버|cpu|램|ram|메모리|디스크|용량|관제|리소스|가동\s*시간)/i },
   { group: 'weather', re: /(날씨|기온|비\s*와|비가|눈이|우산|더워|추워|습도|미세먼지)/i },
@@ -98,6 +107,8 @@ export function selectToolNames(input: ToolFilterInput): ToolFilterResult {
     if (re.test(text)) groups.add(group);
   }
   if (input.hasImage || input.hasFile || (input.userRequest || '').trim() === '') groups.add('files');
+  // 사진을 고쳐 달라는 요청이면 편집 도구까지 함께 넘긴다(첨부 id로 찾는다).
+  if (groups.has('image')) groups.add('files');
   if (input.browserActive) groups.add('browser');
 
   // 아무 의도도 안 잡히면(짧은 인사·잡담) 예전처럼 전체 허용 — 기능이 줄어들지 않게.
@@ -131,6 +142,7 @@ export const TOOL_GROUP_META: ToolGroupMeta[] = [
   { id: 'mail', label: '이메일', desc: '메일함 확인·검색·읽기·발송', emoji: '✉️' },
   { id: 'memory', label: '기억', desc: '오래된 대화·기억 검색과 정리', emoji: '🧠' },
   { id: 'files', label: '파일', desc: '첨부 읽기·결과물 저장', emoji: '📎' },
+  { id: 'image', label: '이미지 · QR', desc: '그림 생성·편집, QR 코드 만들기', emoji: '🎨' },
   { id: 'automation', label: '자동화', desc: '예약 실행·변경 감시 만들기', emoji: '⏰' },
   { id: 'server', label: '서버 관제', desc: 'CPU·메모리·디스크 상태 보기', emoji: '🖥️' },
   { id: 'weather', label: '날씨', desc: '현재 날씨와 예보', emoji: '🌤️' },

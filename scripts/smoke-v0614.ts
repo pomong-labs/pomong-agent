@@ -64,7 +64,7 @@ async function main(): Promise<void> {
   /* 1) 버전 --------------------------------------------------------------- */
   const pkg = JSON.parse(read('package.json')) as { version: string };
   const compose = read('docker-compose.yml');
-  check('버전 0.6.14', pkg.version === '0.6.14', pkg.version);
+  check('버전 0.6.14 이상', /^0\.6\.(1[4-9]|[2-9]\d)$/.test(pkg.version), pkg.version);
   check('server/config 버전', APP_VERSION === pkg.version, APP_VERSION);
   check(
     'docker-compose 이미지 태그',

@@ -63,6 +63,7 @@ import * as mail from './mail';
 import { DEFAULT_ROUTING, TASK_KIND_META, TASK_KINDS, detectTaskKind, exaoneKeyStatus, normalizeRouting, resolveRoute, type RoutingSettings, type TaskKind } from './routing';
 import { selectToolNames, filterToolsByPrefs, normalizeToolPrefs, TOOL_GROUP_META, TOOL_GROUPS, DEFAULT_TOOL_PREFS, disabledToolNames, type ToolPrefs } from './tool-filter';
 import * as skills from './skills';
+import * as reactions from './reactions';
 import type { TaskRunView } from './task-runs';
 
 ensureDataDir();
@@ -746,6 +747,14 @@ function systemPrompt(memoryBlock = '', skillBlock = ''): string {
       '과거 대화는 chat_history_search로 직접 찾아봐. 사용자가 "저번에 말한", "예전에 하던"처럼 이전 대화를 가리키면 추측하지 말고 검색해서 근거를 확인한 뒤 답해. 다른 대화방 기록까지 검색되니까 기억이 비어 있어도 찾을 수 있어.'
     ),
     s(
+      '그림·이미지를 만들어 달라는 요청은 generate_image(새로 만들기)·edit_image(올린 사진이나 방금 만든 그림 고치기)로 만들고, 링크·글자·와이파이 QR은 create_qr로 만드세요. 만든 그림은 채팅 말풍선과 파일함에 바로 보이니 "볼 수 없다"고 하지 말고 무엇을 만들었는지 한두 문장으로 알려 주세요. 무료 한도·안전 정책으로 만들지 못하면 도구가 알려 준 이유를 짧게 전하고 다른 방법을 제안하세요.',
+      '그림·이미지를 만들어 달라는 요청은 generate_image(새로 만들기)·edit_image(올린 사진이나 방금 만든 그림 고치기)로 만들고, 링크·글자·와이파이 QR은 create_qr로 만들어. 만든 그림은 채팅 말풍선과 파일함에 바로 보이니까 "볼 수 없다"고 하지 말고 뭘 만들었는지 한두 문장으로 알려 줘. 무료 한도·안전 정책으로 못 만들면 도구가 알려 준 이유를 짧게 전하고 다른 방법을 제안해.'
+    ),
+    s(
+      '말풍선 리액션(react_to_message)은 고맙거나 재밌거나 축하하거나 다정하게 공감할 만한 순간에만 가끔 씁니다. 인사·질문·잡담마다 달지 말고 한 대화에서 몇 번 정도로 아끼세요. 달았으면 굳이 말로 설명하지 않습니다.',
+      '말풍선 리액션(react_to_message)은 고맙거나 재밌거나 축하하거나 다정하게 공감할 만한 순간에만 가끔 써. 인사·질문·잡담마다 달지 말고 한 대화에서 몇 번 정도로 아껴. 달았으면 굳이 말로 설명하지 마.'
+    ),
+    s(
       '작업이 오래 걸릴 것 같으면(브라우저 열기, 여러 사이트 확인, 긴 검색 등) 도구를 부르기 전에 chat_notify로 "깃허브 연동해 드릴게요, 잠시만요!" 같은 짧은 안내를 먼저 보내세요. 한 번의 요청에서 한 번만 보냅니다.',
       '작업이 오래 걸릴 것 같으면(브라우저 열기, 여러 사이트 확인, 긴 검색 등) 도구를 부르기 전에 chat_notify로 "깃허브 연동해 줄게, 잠시만!" 같은 짧은 안내를 먼저 보내. 한 번의 요청에서 한 번만 보낸다.'
     ),
@@ -868,6 +877,8 @@ app.get('/api/chat/messages', requireAuth, (req, res) => {
   const ordered = rows.reverse();
   // v0.5.2: 말풍선에 붙은 사진·파일도 함께 내려준다.
   const files = attachments.listForMessages(ordered.map((r) => r.id));
+  // v0.6.15: 말풍선 아래에 보일 이모지 리액션.
+  const reactionMap = reactions.listForMessages(ordered.map((r) => r.id));
   // v0.6.3: 답장(인용) 원본을 함께 내려준다.
   const replyIds = [...new Set(ordered.map((r) => r.reply_to_id).filter((v): v is number => Boolean(v)))];
   const replyRows = replyIds.length
@@ -887,6 +898,7 @@ app.get('/api/chat/messages', requireAuth, (req, res) => {
         meta: r.meta ? JSON.parse(r.meta) : null,
         model: r.model,
         attachments: files[r.id] || [],
+        reactions: reactionMap[r.id] || [],
         replyTo: quoted
           ? { id: quoted.id, role: quoted.role, content: quoted.content.slice(0, 400), createdAt: quoted.created_at }
           : null,
@@ -1074,6 +1086,8 @@ interface ChatTurnResult {
     meta: Record<string, unknown> | null;
     model: string;
     createdAt: string;
+    /** v0.6.15: 이번 턴에 만든 그림(말풍선에 바로 보인다) */
+    attachments?: attachments.AttachmentView[];
   };
   model: string;
   provider: ProviderId;
@@ -1132,6 +1146,8 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
   /** v0.6.1: 금고 잠금 카드·이미 있는 계정 신호(로그인 카드 중복 방지) */
   let vaultLockedCardCreated = false;
   let vaultHasAccount = false;
+  /** v0.6.15: 이번 턴에 만든 그림 첨부 id — 답변 말풍선에 붙띄다 */
+  const generatedImages: string[] = [];
   const turnStartedAt = new Date().toISOString();
 
   let runId: string | null = null;
@@ -1212,6 +1228,7 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
         if (flags?.loginCardCreated) loginCardCreated = true;
         if (flags?.vaultLockedCardCreated) vaultLockedCardCreated = true;
         if (flags?.vaultHasAccount) vaultHasAccount = true;
+        if (flags?.images?.length) generatedImages.push(...flags.images);
         addLog('info', `도구 실행 · ${name}`);
       },
     });
@@ -1305,6 +1322,10 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
     loginRequests.linkPendingToMessage(session, messageId);
     // v0.5.4: 금고 PIN 입력 카드도 같은 자리에 붙인다.
     vaultUnlock.linkPendingToMessage(session, messageId);
+    // v0.6.15: 이번 턴에 만든 그림은 답변 말풍선에 붙인다(대화를 다시 열어도 그 자리에).
+    const turnImages = generatedImages.length
+      ? attachments.attachToMessage(generatedImages, messageId, session)
+      : [];
     // 실제로 응답한 모델을 기억해 두면 다음 대화부터는 그 모델로 바로 시도한다.
     if (config.provider === 'gemini') {
       const good = getLastGoodGeminiModel();
@@ -1329,6 +1350,7 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
       meta: meta ? { ...meta, stats, tasks } : null,
       model: `${config.provider}:${model}`,
       createdAt: new Date().toISOString(),
+      ...(turnImages.length ? { attachments: turnImages } : {}),
     };
     // 다른 기기·다른 탭에도 답변이 바로 뜨게 하고, 앱을 안 보고 있으면 푸시로도 알린다.
     publish({
@@ -1484,6 +1506,8 @@ app.post('/api/chat/messages', requireAuth, async (req, res) => {
         meta: null,
         attachments: savedAttachments,
         replyTo,
+        // v0.6.15: 이 턴에 비서가 단 리액션도 함께 돌려준다(화면에 바로 반영).
+        reactions: reactions.listForMessage(userMessageId),
         createdAt: now,
       },
       model: result.model,

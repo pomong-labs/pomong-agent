@@ -486,6 +486,27 @@ END;
 }
 
 /* ------------------------------------------------------------------ */
+/* v0.6.15 schema: 말풍선 이모지 리액션                                   */
+/* messages 테이블은 건드리지 않고 리액션만 따로 쌓는다(같은 이모지 1번).   */
+/* ------------------------------------------------------------------ */
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS message_reactions (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  message_id INTEGER NOT NULL,
+  session_id TEXT NOT NULL,
+  emoji      TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_message_reactions_unique ON message_reactions(message_id, emoji);
+CREATE INDEX IF NOT EXISTS idx_message_reactions_session ON message_reactions(session_id, message_id);
+
+CREATE TRIGGER IF NOT EXISTS messages_reactions_ad AFTER DELETE ON messages BEGIN
+  DELETE FROM message_reactions WHERE message_id = old.id;
+END;
+`);
+
+/* ------------------------------------------------------------------ */
 /* Settings                                                            */
 /* ------------------------------------------------------------------ */
 

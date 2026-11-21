@@ -234,6 +234,8 @@ export interface ChatMessage {
   model?: string | null;
   /** v0.6.3: 답장(인용)한 원본 메시지 */
   replyTo?: { id: number; role: string; content: string; createdAt: string } | null;
+  /** v0.6.15: 말풍선 아래에 보이는 이모지 리액션(최대 3개) */
+  reactions?: string[];
 }
 
 /** v0.6.3: 답장할 때 입력창 위에 보여 주는 인용 정보 */
@@ -564,7 +566,7 @@ export interface BrowserAction {
 
 export interface AppEvent {
   id: number;
-  type: 'job' | 'watch' | 'handover' | 'browser' | 'info' | 'chat' | 'chat_message' | 'task';
+  type: 'job' | 'watch' | 'handover' | 'browser' | 'info' | 'chat' | 'chat_message' | 'chat_reaction' | 'task';
   title: string;
   body: string;
   at: string;

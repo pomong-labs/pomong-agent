@@ -79,7 +79,8 @@ async function main(): Promise<void> {
   check('메일 도구가 모델 목록에서 빠진다', !filtered.some((t) => t.name.startsWith('mail_')));
   check('개별로 끈 도구도 빠진다', !filtered.some((t) => t.name === 'browser_open'));
   check('나머지 도구는 유지', filtered.some((t) => t.name === 'browser_click'));
-  check('그룹 메타 10종', toolFilter.TOOL_GROUP_META.length === 10);
+  // v0.6.15: image 그룹이 늘어 11종 — 개수가 아니라 '비어 있지 않은 그룹'만 본다.
+  check('그룹 메타 11종 이상', toolFilter.TOOL_GROUP_META.length >= 11, String(toolFilter.TOOL_GROUP_META.length));
   check(
     '그룹 메타가 모든 도구를 담는다',
     toolFilter.TOOL_GROUP_META.every((g) => Array.isArray(toolFilter.TOOL_GROUPS[g.id]) && toolFilter.TOOL_GROUPS[g.id].length > 0)

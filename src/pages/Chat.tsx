@@ -475,6 +475,12 @@ export default function Chat() {
                         {m.content}
                       </div>
                     ) : null}
+                    {/* v0.6.15: 비서가 남긴 이모지 리액션 — 말풍선 아래에 작은 뱃지로 */}
+                    {m.reactions?.length ? (
+                      <div className="-mt-2 mr-2">
+                        <ReactionBadges items={m.reactions} />
+                      </div>
+                    ) : null}
                   </div>
                   <div className="flex items-center gap-1.5 pr-1 text-[12px] text-[#A8A5B8]">
                     <button
@@ -985,6 +991,11 @@ function AssistantBubble({
             <MessageAttachments items={message.attachments} onPreview={onPreview} />
           </div>
         ) : null}
+        {message.reactions?.length ? (
+          <div className="mt-2">
+            <ReactionBadges items={message.reactions} align="start" />
+          </div>
+        ) : null}
         {message.meta?.type === 'server_stats' && message.meta.stats ? <StatsCard stats={message.meta.stats} /> : null}
         {message.meta?.type === 'tasks' && message.meta.tasks ? <TasksCard tasks={message.meta.tasks} /> : null}
         {message.meta?.type === 'browser' ? <BrowserCard sessionId={message.meta.browserSession || null} /> : null}
@@ -1066,6 +1077,26 @@ function fileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes}B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)}KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+}
+
+/**
+ * v0.6.15: 비서가 남긴 말풍선 이모지 리액션.
+ * 말풍선에 살짝 겹치도록 작고 둥글게 — 라이트/다크 모두 배경과 구분되게 흰 캡슐 + 옅은 테두리.
+ */
+function ReactionBadges({ items, align = 'end' }: { items: string[]; align?: 'start' | 'end' }) {
+  return (
+    <div className={`flex flex-wrap items-center gap-1 ${align === 'start' ? 'justify-start' : 'justify-end'}`}>
+      {items.map((emoji) => (
+        <span
+          key={emoji}
+          title="비서가 남긴 리액션"
+          className="inline-flex h-6 min-w-[24px] items-center justify-center rounded-full bg-white px-1.5 text-[13px] leading-none shadow-[0_2px_8px_rgba(120,100,200,0.16)] ring-1 ring-[#ECE7F8] dark:bg-[#2B2838] dark:ring-[#3C3849]"
+        >
+          {emoji}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 /** 말풍선에 붙은 사진 썸네일과 파일 칩 (v0.5.2) */

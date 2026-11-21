@@ -14,6 +14,9 @@ import { findServiceInText } from './services';
 import * as attachments from './attachments';
 import * as files from './files';
 import * as mail from './mail';
+import * as images from './images';
+import * as reactions from './reactions';
+import { publish } from './events';
 import { webSearch, formatSearch } from './web-search';
 import type { ToolSpec } from './providers';
 
@@ -591,6 +594,77 @@ export const TOOL_SPECS: ToolSpec[] = [
       required: ['name'],
     },
   },
+
+  /* --------------- v0.6.15: 그림 생성·편집 · QR · 리액션 --------------- */
+  {
+    name: 'generate_image',
+    description:
+      '채팅방에서 그림을 새로 만든다. 사용자가 "고양이 그림 그려줘", "로고 만들어줘", "썸네일 만들어줘"처럼 그림·이미지 생성을 부탁하면 쓴다. ' +
+      '그림은 파일함에 저장되고 채팅 말풍선에 바로 보이므로, 사용자에게 그림을 볼 수 없다고 말하지 말고 "만들었어요"라고 알려 준다. ' +
+      '만들지 못하면(무료 한도·안전 정책) 그 이유를 도구가 알려 주니 그대로 짧게 전한다.',
+    parameters: {
+      type: 'object',
+      properties: {
+        prompt: {
+          type: 'string',
+          description: '그림 설명(영어가 결과가 좋다). 예: "a cozy winter cafe illustration, soft pastel colors, no text"',
+        },
+        aspect_ratio: { type: 'string', enum: ['1:1', '3:4', '4:3', '9:16', '16:9'], description: '그림 비율(기본 1:1)' },
+        model: { type: 'string', description: '이미지 모델을 직접 지정할 때만(보통 비워 둔다)' },
+      },
+      required: ['prompt'],
+    },
+  },
+  {
+    name: 'edit_image',
+    description:
+      '이미 있는 사진을 고친다(배경 바꾸기, 스타일 변환, 요소 추가·제거, 색감 변경 등). 사용자가 채팅에 사진을 올리고 "이거 배경 바꿔줘"라고 하거나, 방금 만든 그림을 고쳐 달라고 하면 쓴다. ' +
+      'source_image_id를 비우면 이 대화방에서 가장 최근 사진(올린 사진·만든 그림)을 고친다. 결과는 파일함에 저장되고 채팅에 바로 보인다.',
+    parameters: {
+      type: 'object',
+      properties: {
+        instruction: { type: 'string', description: '어떻게 고칠지(예: "배경을 밤하늘로 바꾸고 별을 넣어 줘")' },
+        source_image_id: { type: 'string', description: '고칠 사진의 첨부 id(비우면 이 방의 가장 최근 사진)' },
+        aspect_ratio: { type: 'string', enum: ['1:1', '3:4', '4:3', '9:16', '16:9'], description: '결과 비율(선택)' },
+      },
+      required: ['instruction'],
+    },
+  },
+  {
+    name: 'create_qr',
+    description:
+      'QR 코드 이미지(PNG)를 만든다. 링크·글자·Wi-Fi 접속 정보를 담을 수 있고, 만든 QR은 파일함에 저장되고 채팅에 바로 보인다. ' +
+      '"이 링크 QR로 만들어줘", "와이파이 QR 만들어줘" 같은 요청에 쓴다.',
+    parameters: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'QR에 담을 문구(링크면 자동으로 https를 붙인다)' },
+        url: { type: 'string', description: '담을 링크(text 대신 쓸 수 있다)' },
+        kind: { type: 'string', enum: ['auto', 'url', 'text', 'wifi'], description: '종류(기본 auto)' },
+        wifi_ssid: { type: 'string', description: 'Wi-Fi 이름(와이파이 QR일 때)' },
+        wifi_password: { type: 'string', description: 'Wi-Fi 비밀번호(없으면 개방형)' },
+        wifi_security: { type: 'string', enum: ['WPA', 'WEP', 'nopass'], description: 'Wi-Fi 보안 방식' },
+        wifi_hidden: { type: 'boolean', description: '숨은 SSID 여부' },
+        size: { type: 'number', description: 'PNG 크기(px, 256~2048, 기본 1024)' },
+      },
+    },
+  },
+  {
+    name: 'react_to_message',
+    description:
+      '사용자의 말풍선에 이모지 리액션을 하나 단다. 고맙거나, 재밌거나, 축하하거나, 다정하게 공감할 만한 순간에만 가끔 쓴다. ' +
+      `모든 메시지에 남발하지 말 것(한 대화에서 몇 번 정도). 예: ${reactions.REACTION_EXAMPLES.join(' ')}. ` +
+      'message_id를 비우면 방금 받은 사용자 메시지에 달린다. 리액션은 채팅 말풍선 아래에 작은 뱃지로 보인다.',
+    parameters: {
+      type: 'object',
+      properties: {
+        emoji: { type: 'string', description: '이모지 하나' },
+        message_id: { type: 'number', description: '리액션을 달 메시지 id(비우면 방금 받은 사용자 메시지)' },
+        query: { type: 'string', description: '메시지 id를 모를 때, 그 말풍선에 들어 있는 글자 일부' },
+      },
+      required: ['emoji'],
+    },
+  },
 ];
 
 /** 앱 '더보기 → 도구 목록' 화면에 보여줄 도구 설명 */
@@ -734,6 +808,30 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
     summary: 'AI가 만든 글·표·코드를 파일로 저장해 파일함에 보관해요.',
     example: '오늘 정리한 내용을 파일로 저장해줘',
   },
+  {
+    name: 'generate_image',
+    label: '이미지 생성',
+    summary: '말로 설명한 그림을 만들어 채팅에 바로 보여 주고 파일함에 저장해요(설정한 Gemini 키 사용).',
+    example: '겨울 카페 일러스트 그려줘',
+  },
+  {
+    name: 'edit_image',
+    label: '이미지 편집',
+    summary: '올린 사진이나 방금 만든 그림을 배경·스타일·요소까지 고쳐요.',
+    example: '이 사진 배경을 밤하늘로 바꿔줘',
+  },
+  {
+    name: 'create_qr',
+    label: 'QR 코드 만들기',
+    summary: '링크·문구·와이파이 정보를 담은 스캔용 QR 이미지를 만들어요.',
+    example: 'example.com 와이파이 QR 만들어줘',
+  },
+  {
+    name: 'react_to_message',
+    label: '말풍선 리액션',
+    summary: '고맙거나 축하할 만한 순간에 내 말풍선에 이모지 하나를 조용히 달아 줘요(남발하지 않아요).',
+    example: '(도구가 알아서 판단해요)',
+  },
 ];
 
 /**
@@ -776,6 +874,8 @@ export interface ToolResult {
     alreadyLoggedIn?: boolean;
     /** v0.6.3: 발송 확인 카드로 띄운 메일 초안 id */
     mailDraftId?: string;
+    /** v0.6.15: 이번 턴에 만든 그림 첨부 id — 답변 말풍선에 붙인다 */
+    images?: string[];
   };
 }
 
@@ -1402,6 +1502,71 @@ async function runToolInner(name: string, args: Record<string, unknown>, ctx: To
       } catch (err) {
         return { content: `메일 초안을 만들지 못했습니다: ${err instanceof Error ? err.message : String(err)}` };
       }
+    }
+    /* --------------- v0.6.15: 그림 생성·편집 · QR · 리액션 --------------- */
+    case 'generate_image': {
+      const result = await images.generateImageTool({
+        sessionId: ctx.session || 'default',
+        prompt: String(args.prompt || ''),
+        aspectRatio: String(args.aspect_ratio || '') || undefined,
+        model: String(args.model || '') || undefined,
+      });
+      return {
+        content: result.content,
+        ...(result.attachmentIds?.length ? { flags: { images: result.attachmentIds } } : {}),
+      };
+    }
+    case 'edit_image': {
+      const result = await images.editImageTool({
+        sessionId: ctx.session || 'default',
+        instruction: String(args.instruction || ''),
+        sourceImageId: String(args.source_image_id || '') || undefined,
+        aspectRatio: String(args.aspect_ratio || '') || undefined,
+      });
+      return {
+        content: result.content,
+        ...(result.attachmentIds?.length ? { flags: { images: result.attachmentIds } } : {}),
+      };
+    }
+    case 'create_qr': {
+      const result = await images.createQrTool({
+        sessionId: ctx.session || 'default',
+        text: String(args.text || ''),
+        url: String(args.url || ''),
+        kind: String(args.kind || 'auto'),
+        wifiSsid: String(args.wifi_ssid || ''),
+        wifiPassword: String(args.wifi_password || ''),
+        wifiSecurity: String(args.wifi_security || ''),
+        wifiHidden: Boolean(args.wifi_hidden),
+        size: Number(args.size) || undefined,
+      });
+      return {
+        content: result.content,
+        ...(result.attachmentIds?.length ? { flags: { images: result.attachmentIds } } : {}),
+      };
+    }
+    case 'react_to_message': {
+      const session = ctx.session || 'default';
+      const target = reactions.resolveTarget(session, { messageId: args.message_id, query: args.query });
+      if ('error' in target) return { content: target.error };
+      const added = reactions.addReaction({ sessionId: session, messageId: target.row.id, emoji: args.emoji });
+      if (!added.ok) return { content: added.error || '리액션을 달지 못했습니다.' };
+      publish({
+        type: 'chat_reaction',
+        title: '리액션',
+        body: '',
+        data: {
+          session,
+          messageId: target.row.id,
+          emoji: added.emoji,
+          reactions: added.reactions || [],
+        },
+      });
+      return {
+        content:
+          `${target.row.id}번 말풍선에 ${added.emoji} 리액션을 달았습니다(지금: ${(added.reactions || []).join(' ')}). ` +
+          '사용자에게 리액션을 달았다고 길게 설명하지 말고, 하던 대화를 자연스럽게 이어가세요.',
+      };
     }
     case 'time_now': {
       const now = new Date();
