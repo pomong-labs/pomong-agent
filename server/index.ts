@@ -3989,6 +3989,8 @@ app.use(
 );
 
 app.get('*', (req, res, next) => {
+  // v0.7.2: 공개 명함은 '링크를 받은 사람에게만' 열리는 화면이라 검색엔진에 색인되지 않게 한다.
+  if (req.path.startsWith('/c/')) res.setHeader('X-Robots-Tag', 'noindex, nofollow');
   if (req.path.startsWith('/api/')) {
     res.status(404).json({ ok: false, code: 'not_found' });
     return;
