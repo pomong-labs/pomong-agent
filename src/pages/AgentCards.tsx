@@ -108,7 +108,7 @@ const PRESETS: Record<CardPurpose, { bioText: string; systemGuide: string; quick
   intro: {
     bioText: '안녕하세요! 제 소개와 하는 일을 편하게 물어보세요.',
     systemGuide:
-      '이 명함은 소개·질문 응대용입니다. 소개문에 적힌 내용만 근거로 답하고, 더 깊은 이야기나 협업 문의는 대화에서 이름과 연락처를 물어 정리하세요.',
+      '이 명함은 소개·질문 응대용입니다. 소개문에 적힌 내용만 근거로 답하고, 더 깊은 이야기나 협업 문의는 대화에서 받을 항목을 물어 정리하세요.',
     quickPrompts: ['자기소개 해줘', '요즘 어떤 일을 하고 있어?'],
     collectFields: [
       { key: 'name', label: '이름', kind: 'text', required: false, hint: '닉네임도 괜찮아요' },
@@ -654,8 +654,17 @@ export default function AgentCards() {
       ) : null}
 
       {qr ? (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/40 pa-fade-in px-6" role="dialog" aria-modal="true">
-          <div className="pa-sheet-in w-full max-w-[340px] rounded-[26px] p-5 text-center" style={{ background: 'var(--pa-surface)' }}>
+        <div
+          className="fixed inset-0 z-[110] flex items-center justify-center bg-black/40 pa-fade-in px-4"
+          role="dialog"
+          aria-modal="true"
+          style={{
+            // v0.7.3: 상태바·홈 인디케이터에 QR 창이 닿지 않게 세이프 에어리어를 더한다.
+            paddingTop: 'calc(env(safe-area-inset-top) + 16px)',
+            paddingBottom: 'calc(env(safe-area-inset-bottom) + 16px)',
+          }}
+        >
+          <div className="pa-sheet-in pa-scroll max-h-full w-full max-w-[340px] overflow-y-auto rounded-[26px] p-5 text-center" style={{ background: 'var(--pa-surface)' }}>
             <h2 className="text-[16px] font-bold" style={{ color: 'var(--pa-ink-strong)' }}>
               {qr.card} QR
             </h2>

@@ -3834,12 +3834,14 @@ app.post('/api/public/card/:slug/submit', async (req, res) => {
 function ownerCardView(card: agentCards.AgentCard, req: Request) {
   const base = requestBaseUrl(req);
   const path = `/c/${card.slug}`;
+  // v0.7.3: 커스텀 도메인이 있으면 링크 복사·QR도 그 도메인을 쓴다(주소를 숨기는 목적).
+  const domainUrl = card.customDomain ? `https://${card.customDomain}${path}` : null;
   return {
     ...card,
     links: {
       path,
-      url: base ? `${base}${path}` : path,
-      domain: card.customDomain ? `https://${card.customDomain}/` : null,
+      url: domainUrl || (base ? `${base}${path}` : path),
+      domain: domainUrl,
     },
   };
 }
@@ -3933,7 +3935,7 @@ app.post('/api/agent-cards/:id/qr', requireAuth, async (req, res) => {
     return;
   }
   const base = requestBaseUrl(req);
-  const url = card.customDomain ? `https://${card.customDomain}/` : `${base}/c/${card.slug}`;
+  const url = card.customDomain ? `https://${card.customDomain}/c/${card.slug}` : `${base}/c/${card.slug}`;
   try {
     const dataUrl = await QRCode.toDataURL(url, {
       margin: 1,

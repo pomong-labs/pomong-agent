@@ -158,7 +158,7 @@ async function main(): Promise<void> {
     });
     const view = done.sessionId ? cards.getSession(done.sessionId) : null;
     check('대화로 자동 완료', Boolean(done.ok && done.completed && done.status === 'submitted'), done.status);
-    check('완료 안내 문구', Boolean(done.reply && done.reply.includes('주인에게 전달')));
+    check('AI 마무리 인사 그대로 사용(서버 문구 미덧붙임)', done.reply === '확인했습니다.', done.reply);
     check('완료 블록 미노출', Boolean(done.reply && !done.reply.includes('COLLECT_DONE')));
     check('세션 status submitted', view?.status === 'submitted', view?.status);
     check(
@@ -180,6 +180,30 @@ async function main(): Promise<void> {
     check('완료 뒤 추가 채팅 거부', !after.ok && after.code === 'completed', after.code);
     const reload = done.sessionId ? cards.publicSessionView(card, done.sessionId) : null;
     check('새로고침(조회)해도 submitted 유지', reload?.status === 'submitted');
+
+    // AI 가 마무리 문장을 쓰지 않고 블록만 보냈을 때만 서버 fallback 한 줄
+    const bareMade = cards.createCard({
+      title: '빈 마무리 명함',
+      purpose: 'intro',
+      collectFields: [{ key: 'answer1', label: '하고 싶은 말', kind: 'text', required: false }],
+    });
+    const bareCard = 'card' in bareMade ? bareMade.card : null;
+    if (bareCard) {
+      replyQueue = [completionBlock({ answer1: '잘 쓰고 있어요' })];
+      const bare = await cards.guestChat({ card: bareCard, brand, message: '하고 싶은 말은 잘 쓰고 있어요', ipHash: 'ip-bare' });
+      check(
+        '마무리가 비었을 때만 서버 한 줄',
+        bare.completed === true && bare.reply === '말씀해 주신 내용은 정리해서 주인에게 전달했어요. 참여해 주셔서 감사합니다.',
+        bare.reply
+      );
+    }
+
+    // 목록에 이름·연락처가 없으면 묻지 말라는 규칙이 프롬프트에 들어 있는지
+    check(
+      '수집 항목 외 질문 금지 규칙',
+      seenSystem.includes('오직 [받을 항목] 목록에 있는 항목만 질문') &&
+        seenSystem.includes('목록에 이름·연락처가 없다면')
+    );
   }
 
   /* 5) qna_only ----------------------------------------------------------- */
@@ -363,7 +387,23 @@ async function main(): Promise<void> {
         check('sw.js 는 skipWaiting·clients.claim', sw.body.includes('skipWaiting') && sw.body.includes('clients.claim'));
         const spa = await httpGet(base, '/agent-cards', 'main.example.com');
         check('SPA 경로는 index.html', spa.status === 200 && spa.body.includes('<div id="root">'), `HTTP ${spa.status}`);
-        check('index.html 에 자동 복구 가드', index.body.includes('pomong.recoverReloadAt') && index.body.includes('vite:preloadError'));
+  check('index.html 에 자동 복구 가드', index.body.includes('pomong.recoverReloadAt') && index.body.includes('vite:preloadError'));
+  const guestSrc = read('src/pages/GuestCard.tsx');
+  const ownerSrc = read('src/pages/AgentCards.tsx');
+  check(
+    '수집·처리 안내 모달 세이프 에어리어',
+    guestSrc.includes('calc(100dvh - env(safe-area-inset-top))') && guestSrc.includes('paddingBottom: \'calc(env(safe-area-inset-bottom) + 16px)\'')
+  );
+  check(
+    'QR 모달 세이프 에어리어',
+    ownerSrc.includes("paddingTop: 'calc(env(safe-area-inset-top) + 16px)'")
+  );
+  check(
+    'IP 처리 고시 문구',
+    guestSrc.includes('접속 기록 (IP)') &&
+      guestSrc.includes('단방향 해시값') &&
+      guestSrc.includes('원본 IP는 저장하지 않고')
+  );
 
         // 모델 목록 — 인증 필요(쿠키 없는 새 요청으로 확인)
         const unauthorized = await fetch(`${base}/api/agent-cards/models`).then((res) => res.status).catch(() => 0);
@@ -382,7 +422,15 @@ async function main(): Promise<void> {
           oncePerVisitor: true,
           retentionDays: 7,
         });
-        const liveCard = (created.data as { card?: { id: string; deliveryMode: string; oncePerVisitor: boolean; retentionDays: number } })?.card;
+        type LiveCard = {
+          id: string;
+          slug: string;
+          deliveryMode: string;
+          oncePerVisitor: boolean;
+          retentionDays: number;
+          links?: { url?: string; domain?: string };
+        };
+        const liveCard = (created.data as { card?: LiveCard })?.card;
         check(
           '명함 생성(새 필드)',
           created.status === 200 && liveCard?.deliveryMode === 'qna_only' && liveCard?.oncePerVisitor === true && liveCard?.retentionDays === 7,
@@ -399,6 +447,28 @@ async function main(): Promise<void> {
         const list = await call('GET', '/api/agent-cards');
         const listData = list.data as { deliveryModes?: { id: string }[]; retentionChoices?: number[] };
         check('응답 방식·보관 선택 목록', Boolean(listData.deliveryModes?.some((item) => item.id === 'qna_only')) && Array.isArray(listData.retentionChoices));
+
+        // v0.7.3: 커스텀 도메인이 있으면 링크 복사·QR 도 그 도메인으로
+        const domainMade = await call('POST', '/api/agent-cards', {
+          title: '도메인 명함',
+          slug: 'domain-card',
+          purpose: 'intro',
+          customDomain: 'card.example.com',
+        });
+        const domainCard = (domainMade.data as { card?: LiveCard })?.card;
+        check(
+          '커스텀 도메인 링크 우선',
+          domainCard?.links?.url === 'https://card.example.com/c/domain-card' &&
+            domainCard?.links?.domain === 'https://card.example.com/c/domain-card',
+          JSON.stringify(domainCard?.links || {})
+        );
+        const qr = await call('POST', `/api/agent-cards/${domainCard?.id}/qr`);
+        check(
+          'QR 도 커스텀 도메인',
+          (qr.data as { url?: string })?.url === 'https://card.example.com/c/domain-card',
+          String((qr.data as { url?: string })?.url || '')
+        );
+        await call('DELETE', `/api/agent-cards/${domainCard?.id}`);
         await call('DELETE', `/api/agent-cards/${liveCard?.id}`);
       }
     } finally {

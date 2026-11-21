@@ -639,17 +639,15 @@ function CollectionNotice({ card, onClose }: { card: PublicCardInfo; onClose: ()
   return (
     <div className="fixed inset-0 z-[120] flex items-end justify-center bg-black/40 pa-fade-in lg:items-center" role="dialog" aria-modal="true">
       <div
-        className="pa-sheet-in pa-scroll w-full max-w-[520px] overflow-y-auto rounded-t-[28px] lg:rounded-[28px]"
+        className="pa-sheet-in flex w-full max-w-[520px] flex-col overflow-hidden rounded-t-[28px] lg:rounded-[28px]"
         style={{
           background: 'var(--pa-surface)',
-          paddingTop: 'calc(env(safe-area-inset-top) + 18px)',
-          paddingBottom: 'calc(env(safe-area-inset-bottom) + 20px)',
-          paddingLeft: 20,
-          paddingRight: 20,
-          maxHeight: '92vh',
+          // v0.7.3: iOS 상태바에 제목이 가리지 않고, 홈 인디케이터 위로 확인 버튼이 뜨도록 세이프 에어리어를 더한다.
+          maxHeight: 'calc(100dvh - env(safe-area-inset-top))',
+          paddingTop: 'calc(env(safe-area-inset-top) + 16px)',
         }}
       >
-        <div className="mb-3 flex items-center justify-between">
+        <div className="flex shrink-0 items-center justify-between px-5 pb-3">
           <h2 className="flex items-center gap-2 text-[17px] font-bold" style={{ color: 'var(--pa-ink-strong)' }}>
             <ShieldCheck size={18} style={{ color: 'var(--accent)' }} />
             {collect ? '수집 및 처리 안내' : '처리 안내'}
@@ -659,13 +657,17 @@ function CollectionNotice({ card, onClose }: { card: PublicCardInfo; onClose: ()
           </button>
         </div>
 
-        <div className="space-y-2.5 pb-1 text-[12.5px] leading-relaxed" style={{ color: 'var(--pa-ink)' }}>
+        <div className="pa-scroll min-h-0 flex-1 space-y-2.5 overflow-y-auto px-5 text-[12.5px] leading-relaxed" style={{ color: 'var(--pa-ink)' }}>
           <NoticeRow label={collect ? '수집 항목' : '입력하는 내용'}>
             {collect
               ? fields.length
                 ? `${fields.join(', ')}, 그리고 대화 내용`
                 : '대화에서 이름·연락처와 용건'
               : '대화 내용(답변 생성용)'}
+          </NoticeRow>
+          <NoticeRow label="접속 기록 (IP)">
+            도배·악용 및 1인 1회 중복 참여 방지 목적으로만 복원 불가능한 단방향 해시값으로 처리되며, 원본 IP는 저장하지 않고
+            보관 기간 경과 시 함께 영구 삭제돼요.
           </NoticeRow>
           <NoticeRow label="이용 목적">{purposeText[card.purpose] || '문의 응대'}</NoticeRow>
           <NoticeRow label="주인에게 전달">
@@ -685,23 +687,25 @@ function CollectionNotice({ card, onClose }: { card: PublicCardInfo; onClose: ()
             답변을 만들기 위해 대화 내용이 서버에 연결된 AI 서비스로 전송돼요. 명함 주인 외에는 공유하지 않아요.
           </NoticeRow>
           <NoticeRow label="문의">수집·보관에 대해 궁금한 점은 명함 주인에게 알려 주세요.</NoticeRow>
+
+          <div
+            className="flex items-start gap-2 rounded-[16px] px-3.5 py-3 text-[11.5px] leading-relaxed"
+            style={{ background: 'var(--accent-soft-weak)', color: 'var(--pa-ink)' }}
+          >
+            <Info size={14} className="mt-0.5 shrink-0" style={{ color: 'var(--accent)' }} />
+            <span>
+              {collect
+                ? '대화 내용은 이 명함의 주인에게만 전달·보관되며 외부에 공유되지 않아요. 보관 기간이 지나면 서버에서 실제로 삭제돼요.'
+                : '이 명함은 답변만 제공하며, 남긴 내용을 주인에게 전달하거나 보관하지 않아요.'}
+            </span>
+          </div>
         </div>
 
-        <div
-          className="mt-3 flex items-start gap-2 rounded-[16px] px-3.5 py-3 text-[11.5px] leading-relaxed"
-          style={{ background: 'var(--accent-soft-weak)', color: 'var(--pa-ink)' }}
-        >
-          <Info size={14} className="mt-0.5 shrink-0" style={{ color: 'var(--accent)' }} />
-          <span>
-            {collect
-              ? '대화 내용은 이 명함의 주인에게만 전달·보관되며 외부에 공유되지 않아요. 보관 기간이 지나면 서버에서 실제로 삭제돼요.'
-              : '이 명함은 답변만 제공하며, 남긴 내용을 주인에게 전달하거나 보관하지 않아요.'}
-          </span>
+        <div className="shrink-0 px-5 pt-3" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom) + 16px)' }}>
+          <button className="pa-btn-primary w-full py-3.5" onClick={onClose}>
+            확인
+          </button>
         </div>
-
-        <button className="pa-btn-primary mt-4 w-full py-3.5" onClick={onClose}>
-          확인
-        </button>
       </div>
     </div>
   );
