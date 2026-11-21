@@ -18,6 +18,11 @@ import * as images from './images';
 import * as reactions from './reactions';
 import { publish } from './events';
 import { webSearch, formatSearch } from './web-search';
+import * as parcel from './parcel';
+import * as parcelWatch from './parcel-watch';
+import * as market from './market';
+import * as ddays from './ddays';
+import * as docker from './docker';
 import type { ToolSpec } from './providers';
 
 /** v0.6.3: 메일 계정을 아직 연결하지 않았을 때 안내 */
@@ -665,6 +670,105 @@ export const TOOL_SPECS: ToolSpec[] = [
       required: ['emoji'],
     },
   },
+  {
+    name: 'track_parcel',
+    description:
+      '택배 송장번호로 지금 배송 상태·위치·이동 이력을 조회한다. "택배 어디쯤이야", "내 물건 언제 와", "배송 조회해줘"처럼 배송 상황을 물을 때 쓴다. ' +
+      'API 키 없이 공개 조회 경로로 확인하며, 조회가 안 되면 이유를 그대로 알려 준다. 계속 지켜보다가 단계가 바뀔 때 알림을 받고 싶다는 요청이면 watch_parcel을 쓴다.',
+    parameters: {
+      type: 'object',
+      properties: {
+        number: { type: 'string', description: '운송장(송장) 번호 — 숫자만' },
+        carrier: { type: 'string', description: '택배사 (선택: CJ대한통운, 우체국택배, 한진택배, 롯데택배, 로젠택배, 쿠팡, 경동택배 등). 없으면 자릿수로 추정한다' },
+        events: { type: 'number', description: '보여줄 최근 이력 개수(기본 8, 최대 20)' },
+      },
+      required: ['number'],
+    },
+  },
+  {
+    name: 'watch_parcel',
+    description:
+      '택배를 등록해 두면 서버가 15~30분마다 스스로 조회해서 **단계가 바뀔 때만** 채팅으로 알려 주고 푸시를 보낸다(AI를 부르지 않아 토큰을 쓰지 않는다). ' +
+      '배송이 완료되면 자동으로 멈춘다. "택배 오면 알려줘", "배송 상태 바뀌면 알려줘", "추적해 둬" 같은 요청에 add를 쓴다. list는 추적 중인 목록, remove는 중지.',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['add', 'list', 'remove'], description: 'add=등록(기본), list=목록, remove=중지' },
+        number: { type: 'string', description: '운송장 번호 (add·remove)' },
+        carrier: { type: 'string', description: '택배사 이름 (선택)' },
+        label: { type: 'string', description: '알아보기 쉬운 별칭 — 예: "무선 이어폰", "생일 선물" (add)' },
+        interval_min: { type: 'number', description: '확인 주기(분, 기본 20 · 최소 10 · 최대 360)' },
+      },
+    },
+  },
+  {
+    name: 'get_market_quote',
+    description:
+      '환율·주식·코인의 현재 시세와 전일 대비 변동을 조회한다(API 키 불필요). ' +
+      '"달러 환율 얼마야", "삼성전자 주가", "애플 주식", "비트코인 시세", "코스피" 같은 요청에 쓴다. ' +
+      '쉼표로 여러 개를 한 번에 볼 수 있다(최대 5개). 가격은 조회 시점 기준이며 실제 체결가와 다를 수 있다.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: '종목·통화쌍 (예: "USD/KRW", "JPY/KRW", "삼성전자", "AAPL", "TSLA", "코스피", "BTC", "이더리움"). 쉼표로 여러 개',
+        },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'dday_list',
+    description:
+      '등록된 D-Day·기념일·결제일과 남은 일수(D-14, D-Day, D+3)를 조회한다. "디데이 뭐 있어", "전역까지 며칠", "생일까지 얼마나 남았어" 같은 요청에 쓴다.',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'dday_add',
+    description:
+      'D-Day(기념일·결제일·시험일 등)를 등록한다. "전역 2027년 2월 24일로 디데이 추가해줘", "생일 매년 반복으로 넣어줘" 같은 요청에 쓴다. ' +
+      '날짜는 반드시 YYYY-MM-DD 형식으로 계산해 넣는다(오늘 날짜는 time_now로 확인). 매년 반복(생일·기념일·카드 결제일)이면 repeat_yearly를 true로 한다.',
+    parameters: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'D-Day 이름 (예: 전역, 엄마 생일, 카드 결제일)' },
+        date: { type: 'string', description: '목표 날짜 YYYY-MM-DD' },
+        repeat_yearly: { type: 'boolean', description: '매년 반복 여부(생일·기념일·결제일이면 true)' },
+        notes: { type: 'string', description: '메모 (선택)' },
+      },
+      required: ['title', 'date'],
+    },
+  },
+  {
+    name: 'dday_delete',
+    description: '등록한 D-Day를 삭제한다. "전역 디데이 지워줘"처럼 지울 때 쓴다. 이름 일부로도 찾는다.',
+    parameters: {
+      type: 'object',
+      properties: { query: { type: 'string', description: '지울 D-Day 이름(일부) 또는 id' } },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'manage_docker',
+    description:
+      '같은 서버에서 도는 도커 컨테이너를 조회(ps)·상세 확인(inspect)·로그 보기(logs)·시작(start)·중지(stop)·재시작(restart)·일시정지/해제(pause/unpause)한다. ' +
+      '**포몽 에이전트 자신의 컨테이너(pomong-agent, pomong-browser 등)는 조회·로그만 되고 중지·재시작은 서버가 원천 차단한다.** ' +
+      '삭제(rm)·정리(prune)·강제 종료(kill)·명령 실행(exec)은 어떤 경우에도 할 수 없다. ' +
+      '상태를 바꾸는 동작은 사용자가 이번 대화에서 명시적으로 부탁했을 때만 실행하고, 부탁하지 않았다면 먼저 물어본다.',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['ps', 'inspect', 'logs', 'start', 'stop', 'restart', 'pause', 'unpause'],
+          description: '동작 (기본 ps=목록)',
+        },
+        container: { type: 'string', description: '컨테이너 이름 또는 id (조회·상태 변경 시 필수)' },
+        tail: { type: 'number', description: 'logs에서 볼 줄 수(기본 60, 최대 300)' },
+      },
+    },
+  },
 ];
 
 /** 앱 '더보기 → 도구 목록' 화면에 보여줄 도구 설명 */
@@ -832,6 +936,48 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
     summary: '고맙거나 축하할 만한 순간에 내 말풍선에 이모지 하나를 조용히 달아 줘요(남발하지 않아요).',
     example: '(도구가 알아서 판단해요)',
   },
+  {
+    name: 'track_parcel',
+    label: '택배 배송 조회',
+    summary: '송장번호로 배송 상태·위치·이동 이력을 바로 확인해요(API 키 불필요).',
+    example: '내 택배 어디쯤이야? 운송장 1234567890',
+  },
+  {
+    name: 'watch_parcel',
+    label: '택배 변동 알림',
+    summary: '택배를 등록해 두면 15~30분마다 스스로 조회해 단계가 바뀔 때만 알려줘요(배송 완료 시 자동 종료).',
+    example: '이 택배 오면 알려줘',
+  },
+  {
+    name: 'get_market_quote',
+    label: '환율 · 주식 · 코인 시세',
+    summary: '환율·국내외 주식·코인의 현재가와 전일 대비를 키 없이 조회해요.',
+    example: '달러 환율이랑 삼성전자 주가 알려줘',
+  },
+  {
+    name: 'dday_list',
+    label: 'D-Day 목록',
+    summary: '등록한 기념일·결제일과 남은 일수(D-14, D-Day, D+3)를 보여줘요.',
+    example: '디데이 뭐 등록돼 있어?',
+  },
+  {
+    name: 'dday_add',
+    label: 'D-Day 등록',
+    summary: '기념일·결제일·시험일을 등록해요. 매년 반복도 가능해요.',
+    example: '생일 3월 26일 매년으로 등록해줘',
+  },
+  {
+    name: 'dday_delete',
+    label: 'D-Day 삭제',
+    summary: '등록한 D-Day를 이름으로 찾아 지워요.',
+    example: '전역 디데이 지워줘',
+  },
+  {
+    name: 'manage_docker',
+    label: '도커 컨테이너 관리',
+    summary: '같은 서버의 다른 컨테이너를 조회·로그·재시작해요. 포몽 자신의 컨테이너는 제어가 차단돼요.',
+    example: '도커 컨테이너 뭐 도는지 보여줘',
+  },
 ];
 
 /**
@@ -852,6 +998,13 @@ export const TOOL_LABELS: Record<string, string> = {
   browser_fill_vault: '금고 비밀번호 채우기',
   automation_list: '예약·감시 목록',
   attachment_read: '첨부 다시 읽기',
+  track_parcel: '택배 배송 조회',
+  watch_parcel: '택배 변동 알림',
+  get_market_quote: '시세 조회',
+  dday_list: 'D-Day 목록',
+  dday_add: 'D-Day 등록',
+  dday_delete: 'D-Day 삭제',
+  manage_docker: '도커 관리',
 };
 
 export interface ToolResult {
@@ -1567,6 +1720,88 @@ async function runToolInner(name: string, args: Record<string, unknown>, ctx: To
           `${target.row.id}번 말풍선에 ${added.emoji} 리액션을 달았습니다(지금: ${(added.reactions || []).join(' ')}). ` +
           '사용자에게 리액션을 달았다고 길게 설명하지 말고, 하던 대화를 자연스럽게 이어가세요.',
       };
+    }
+    case 'track_parcel': {
+      const result = await parcel.lookupParcel({ number: args.number, carrier: args.carrier });
+      if (!result.ok) return { content: `배송 조회 실패 — ${result.reason}` };
+      return { content: parcel.formatParcel(result, { events: Number(args.events) || 8 }) };
+    }
+    case 'watch_parcel': {
+      const action = String(args.action || 'add').trim().toLowerCase();
+      if (action === 'list') {
+        const watches = parcelWatch.listParcelWatches();
+        if (!watches.length) return { content: '추적 중인 택배가 없습니다. "이 택배 오면 알려줘"처럼 등록할 수 있습니다.' };
+        return {
+          content: [
+            `택배 추적 ${watches.length}개`,
+            ...watches.map((item) => {
+              const state = item.stateLabel ? ` · 지금 ${item.stateLabel}` : ' · 아직 첫 확인 전';
+              const cycle = item.enabled ? ` · ${item.intervalMin}분마다 확인` : ' · 추적 종료';
+              return `- ${item.label} (${item.carrierLabel} ${item.trackingNumber})${state}${cycle}`;
+            }),
+          ].join('\n'),
+        };
+      }
+      if (action === 'remove' || action === 'stop') {
+        const removed = parcelWatch.stopParcelWatch(args.number || args.label || args.watch_id);
+        if (removed.error) return { content: removed.error };
+        return {
+          content: `택배 추적을 멈췄습니다: ${removed.removed.map((item) => `${item.label} (${item.trackingNumber})`).join(', ')}`,
+        };
+      }
+      if (action !== 'add') return { content: `지원하지 않는 동작입니다: ${action} (add · list · remove)` };
+      const number = parcel.normalizeTrackingNumber(args.number);
+      if (number.length < 8) return { content: '운송장 번호(숫자)를 다시 확인해 주세요. 8자리 이상이어야 합니다.' };
+      const snapshot = await parcel.lookupParcel({ number, carrier: args.carrier });
+      if (!snapshot.ok) return { content: `추적을 걸지 못했습니다 — ${snapshot.reason}` };
+      if (snapshot.stateId === parcel.DELIVERED_STATE) {
+        return {
+          content: `이미 배송 완료된 택배입니다(마지막 ${parcel.stateLabel(snapshot.stateId, snapshot.stateText)}). 추적을 걸지 않았습니다.\n${parcel.formatParcel(snapshot, { events: 3 })}`,
+        };
+      }
+      const created = parcelWatch.createParcelWatch({
+        carrier: snapshot.carrierId,
+        trackingNumber: number,
+        label: String(args.label || snapshot.carrierLabel),
+        sessionId: ctx.session || 'default',
+        intervalMin: Number(args.interval_min) || undefined,
+        snapshot,
+      });
+      if ('error' in created) return { content: created.error };
+      return {
+        content: [
+          `📦 추적을 시작했습니다: ${created.label} (${created.carrierLabel} ${created.trackingNumber})`,
+          `지금 상태: ${parcel.stateLabel(snapshot.stateId, snapshot.stateText)} · ${snapshot.lastLocation || '위치 미확인'}`,
+          `${created.intervalMin}분마다 서버가 스스로 조회해서 **단계가 바뀌었을 때만** 채팅과 휴대폰 알림으로 알려 드립니다(AI를 부르지 않아 토큰을 쓰지 않습니다). 배송이 완료되면 자동으로 멈춥니다.`,
+          '사용자에게 방금 등록한 사실과 알림 방식(단계가 바뀔 때만)을 짧게 알려 주세요.',
+        ].join('\n'),
+      };
+    }
+    case 'get_market_quote': {
+      const result = await market.lookupQuotes(String(args.query || ''));
+      if (!result.ok) return { content: `시세 조회 실패 — ${result.reason}` };
+      return { content: market.formatQuotes(result) };
+    }
+    case 'dday_list': {
+      const list = ddays.listDDays();
+      if (!list.length) return { content: '등록된 D-Day가 없습니다. "전역 2027-02-24로 디데이 추가해줘"처럼 등록할 수 있습니다.' };
+      return { content: `D-Day ${list.length}개\n${list.map((item) => `- ${ddays.ddayLine(item)}`).join('\n')}` };
+    }
+    case 'dday_add': {
+      const result = ddays.createDDay({ title: args.title, date: args.date, repeatYearly: args.repeat_yearly, notes: args.notes });
+      if (!result.ok) return { content: result.error };
+      return { content: `D-Day를 등록했습니다: ${ddays.ddayLine(result.dday)}` };
+    }
+    case 'dday_delete': {
+      const result = ddays.deleteDDay(args.query);
+      if (result.error) return { content: result.error };
+      return { content: `D-Day를 삭제했습니다: ${result.removed.map((item) => item.title).join(', ')}` };
+    }
+    case 'manage_docker': {
+      return docker.manageDockerBehavior(
+        { action: args.action, container: args.container, tail: args.tail },
+        { userRequest: ctx.userRequest }
+      );
     }
     case 'time_now': {
       const now = new Date();

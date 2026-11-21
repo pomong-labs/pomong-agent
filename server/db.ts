@@ -507,6 +507,47 @@ END;
 `);
 
 /* ------------------------------------------------------------------ */
+/* v0.6.16 schema: D-Day 카운터 · 택배 변동 추적                          */
+/* 기존 테이블은 그대로 두고 새 테이블만 더한다.                          */
+/* ------------------------------------------------------------------ */
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS ddays (
+  id            TEXT PRIMARY KEY,
+  title         TEXT NOT NULL,
+  target_date   TEXT NOT NULL,
+  repeat_yearly INTEGER NOT NULL DEFAULT 0,
+  notes         TEXT,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ddays_date ON ddays(target_date);
+
+CREATE TABLE IF NOT EXISTS parcel_watches (
+  id              TEXT PRIMARY KEY,
+  carrier         TEXT NOT NULL,
+  tracking_number TEXT NOT NULL,
+  label           TEXT,
+  session_id      TEXT NOT NULL DEFAULT 'default',
+  interval_min    INTEGER NOT NULL DEFAULT 20,
+  enabled         INTEGER NOT NULL DEFAULT 1,
+  last_state      TEXT,
+  last_state_text TEXT,
+  last_event_time TEXT,
+  last_location   TEXT,
+  last_summary    TEXT,
+  last_checked_at TEXT,
+  last_notified_at TEXT,
+  fail_count      INTEGER NOT NULL DEFAULT 0,
+  next_check_at   TEXT,
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_parcel_watches_number ON parcel_watches(carrier, tracking_number);
+CREATE INDEX IF NOT EXISTS idx_parcel_watches_due ON parcel_watches(enabled, next_check_at);
+`);
+
+/* ------------------------------------------------------------------ */
 /* Settings                                                            */
 /* ------------------------------------------------------------------ */
 

@@ -64,6 +64,8 @@ import { DEFAULT_ROUTING, TASK_KIND_META, TASK_KINDS, detectTaskKind, exaoneKeyS
 import { selectToolNames, filterToolsByPrefs, normalizeToolPrefs, TOOL_GROUP_META, TOOL_GROUPS, DEFAULT_TOOL_PREFS, disabledToolNames, type ToolPrefs } from './tool-filter';
 import * as skills from './skills';
 import * as reactions from './reactions';
+import * as ddays from './ddays';
+import * as parcelWatch from './parcel-watch';
 import type { TaskRunView } from './task-runs';
 
 ensureDataDir();
@@ -753,6 +755,10 @@ function systemPrompt(memoryBlock = '', skillBlock = ''): string {
     s(
       '말풍선 리액션(react_to_message): 사용자가 고맙다고 하거나, 기쁜 소식·성과를 알리거나, 웃긴 이야기·가벼운 농담을 하면 그 말풍선에 어울리는 이모지 하나를 달아 주세요(예: 고마움 👍·🙏, 축하 🎉, 웃음 😂, 애정 ❤️). 인사·단순 질문·업무 지시에는 달지 않습니다. 한 대화에서 몇 번 정도로 아끼고, 달았으면 말로 설명하지 않습니다.',
       '말풍선 리액션(react_to_message): 사용자가 고맙다고 하거나, 기쁜 소식·성과를 알리거나, 웃긴 이야기·가벼운 농담을 하면 그 말풍선에 어울리는 이모지 하나를 달아 줘(예: 고마움 👍·🙏, 축하 🎉, 웃음 😂, 애정 ❤️). 인사·단순 질문·업무 지시에는 달지 마. 한 대화에서 몇 번 정도로 아끼고, 달았으면 말로 설명하지 마.'
+    ),
+    s(
+      '택배는 track_parcel(지금 상태·위치·이동 이력)로 확인하고, "택배 오면 알려줘"처럼 계속 지켜봐 달라는 요청은 watch_parcel(action="add")로 등록하세요. watch_parcel은 15~30분마다 서버가 스스로 조회해 단계가 바뀔 때만 채팅·푸시로 알리며, 배송이 완료되면 자동으로 멈춥니다(등록한 사실과 알림 방식을 짧게 안내하고, 추적 목록·중지는 list·remove). 환율·주식·코인은 get_market_quote에 USD/KRW·삼성전자·AAPL·BTC처럼 대상을 그대로 넣어 조회하고, D-Day는 dday_list·dday_add·dday_delete로 처리하세요. 도커 컨테이너는 manage_docker로 조회(ps)·상세(inspect)·로그(logs)·시작·중지·재시작할 수 있지만, 포몽 자신의 컨테이너(pomong-agent·pomong-browser)는 서버가 제어를 막으니 시도하지 말고 그 사실을 알리세요. 컨테이너 중지·재시작은 사용자가 이번 대화에서 분명하게 부탁했을 때만 실행하고, 부탁하지 않았으면 먼저 물어보세요. 삭제(rm)·정리(prune)·강제 종료(kill)·명령 실행(exec)은 사용자가 부탁해도 하지 않습니다.',
+      '택배는 track_parcel(지금 상태·위치·이동 이력)로 확인하고, "택배 오면 알려줘"처럼 계속 지켜봐 달라는 부탁은 watch_parcel(action="add")로 등록해. watch_parcel은 15~30분마다 서버가 알아서 조회해서 단계가 바ꔔ 때만 채팅·푸시로 알려 주고, 배송이 끝나면 자동으로 멈춰(등록했다는 사실과 알림 방식만 짧게 알려 줘. 목록·중지는 list·remove). 환율·주식·코인은 get_market_quote에 USD/KRW·삼성전자·AAPL·BTC처럼 대상을 그대로 넣어 물어보고, D-Day는 dday_list·dday_add·dday_delete로 처리해. 도커 컨테이너는 manage_docker로 조회(ps)·상세(inspect)·로그(logs)·시작·중지·재시작을 할 수 있는데, 포몽 자기 컨테이너(pomong-agent·pomong-browser)는 서버가 제어를 막으니까 시도하지 말고 그 사실을 알려. 컨테이너 중지·재시작은 사용자가 이번 대화에서 똑바로 부탁했을 때만 하고, 아니면 먼저 물어봐. 삭제(rm)·정리(prune)·강제 종료(kill)·명령 실행(exec)은 부탁받아도 하지 마.'
     ),
     s(
       '작업이 오래 걸릴 것 같으면(브라우저 열기, 여러 사이트 확인, 긴 검색 등) 도구를 부르기 전에 chat_notify로 "깃허브 연동해 드릴게요, 잠시만요!" 같은 짧은 안내를 먼저 보내세요. 한 번의 요청에서 한 번만 보냅니다.',
@@ -2118,6 +2124,46 @@ app.delete('/api/tasks/:id', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+/* ----------------------- D-Day (v0.6.16) -------------------------- */
+
+app.get('/api/ddays', requireAuth, (_req, res) => {
+  res.json({ ok: true, ddays: ddays.listDDays(), today: ddays.todayKst() });
+});
+
+app.post('/api/ddays', requireAuth, (req, res) => {
+  const result = ddays.createDDay((req.body ?? {}) as ddays.CreateDDayInput);
+  if (!result.ok) {
+    res.status(400).json({ ok: false, code: 'invalid_dday', message: result.error });
+    return;
+  }
+  addLog('info', `D-Day 추가 · ${result.dday.title} (${result.dday.label})`);
+  res.json({ ok: true, dday: result.dday });
+});
+
+app.delete('/api/ddays/:id', requireAuth, (req, res) => {
+  const result = ddays.deleteDDay(req.params.id);
+  if (result.error) {
+    res.status(404).json({ ok: false, code: 'not_found', message: result.error });
+    return;
+  }
+  res.json({ ok: true, removed: result.removed.length });
+});
+
+/* -------------------- 택배 변동 추적 (v0.6.16) --------------------- */
+
+app.get('/api/parcel-watches', requireAuth, (_req, res) => {
+  res.json({ ok: true, watches: parcelWatch.listParcelWatches() });
+});
+
+app.delete('/api/parcel-watches/:id', requireAuth, (req, res) => {
+  const result = parcelWatch.stopParcelWatch(req.params.id);
+  if (result.error) {
+    res.status(404).json({ ok: false, code: 'not_found', message: result.error });
+    return;
+  }
+  res.json({ ok: true, removed: result.removed.length });
+});
+
 /* ----------------------------- settings --------------------------- */
 
 app.get('/api/settings', requireAuth, (_req, res) => {
@@ -3103,6 +3149,44 @@ const server = app.listen(PORT, HOST, () => {
     );
   });
   watchers.startWatcherLoop();
+  // v0.6.16: 택배 변동 추적 — AI를 부르지 않고 서버가 직접 조회하다가 단계가 바뀔 때만 알린다.
+  parcelWatch.setParcelNotifier((notice) => {
+    const delivered = notice.kind === 'delivered';
+    const head = `${delivered ? '택배 도착' : '택배 이동'}: ${notice.watch.label}`;
+    const body = [
+      `${notice.watch.carrierLabel} ${notice.watch.trackingNumber}`,
+      notice.line,
+      delivered ? '배송이 완료되어 추적을 마쳤습니다.' : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
+    const session = notice.watch.sessionId;
+    const sessionExists = Boolean(db.prepare('SELECT 1 AS ok FROM chat_sessions WHERE id = ?').get(session));
+    const posted = postAutomationMessage({
+      kind: 'parcel',
+      badge: head,
+      body,
+      session: sessionExists ? session : undefined,
+      notifyTitle: head,
+      notifyBody: notice.line.replace(/\n/g, ' ').slice(0, 160),
+    });
+    publish(
+      {
+        type: 'watch',
+        title: head,
+        body: notice.line.slice(0, 300),
+        data: {
+          parcelWatchId: notice.watch.id,
+          kind: notice.kind,
+          trackingNumber: notice.watch.trackingNumber,
+          carrier: notice.watch.carrier,
+          chatMessageId: posted?.messageId || null,
+        },
+      },
+      { push: !posted }
+    );
+  });
+  parcelWatch.startParcelWatchLoop();
   browser.resetStaleSessions();
   browser.startIdleReaper();
   // v0.6.0: 호스트 보안·장애 감시(3분마다, 이상할 때만 알림)

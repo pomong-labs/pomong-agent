@@ -1158,7 +1158,7 @@ function NoticeBubble({ message, character }: { message: ChatMessage; character:
       <div className="min-w-0 max-w-[88%] rounded-[20px] rounded-tl-md bg-[#F8F5FF] px-4 py-3 ring-1 ring-[#EFE7FF] sm:max-w-[76%]">
         {automation ? (
           <span className="mb-1.5 inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-[10.5px] font-bold text-[#7C63F6] ring-1 ring-[#EAE3FF]">
-          {automation === 'job' ? '예약 실행 결과' : '워치 알림'}
+          {automation === 'job' ? '예약 실행 결과' : automation === 'parcel' ? '택배 알림' : '워치 알림'}
           </span>
         ) : null}
         <p className="whitespace-pre-line text-[14.5px] leading-[1.65] text-[#4B3FA6]">{message.content}</p>

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { CalendarDays, Check, Flag, Pencil, Plus, Trash2, X } from 'lucide-react';
 import BackButton from '../components/BackButton';
 import MascotFace from '../components/MascotFace';
-import { api, type Task, type TaskCounts, type TaskPriority } from '../lib/api';
+import { api, type DDay, type Task, type TaskCounts, type TaskPriority } from '../lib/api';
 import { useAppStore } from '../lib/store';
 
 const PRIORITY_META: Record<TaskPriority, { label: string; color: string; bg: string; border: string }> = {
@@ -45,6 +45,13 @@ export default function Tasks() {
   const [editTitle, setEditTitle] = useState('');
   const [editDue, setEditDue] = useState('');
   const [editPriority, setEditPriority] = useState<TaskPriority>('normal');
+  // v0.6.16: D-Day
+  const [ddays, setDdays] = useState<DDay[]>([]);
+  const [ddTitle, setDdTitle] = useState('');
+  const [ddDate, setDdDate] = useState('');
+  const [ddRepeat, setDdRepeat] = useState(false);
+  const [ddOpen, setDdOpen] = useState(false);
+  const [ddBusy, setDdBusy] = useState(false);
 
   const load = () =>
     api
@@ -55,9 +62,37 @@ export default function Tasks() {
       })
       .catch(() => undefined);
 
+  const loadDdays = () =>
+    api
+      .get<{ ddays: DDay[] }>('/api/ddays')
+      .then((r) => setDdays(r.ddays || []))
+      .catch(() => undefined);
+
   useEffect(() => {
     load();
+    loadDdays();
   }, []);
+
+  const addDday = async () => {
+    if (!ddTitle.trim() || !ddDate) return;
+    setDdBusy(true);
+    try {
+      await api.post('/api/ddays', { title: ddTitle, date: ddDate, repeatYearly: ddRepeat });
+      setDdTitle('');
+      setDdDate('');
+      setDdRepeat(false);
+      setDdOpen(false);
+      loadDdays();
+    } finally {
+      setDdBusy(false);
+    }
+  };
+
+  const removeDday = async (item: DDay) => {
+    setDdays((prev) => prev.filter((d) => d.id !== item.id));
+    await api.del(`/api/ddays/${item.id}`).catch(() => loadDdays());
+    loadDdays();
+  };
 
   const add = async () => {
     if (!title.trim()) return;
@@ -173,6 +208,96 @@ export default function Tasks() {
             </div>
           </div>
         </div>
+
+        {/* v0.6.16: D-Day · 기념일 · 결제일 */}
+        <section className="mt-4 rounded-[24px] bg-white p-4 shadow-card ring-1 ring-[#F6F4FB]">
+          <div className="flex items-center justify-between">
+            <h2 className="flex items-center gap-1.5 text-[14px] font-semibold text-[#5B5866]">
+              <CalendarDays size={15} className="text-[#8B72F8]" /> D-Day
+              <span className="rounded-lg bg-[#F3EEFF] px-1.5 py-0.5 text-[11px] font-bold text-[#7C63F6]">{ddays.length}</span>
+            </h2>
+            <button className="text-[12.5px] font-semibold text-[#7C63F6]" onClick={() => setDdOpen((v) => !v)}>
+              {ddOpen ? '닫기' : '+ 추가'}
+            </button>
+          </div>
+
+          {ddays.length ? (
+            <div className="no-scrollbar mt-3 flex gap-2 overflow-x-auto pb-1">
+              {ddays.map((item) => {
+                const tone =
+                  item.days < 0
+                    ? { bg: '#FBFBFD', ring: '#F2F0F8', ink: '#A8A5B8' }
+                    : item.days === 0
+                      ? { bg: '#FFF1F5', ring: '#FFD9E5', ink: '#E5487E' }
+                      : item.days <= 7
+                        ? { bg: '#F5F0FF', ring: '#E3D9FF', ink: '#7C63F6' }
+                        : { bg: '#F8F7FF', ring: '#EEEAFA', ink: '#8B72F8' };
+                return (
+                  <div
+                    key={item.id}
+                    className="relative min-w-[132px] shrink-0 rounded-[18px] px-3.5 py-3 ring-1"
+                    style={{ background: tone.bg, borderColor: tone.ring }}
+                  >
+                    <button
+                      onClick={() => removeDday(item)}
+                      className="absolute right-1.5 top-1.5 text-[#CFC9DE] transition hover:text-[#E5484D]"
+                      aria-label="D-Day 삭제"
+                    >
+                      <X size={12} />
+                    </button>
+                    <div className="text-[19px] font-bold leading-tight" style={{ color: tone.ink }}>
+                      {item.label}
+                    </div>
+                    <div className="mt-1 max-w-[112px] truncate text-[13px] font-semibold text-[#2A2A35]">{item.title}</div>
+                    <div className="max-w-[112px] truncate text-[11px] text-[#8A8A9A]">
+                      {item.dateLabel}
+                      {item.repeatYearly ? ' · 매년' : ''}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="mt-2 text-[12.5px] text-[#A8A5B8]">기념일·결제일을 등록하면 남은 날짜(D-14, D-Day)를 한눈에 볼 수 있어요.</p>
+          )}
+
+          {ddOpen ? (
+            <div className="mt-3 rounded-[18px] bg-[#FAF9FD] p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  className="min-w-0 flex-1 rounded-xl bg-white px-3 py-2 text-[14px] placeholder:text-[#B7B4C6] focus:outline-none"
+                  placeholder="D-Day 이름 (예: 전역, 생일)"
+                  value={ddTitle}
+                  onChange={(e) => setDdTitle(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && addDday()}
+                />
+                <input
+                  type="date"
+                  className="rounded-xl bg-white px-2.5 py-2 text-[13px] text-[#5B5866] focus:outline-none"
+                  value={ddDate}
+                  onChange={(e) => setDdDate(e.target.value)}
+                />
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  onClick={() => setDdRepeat((v) => !v)}
+                  className={`rounded-full border px-3 py-1.5 text-[12px] font-semibold transition ${
+                    ddRepeat ? 'border-[#D6C9FF] bg-[#F5F0FF] text-[#7C63F6]' : 'border-[#EFEDF6] bg-white text-[#8A8A9A]'
+                  }`}
+                >
+                  매년 반복 {ddRepeat ? 'ON' : 'OFF'}
+                </button>
+                <button
+                  className="pa-btn-primary ml-auto px-4 py-2 text-[12.5px]"
+                  onClick={addDday}
+                  disabled={ddBusy || !ddTitle.trim() || !ddDate}
+                >
+                  <Plus size={14} /> 등록
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </section>
 
         {/* filters */}
         <div className="mt-4 flex flex-wrap items-center gap-2">

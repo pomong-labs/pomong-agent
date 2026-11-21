@@ -12,7 +12,7 @@ import { publish } from './events';
 
 export const AUTOMATION_SESSION = 'default';
 
-export type AutomationKind = 'job' | 'watch' | 'monitor';
+export type AutomationKind = 'job' | 'watch' | 'monitor' | 'parcel';
 
 export interface AutomationChatInput {
   kind: AutomationKind;
@@ -20,6 +20,8 @@ export interface AutomationChatInput {
   badge: string;
   /** 결과 본문(여러 줄 가능) */
   body: string;
+  /** 어느 대화방에 남길지 (기본 default — 자동화 결과를 모으는 방) */
+  session?: string;
   jobId?: string;
   runId?: string;
   watcherId?: string;
@@ -40,8 +42,9 @@ const MAX_BODY_CHARS = 3500;
 /** 결과를 채팅 말풍선으로 저장하고 SSE로 밀어 준다. 실패하면 null. */
 export function postAutomationMessage(input: AutomationChatInput): AutomationChatResult | null {
   const body = String(input.body || '').trim().slice(0, MAX_BODY_CHARS);
-  const emoji = input.kind === 'job' ? '⏰' : input.kind === 'monitor' ? '🛡️' : '👀';
+  const emoji = input.kind === 'job' ? '⏰' : input.kind === 'monitor' ? '🛡️' : input.kind === 'parcel' ? '📦' : '👀';
   const content = `${emoji} [${input.badge}]${body ? `\n${body}` : ''}`;
+  const session = input.session || AUTOMATION_SESSION;
   const meta = {
     type: 'notice' as const,
     automation: input.kind,
@@ -55,7 +58,7 @@ export function postAutomationMessage(input: AutomationChatInput): AutomationCha
     const createdAt = new Date().toISOString();
     const info = db
       .prepare('INSERT INTO messages(session_id, role, content, meta, created_at) VALUES(?,?,?,?,?)')
-      .run(AUTOMATION_SESSION, 'assistant', content, JSON.stringify(meta), createdAt);
+      .run(session, 'assistant', content, JSON.stringify(meta), createdAt);
     const messageId = Number(info.lastInsertRowid);
     publish({
       type: 'chat',
@@ -69,7 +72,7 @@ export function postAutomationMessage(input: AutomationChatInput): AutomationCha
           meta,
           createdAt,
         },
-        session: AUTOMATION_SESSION,
+        session,
         automation: input.kind,
         jobId: input.jobId || null,
         runId: input.runId || null,

@@ -20,7 +20,11 @@ export type ToolGroup =
   | 'automation'
   | 'server'
   | 'weather'
-  | 'vault';
+  | 'vault'
+  | 'parcel'
+  | 'market'
+  | 'dday'
+  | 'docker';
 
 /** 어떤 요청에서도 필요한 최소 도구 */
 export const CORE_TOOLS = [
@@ -61,6 +65,14 @@ export const TOOL_GROUPS: Record<ToolGroup, string[]> = {
   server: ['server_stats'],
   weather: ['weather_get'],
   vault: ['vault_list'],
+  // v0.6.16: 택배 조회·택배 변동 알림
+  parcel: ['track_parcel', 'watch_parcel'],
+  // v0.6.16: 환율·주식·코인 시세
+  market: ['get_market_quote'],
+  // v0.6.16: D-Day 카운터
+  dday: ['dday_list', 'dday_add', 'dday_delete'],
+  // v0.6.16: 도커 컨테이너 관리(포몽 자신은 제어 차단)
+  docker: ['manage_docker'],
 };
 
 const INTENT_PATTERNS: { group: ToolGroup; re: RegExp }[] = [
@@ -80,6 +92,19 @@ const INTENT_PATTERNS: { group: ToolGroup; re: RegExp }[] = [
   { group: 'server', re: /(서버|cpu|램|ram|메모리|디스크|용량|관제|리소스|가동\s*시간)/i },
   { group: 'weather', re: /(날씨|기온|비\s*와|비가|눈이|우산|더워|추워|습도|미세먼지)/i },
   { group: 'vault', re: /(금고|비밀번호|계정\s*목록|아이디\s*뭐)/i },
+  {
+    group: 'parcel',
+    re: /(택\s*배|운송장|송장|배송\s*(조회|상태|상황|현황|추적|완료|출발|중)|집화|간선\s*(상차|하차)|택배사|cj\s*대한통운|대한통운|한진|롯데\s*택배|로젠|우체국|경동\s*택배|쿠팡\s*택배|포스트박스)/i,
+  },
+  {
+    group: 'market',
+    re: /(환율|달러|엔화|엔\s*시세|유로|위안|파운드|주가|주식|시세|코인|비트코인|이더리움|리플|도지|나스닥|코스피|코스닥|s&p|다우|니케이|종목|티커|증시)/i,
+  },
+  {
+    group: 'dday',
+    re: /(디\s*데이|d\s*-?\s*day|기념일|결제일|몇\s*일\s*남|며칠\s*남|남은\s*날|카운트\s*다운|전역까지|생일까지)/i,
+  },
+  { group: 'docker', re: /(도커|docker|컨테이너|compose)/i },
 ];
 
 export interface ToolFilterInput {
@@ -147,6 +172,10 @@ export const TOOL_GROUP_META: ToolGroupMeta[] = [
   { id: 'server', label: '서버 관제', desc: 'CPU·메모리·디스크 상태 보기', emoji: '🖥️' },
   { id: 'weather', label: '날씨', desc: '현재 날씨와 예보', emoji: '🌤️' },
   { id: 'vault', label: '금고', desc: '저장한 계정 이름 확인', emoji: '🔐' },
+  { id: 'parcel', label: '택배', desc: '배송 조회·단계가 바뀔 때 알림', emoji: '📦' },
+  { id: 'market', label: '시세', desc: '환율·주식·코인 현재가와 전일 대비', emoji: '💹' },
+  { id: 'dday', label: '디데이', desc: '기념일·결제일·남은 날짜', emoji: '📅' },
+  { id: 'docker', label: '도커', desc: '컨테이너 조회·로그·재시작 (포몽 자신 제외)', emoji: '🐳' },
 ];
 
 export interface ToolPrefs {

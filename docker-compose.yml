@@ -1,7 +1,7 @@
 services:
   pomong-agent:
     build: .
-    image: pomong-agent:0.6.15
+    image: pomong-agent:0.6.16
     container_name: pomong-agent
     restart: unless-stopped
     ports:
@@ -33,7 +33,9 @@ services:
       # v0.6.0 감시: SSH 실패(fail2ban)·차단 기록·컨테이너 상태를 읽기 전용으로 본다.
       - /var/log:/host/var/log:ro
       - /var/lib/fail2ban:/host/var/lib/fail2ban:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # v0.6.16: 컨테이너 조회·시작/중지/재시작을 위해 쓰기 권한으로 마운트한다.
+      #   (포몽 자신의 컨테이너는 server/docker.ts가 코드로 제어를 막는다)
+      - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test:
         - CMD
@@ -55,7 +57,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.browser
-    image: pomong-agent-browser:0.6.15
+    image: pomong-agent-browser:0.6.16
     container_name: pomong-browser
     restart: unless-stopped
     shm_size: "1g"

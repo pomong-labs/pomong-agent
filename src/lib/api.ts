@@ -129,6 +129,21 @@ export interface TaskCounts {
   high: number;
 }
 
+/** v0.6.16: D-Day 카운터 */
+export interface DDay {
+  id: string;
+  title: string;
+  targetDate: string;
+  nextDate: string;
+  repeatYearly: boolean;
+  notes: string | null;
+  days: number;
+  label: string;
+  dateLabel: string;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
 export interface ChatMeta {
   type: 'server_stats' | 'tasks' | 'browser' | 'notice' | 'mail';
   stats?: SystemStats;
@@ -139,7 +154,7 @@ export interface ChatMeta {
   /** v0.6.3: 메일 발송 확인 카드 */
   mailDraft?: MailDraftCard;
   /** v0.5.2: 예약·워치 결과가 채팅방에 선톡으로 올 때 */
-  automation?: 'job' | 'watch';
+  automation?: 'job' | 'watch' | 'parcel';
   badge?: string;
   jobId?: string | null;
   runId?: string | null;
