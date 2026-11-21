@@ -373,7 +373,8 @@ async function main(): Promise<void> {
   check('국내 종목 → 야후 심볼', market.resolveStockTargets('삼성전자')[0]?.symbol === '005930.KS');
   check('종목코드 → 야후 심볼', market.resolveStockTargets('005930')[1]?.symbol === '005930.KQ');
   check('지수 해석', market.resolveStockTargets('코스피')[0]?.symbol === '^KS11');
-  check('금액 표기(원)', market.formatMoney(1339.44, 'KRW') === '1,339.44원', market.formatMoney(1339.44, 'KRW'));
+  check('금액 표기(원·환율)', market.formatMoney(1339.44, 'KRW', 'fx') === '1,339.44원', market.formatMoney(1339.44, 'KRW', 'fx'));
+  check('금액 표기(원·주가)', market.formatMoney(183100, 'KRW') === '183,100원', market.formatMoney(183100, 'KRW'));
   check('금액 표기(달러)', market.formatMoney(342.56, 'USD') === '$342.56', market.formatMoney(342.56, 'USD'));
 
   const fx = await market.lookupQuotes('USD/KRW');

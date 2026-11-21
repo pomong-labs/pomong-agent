@@ -494,16 +494,22 @@ function fxPair(rawQuery: string): { base: string; quote: string } | null {
   return koreanFxOrder(unique[0], unique[1]);
 }
 
-function decimalsFor(currency: string, value: number): number {
-  if (currency === 'KRW') return value >= 100 ? 2 : 4;
+function decimalsFor(currency: string, value: number, kind: QuoteKind): number {
+  if (currency === 'KRW') {
+    // 주가·코인은 원 단위 정수, 환율은 소수점이 의미가 있다(1,339.44원 · 8.43원).
+    if (kind !== 'fx') return 0;
+    return value >= 10 ? 2 : 4;
+  }
   if (currency === 'POINT') return 2;
-  if (currency === 'JPY' || currency === 'VND' || currency === 'IDR') return value >= 100 ? 0 : 2;
-  return 2;
+  if (currency === 'JPY' || currency === 'VND' || currency === 'IDR' || currency === 'CNY') {
+    return kind === 'fx' ? (value >= 100 ? 2 : 4) : value >= 100 ? 0 : 2;
+  }
+  return kind === 'fx' ? 4 : 2;
 }
 
-export function formatMoney(value: number, currency: string): string {
+export function formatMoney(value: number, currency: string, kind: QuoteKind = 'stock'): string {
   if (!Number.isFinite(value)) return '-';
-  const digits = decimalsFor(currency, Math.abs(value));
+  const digits = decimalsFor(currency, Math.abs(value), kind);
   const number = new Intl.NumberFormat('en-US', {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
@@ -520,7 +526,7 @@ export function formatMoney(value: number, currency: string): string {
 function formatChange(quote: Quote): string {
   if (quote.change === null || quote.changePct === null) return '전일 대비 확인 불가';
   const sign = quote.change > 0 ? '+' : quote.change < 0 ? '-' : '';
-  const diff = formatMoney(Math.abs(quote.change), quote.currency).replace('-', '');
+  const diff = formatMoney(Math.abs(quote.change), quote.currency, quote.kind).replace('-', '');
   const pct = Math.abs(quote.changePct).toFixed(2);
   if (quote.change === 0) return '전일 대비 변동 없음';
   return `전일 대비 ${sign}${diff} (${sign}${pct}%)`;
@@ -542,7 +548,7 @@ function kstStamp(iso: string | null): string {
 }
 
 function formatQuoteLine(quote: Quote): string {
-  const head = quote.kind === 'fx' ? `${quote.name} 1 = ${formatMoney(quote.price, quote.currency)}` : `${quote.name} ${formatMoney(quote.price, quote.currency)}`;
+  const head = quote.kind === 'fx' ? `${quote.name} 1 = ${formatMoney(quote.price, quote.currency, quote.kind)}` : `${quote.name} ${formatMoney(quote.price, quote.currency, quote.kind)}`;
   const parts = [head, formatChange(quote)];
   const stamp = kstStamp(quote.at);
   if (stamp) parts.push(`기준 ${stamp}`);

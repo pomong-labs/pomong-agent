@@ -235,7 +235,7 @@ export default function Tasks() {
                 return (
                   <div
                     key={item.id}
-                    className="relative min-w-[132px] shrink-0 rounded-[18px] px-3.5 py-3 ring-1"
+                    className="relative min-w-[132px] shrink-0 rounded-[18px] border px-3.5 py-3"
                     style={{ background: tone.bg, borderColor: tone.ring }}
                   >
                     <button
