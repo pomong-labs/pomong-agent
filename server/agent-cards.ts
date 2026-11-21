@@ -668,7 +668,7 @@ export function getCardByDomain(host: string): AgentCard | null {
   return row ? toCard(row) : null;
 }
 
-export function listCards(): (AgentCard & { sessions: number; lastSessionAt: string | null })[] {
+export function listCards(): (AgentCard & { sessions: number; submittedCount: number; lastSessionAt: string | null })[] {
   const rows = db.prepare('SELECT * FROM agent_cards ORDER BY created_at DESC').all() as CardRow[];
   return rows.map((row) => {
     const stat = db
@@ -677,7 +677,16 @@ export function listCards(): (AgentCard & { sessions: number; lastSessionAt: str
     const any = db
       .prepare('SELECT COUNT(*) AS n, MAX(updated_at) AS last FROM guest_sessions WHERE card_id = ?')
       .get(row.id) as { n: number; last: string | null };
-    return { ...toCard(row), sessions: any.n, lastSessionAt: stat.last || any.last || null };
+    // v0.7.3: '받은 응답'은 자동 완료로 전달된 건수만 센다(대화 중·차단 제외).
+    const submitted = db
+      .prepare("SELECT COUNT(*) AS n FROM guest_sessions WHERE card_id = ? AND status = 'submitted'")
+      .get(row.id) as { n: number };
+    return {
+      ...toCard(row),
+      sessions: any.n,
+      submittedCount: submitted.n,
+      lastSessionAt: stat.last || any.last || null,
+    };
   });
 }
 
@@ -699,6 +708,7 @@ export function createCard(input: CardInput): { card: AgentCard } | { error: str
   if (pin && !/^\d{4,12}$/.test(pin)) return { error: 'PIN은 4~12자리 숫자로 정해 주세요.' };
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
+  const deliveryMode = normalizeDeliveryMode(input.deliveryMode);
   db.prepare(
     `INSERT INTO agent_cards(id, slug, title, purpose, bio_text, system_guide, quick_prompts_json, collect_fields_json,
        delivery_mode, once_per_visitor, retention_days,
@@ -715,7 +725,11 @@ export function createCard(input: CardInput): { card: AgentCard } | { error: str
     JSON.stringify(normalizePrompts(input.quickPrompts, purpose)),
     JSON.stringify(normalizeCollectFields(input.collectFields, true, purpose)),
     normalizeDeliveryMode(input.deliveryMode),
-    input.oncePerVisitor === true || input.oncePerVisitor === 1 || input.oncePerVisitor === '1' ? 1 : 0,
+    deliveryMode === 'qna_only'
+      ? 0
+      : input.oncePerVisitor === true || input.oncePerVisitor === 1 || input.oncePerVisitor === '1'
+        ? 1
+        : 0,
     normalizeRetentionDays(input.retentionDays),
     domain,
     pin ? pinHash(pin) : null,
@@ -770,6 +784,8 @@ export function updateCard(id: string, input: CardInput): { card: AgentCard } | 
     pin = pinHash(value);
   } else pin = undefined;
 
+  const nextDeliveryMode =
+    input.deliveryMode === undefined ? current.deliveryMode : normalizeDeliveryMode(input.deliveryMode, current.deliveryMode);
   db.prepare(
     `UPDATE agent_cards SET slug = ?, title = ?, purpose = ?, bio_text = ?, system_guide = ?,
        quick_prompts_json = ?, collect_fields_json = ?, delivery_mode = ?, once_per_visitor = ?, retention_days = ?,
@@ -788,14 +804,16 @@ export function updateCard(id: string, input: CardInput): { card: AgentCard } | 
         ? current.collectFields
         : normalizeCollectFields(input.collectFields, true, purpose)
     ),
-    input.deliveryMode === undefined ? current.deliveryMode : normalizeDeliveryMode(input.deliveryMode, current.deliveryMode),
-    input.oncePerVisitor === undefined
-      ? current.oncePerVisitor
-        ? 1
-        : 0
-      : input.oncePerVisitor === true || input.oncePerVisitor === 1 || input.oncePerVisitor === '1'
-        ? 1
-        : 0,
+    nextDeliveryMode,
+    nextDeliveryMode === 'qna_only'
+      ? 0
+      : input.oncePerVisitor === undefined
+        ? current.oncePerVisitor
+          ? 1
+          : 0
+        : input.oncePerVisitor === true || input.oncePerVisitor === 1 || input.oncePerVisitor === '1'
+          ? 1
+          : 0,
     input.retentionDays === undefined
       ? current.retentionDays
       : normalizeRetentionDays(input.retentionDays, current.retentionDays),
@@ -870,6 +888,11 @@ export function publicSessionView(
   card: AgentCard,
   sessionId: unknown
 ): { turnCount: number; status: string; messages: GuestMessageView[] } | null {
+  // qna_only 는 DB 세션이 없고 메모리에만 있다.
+  if (card.deliveryMode === 'qna_only') {
+    const mem = ephemeralFor(card, sessionId);
+    return mem ? { turnCount: mem.turnCount, status: 'active', messages: mem.messages.map((message) => ({ ...message })) } : null;
+  }
   const session = sessionForCard(card, sessionId);
   if (!session) return null;
   return {
@@ -943,11 +966,13 @@ export function startSession(card: AgentCard, ipHash: string): { session: GuestS
   }
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
+  // v0.7.3: qna_only 는 IP 해시도 저장하지 않는다(방어는 메모리 rate limiter 로만).
+  const storedHash = card.deliveryMode === 'qna_only' ? '' : ipHash;
   db.prepare(
     `INSERT INTO guest_sessions(id, card_id, visitor_name, visitor_contact, ip_hash, turn_count, blocked_count,
        summary_text, structured_json, status, created_at, updated_at)
      VALUES(?,?,NULL,NULL,?,0,0,NULL,NULL,'active',?,?)`
-  ).run(id, card.id, ipHash, now, now);
+  ).run(id, card.id, storedHash, now, now);
   return { session: { ...(toSession(db.prepare('SELECT * FROM guest_sessions WHERE id = ?').get(id) as SessionRow)), messages: [] } };
 }
 
@@ -1054,6 +1079,143 @@ export interface ChatOutcome {
   retryAfterSec?: number;
 }
 
+const EPHEMERAL_TTL_MS = 2 * 60 * 60 * 1000;
+const EPHEMERAL_MAX = 200;
+
+interface EphemeralSession {
+  id: string;
+  cardId: string;
+  turnCount: number;
+  createdAt: string;
+  expiresAt: number;
+  messages: GuestMessageView[];
+}
+
+/**
+ * v0.7.3: qna_only 명함의 대화는 DB 에 남기지 않는다.
+ *  · IP 해시·연락처·본문 무엇도 저장하지 않고, 대화를 이어가기 위해 서버 메모리에 최대 2시간만 둔다.
+ *  · 도배 방지는 저장 없는 인메모리 분당 한도(checkRate)로만 처리한다.
+ */
+const ephemeralSessions = new Map<string, EphemeralSession>();
+
+function pruneEphemeral(now = Date.now()): void {
+  for (const [id, session] of ephemeralSessions) {
+    if (session.expiresAt <= now) ephemeralSessions.delete(id);
+  }
+  while (ephemeralSessions.size > EPHEMERAL_MAX) {
+    const oldest = ephemeralSessions.keys().next().value;
+    if (!oldest) break;
+    ephemeralSessions.delete(oldest);
+  }
+}
+
+function ephemeralFor(card: AgentCard, sessionId: unknown): EphemeralSession | null {
+  const id = String(sessionId || '').trim();
+  if (!id) return null;
+  const found = ephemeralSessions.get(id);
+  if (!found) return null;
+  if (found.cardId !== card.id || found.expiresAt <= Date.now()) {
+    ephemeralSessions.delete(id);
+    return null;
+  }
+  return found;
+}
+
+function startEphemeral(card: AgentCard): EphemeralSession {
+  pruneEphemeral();
+  const session: EphemeralSession = {
+    id: crypto.randomUUID(),
+    cardId: card.id,
+    turnCount: 0,
+    createdAt: new Date().toISOString(),
+    expiresAt: Date.now() + EPHEMERAL_TTL_MS,
+    messages: [],
+  };
+  ephemeralSessions.set(session.id, session);
+  return session;
+}
+
+function rememberEphemeral(session: EphemeralSession): void {
+  session.expiresAt = Date.now() + EPHEMERAL_TTL_MS;
+  ephemeralSessions.set(session.id, session);
+}
+
+/** qna_only 대화 — DB 저장 없이 서버 메모리의 세션으로만 이어 간다. */
+async function chatEphemeral(
+  card: AgentCard,
+  brand: Brand,
+  input: { sessionId?: unknown; message: unknown; ipHash: string }
+): Promise<ChatOutcome> {
+  let session = ephemeralFor(card, input.sessionId);
+  if (!session) session = startEphemeral(card);
+
+  if (session.turnCount >= card.maxTurnsPerSession) {
+    return {
+      ok: false,
+      code: 'turns_limit',
+      sessionId: session.id,
+      message: '이 대화에서 나눌 수 있는 횟수를 다 썼어요.',
+    };
+  }
+
+  const recentUser = session.messages.filter((m) => m.role === 'user').map((m) => m.content);
+  const verdict = filterGuestMessage(input.message, recentUser);
+  if (verdict.block) {
+    return {
+      ok: true,
+      blocked: true,
+      sessionId: session.id,
+      reply: verdict.message || '다시 한 번 말씀해 주세요.',
+      turnsLeft: Math.max(0, card.maxTurnsPerSession - session.turnCount),
+      turnsUsed: session.turnCount,
+      code: verdict.code,
+    };
+  }
+
+  const question = String(input.message).trim();
+  const history = session.messages.slice(-HISTORY_LIMIT).map((m) => ({ role: m.role, content: m.content }));
+  session.messages.push({ role: 'user', content: question, at: new Date().toISOString() });
+
+  let reply = '';
+  let error: string | undefined;
+  if (!llmRunner) {
+    error = 'AI가 연결되어 있지 않습니다.';
+  } else {
+    try {
+      const result = await llmRunner({
+        card,
+        system: guestSystemPrompt(card, brand, null),
+        messages: [...history, { role: 'user', content: question }],
+        visitorName: null,
+      });
+      reply = (result.text || '').trim();
+      if (result.error) error = result.error;
+      recordTrace(card, result);
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  // qna_only 에서는 완료 블록을 쓰지 않지만, 모델이 흥내내도 손님에게 보이지 않게 지운다.
+  const clean = parseCollectBlock(reply).clean;
+  const text = clean || '지금은 바로 답변드리기 어려워요. 잠시 뒤 다시 말씀해 주세요.';
+  session.messages.push({ role: 'assistant', content: text, at: new Date().toISOString() });
+  session.turnCount += 1;
+  rememberEphemeral(session);
+  if (error) addLog('warn', `명함 대화 오류(/c/${card.slug}): ${error.slice(0, 140)}`);
+
+  const atLimit = session.turnCount >= card.maxTurnsPerSession;
+  return {
+    ok: true,
+    sessionId: session.id,
+    reply: atLimit ? `${text}\n\n(이 대화에서 나눌 수 있는 횟수를 모두 썼어요.)` : text,
+    turnsLeft: Math.max(0, card.maxTurnsPerSession - session.turnCount),
+    turnsUsed: session.turnCount,
+    status: 'active',
+    code: atLimit ? 'turns_limit' : undefined,
+  };
+}
+
 export async function guestChat(input: {
   card: AgentCard;
   brand: Brand;
@@ -1078,8 +1240,12 @@ export async function guestChat(input: {
     };
   }
 
-  let session = sessionForCard(card, input.sessionId);
-  if (input.sessionId && !session) session = null;
+  /* qna_only: DB 세션 없이 메모리에서만 대화한다(IP·본문 저장 없음). */
+  if (card.deliveryMode === 'qna_only') {
+    return chatEphemeral(card, brand, input);
+  }
+
+  let session = sessionForCard(card, input.sessionId);  if (input.sessionId && !session) session = null;
   if (!session) {
     const started = startSession(card, input.ipHash);
     if ('error' in started) return { ok: false, code: started.code, message: started.error };

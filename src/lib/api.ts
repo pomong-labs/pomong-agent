@@ -843,6 +843,8 @@ export interface AgentCard {
   createdAt: string;
   updatedAt: string;
   sessions?: number;
+  /** 자동 완료로 주인에게 전달된 응답 수(v0.7.3) */
+  submittedCount?: number;
   lastSessionAt?: string | null;
   links?: { path: string; url: string; domain: string | null };
 }

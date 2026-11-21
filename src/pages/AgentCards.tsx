@@ -220,6 +220,8 @@ export default function AgentCards() {
   const [confirmDelete, setConfirmDelete] = useState('');
   /** 알림 딥링크(?card=)로 들어오면 그 명함의 대화를 바로 펼친다 */
   const deepLinkDone = useRef(false);
+  /** 어느 명함의 받은 응답을 펼쳐 두었는지(SSE 로 그 명함만 다시 불러오기 위해) */
+  const openSessionsRef = useRef('');
 
   const load = useCallback(async () => {
     try {
@@ -305,20 +307,69 @@ export default function AgentCards() {
   const loadSessions = async (card: AgentCard) => {
     if (openSessions === card.id) {
       setOpenSessions('');
+      openSessionsRef.current = '';
       return;
     }
     setOpenSessions(card.id);
+    openSessionsRef.current = card.id;
     setSessionsLoading(true);
     setSessions([]);
     try {
       const res = await api.get<{ sessions: GuestSessionView[] }>(`/api/agent-cards/${card.id}/sessions`);
       setSessions(res.sessions);
+      // 상단 '받은 응답 N건'도 함께 최신화한다.
+      void load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '대화를 불러오지 못했어요.');
     } finally {
       setSessionsLoading(false);
     }
   };
+
+  /** 펼쳐 둔 받은 응답만 다시 불러온다(새 응답 도착 시) */
+  const refreshSessions = useCallback(async (cardId: string) => {
+    try {
+      const res = await api.get<{ sessions: GuestSessionView[] }>(`/api/agent-cards/${cardId}/sessions`);
+      if (openSessionsRef.current === cardId) setSessions(res.sessions);
+    } catch {
+      /* 다음 이벤트·새로고침에서 다시 시도한다 */
+    }
+  }, []);
+
+  // v0.7.3: 새 응답(채팅 자동 완료)이 도착하면 탭 이동 없이 목록·카운트를 바로 갱신한다.
+  useEffect(() => {
+    let source: EventSource | null = null;
+    try {
+      source = new EventSource('/api/events');
+    } catch {
+      return;
+    }
+    const onMessage = (event: MessageEvent) => {
+      try {
+        const payload = JSON.parse(String(event.data)) as { type?: string; data?: { cardId?: string } };
+        const cardId = payload?.data?.cardId;
+        if (!cardId) return;
+        void load();
+        if (openSessionsRef.current === cardId) void refreshSessions(cardId);
+      } catch {
+        /* 다른 종류의 이벤트는 무시 */
+      }
+    };
+    source.addEventListener('message', onMessage);
+    return () => {
+      source?.removeEventListener('message', onMessage);
+      source?.close();
+    };
+  }, [load, refreshSessions]);
+
+  // 다른 앱에 다녀오거나 알림에서 돌아온 때도 최신 카운트를 다시 읽는다.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void load();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [load]);
 
   useEffect(() => {
     if (deepLinkDone.current || !cards.length) return;
@@ -391,8 +442,9 @@ export default function AgentCards() {
     // 전달하지 않는(qna_only) 명함의 대화는 '받은 응답'에 세지 않는다.
     const total = cards
       .filter((card) => card.deliveryMode !== 'qna_only')
-      .reduce((sum, card) => sum + (card.sessions || 0), 0);
-    return { live, sessions: total };
+      .reduce((sum, card) => sum + (card.submittedCount || 0), 0);
+    const conversations = cards.reduce((sum, card) => sum + (card.sessions || 0), 0);
+    return { live, sessions: total, conversations };
   }, [cards]);
 
   return (
@@ -413,7 +465,7 @@ export default function AgentCards() {
               에이전트 명함
             </h1>
             <p className="text-[12.5px]" style={{ color: 'var(--pa-mute)' }}>
-              손님에게 건넬 공개 명함 {cards.length}개 · 응대 중 {stats.live}개 · 받은 대화 {stats.sessions}건
+              손님에게 건넬 공개 명함 {cards.length}개 · 응대 중 {stats.live}개 · 받은 응답 {stats.sessions}건
             </p>
           </div>
           <button className="pa-btn-primary shrink-0 px-4 py-2.5 text-[13.5px]" onClick={() => setForm(blankForm())}>
@@ -530,7 +582,7 @@ export default function AgentCards() {
                       <span>오늘 {card.dailyCount}/{card.dailyLimit}명</span>
                       <span>세션당 {card.maxTurnsPerSession}턴</span>
                       <span>보관 {card.retentionDays > 0 ? `${card.retentionDays}일` : '영구'}</span>
-                      {card.deliveryMode !== 'qna_only' ? <span>받은 응답 {card.sessions || 0}건</span> : null}
+                      {card.deliveryMode !== 'qna_only' ? <span>받은 응답 {card.submittedCount || 0}건</span> : null}
                     </div>
                   </div>
                 </div>
@@ -557,7 +609,7 @@ export default function AgentCards() {
                     onClick={() => void loadSessions(card)}
                   >
                     <MessageSquare size={13} /> 받은 응답
-                    {card.deliveryMode !== 'qna_only' && card.sessions ? ` (${card.sessions})` : ''}
+                    {card.deliveryMode !== 'qna_only' && card.submittedCount ? ` (${card.submittedCount})` : ''}
                   </button>
                   <button
                     className="flex items-center gap-1 rounded-full px-3 py-1.5 text-[12px] font-semibold"
@@ -708,6 +760,7 @@ function SessionCard({ session, card }: { session: GuestSessionView; card: Agent
     .filter(([key]) => !known.has(key) && key !== 'note')
     .map(([key, value]) => ({ key, label: key, value }));
   const note = structured.note || '';
+  const hasFields = Boolean(rows.length || extra.length || note);
 
   return (
     <li
@@ -731,7 +784,8 @@ function SessionCard({ session, card }: { session: GuestSessionView; card: Agent
         </span>
       </div>
 
-      {session.summary ? (
+      {/* 항목 표가 있으면 같은 내용의 요약 박스는 생략한다(중복 표시 방지). */}
+      {!hasFields && session.summary ? (
         <p
           className="mt-2 whitespace-pre-wrap rounded-[12px] px-3 py-2 text-[12px] leading-relaxed"
           style={{ background: 'var(--pa-surface-3)', color: 'var(--pa-ink)' }}
@@ -740,24 +794,24 @@ function SessionCard({ session, card }: { session: GuestSessionView; card: Agent
         </p>
       ) : null}
 
-      {rows.length || extra.length || note ? (
+      {hasFields ? (
         <dl className="mt-2 space-y-1">
           {[...rows, ...extra].map((row) => (
             <div key={row.key} className="flex gap-2 rounded-[10px] px-2.5 py-1.5" style={{ background: 'var(--pa-surface-3)' }}>
-              <dt className="w-[92px] shrink-0 truncate text-[11.5px] font-semibold" style={{ color: 'var(--pa-mute)' }} title={row.label}>
+              <dt className="w-[40%] shrink-0 whitespace-pre-wrap break-words text-[11.5px] font-semibold leading-snug" style={{ color: 'var(--pa-mute)' }}>
                 {row.label}
               </dt>
-              <dd className="min-w-0 flex-1 whitespace-pre-wrap break-words text-[12px]" style={{ color: 'var(--pa-ink)' }}>
+              <dd className="min-w-0 flex-1 whitespace-pre-wrap break-words text-[12px] leading-relaxed" style={{ color: 'var(--pa-ink)' }}>
                 {row.value}
               </dd>
             </div>
           ))}
           {note ? (
             <div className="flex gap-2 rounded-[10px] px-2.5 py-1.5" style={{ background: 'var(--pa-surface-3)' }}>
-              <dt className="w-[92px] shrink-0 text-[11.5px] font-semibold" style={{ color: 'var(--pa-mute)' }}>
+              <dt className="w-[40%] shrink-0 text-[11.5px] font-semibold" style={{ color: 'var(--pa-mute)' }}>
                 남긴 말
               </dt>
-              <dd className="min-w-0 flex-1 whitespace-pre-wrap break-words text-[12px]" style={{ color: 'var(--pa-ink)' }}>
+              <dd className="min-w-0 flex-1 whitespace-pre-wrap break-words text-[12px] leading-relaxed" style={{ color: 'var(--pa-ink)' }}>
                 {note}
               </dd>
             </div>
@@ -937,7 +991,7 @@ function CardEditor({
                       ? { borderColor: 'var(--accent-line)', background: 'var(--accent-soft-weak)' }
                       : { borderColor: 'var(--pa-line)', background: 'var(--pa-surface)' }
                   }
-                  onClick={() => patch({ deliveryMode: mode.id })}
+                  onClick={() => patch({ deliveryMode: mode.id, oncePerVisitor: mode.id === 'qna_only' ? false : form.oncePerVisitor })}
                   aria-pressed={form.deliveryMode === mode.id}
                 >
                   <span
@@ -1112,7 +1166,7 @@ function CardEditor({
             </label>
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
+          <div className={collect ? 'grid grid-cols-2 gap-2' : 'grid grid-cols-1 gap-2'}>
             <label className="block">
               <span className="mb-1 block text-[12.5px] font-semibold" style={{ color: 'var(--pa-ink)' }}>
                 대화 보관 기간
@@ -1129,25 +1183,29 @@ function CardEditor({
                 ))}
               </select>
             </label>
-            <label className="flex items-end">
-              <span
-                className="flex w-full items-center justify-between rounded-[12px] px-3 py-2.5"
-                style={{ background: 'var(--pa-surface-3)' }}
-              >
-                <span className="flex items-center gap-1.5 text-[12.5px] font-semibold" style={{ color: 'var(--pa-ink)' }}>
-                  <UserCheck size={14} /> 1인 1회 참여
+            {collect ? (
+              <label className="flex items-end">
+                <span
+                  className="flex w-full items-center justify-between rounded-[12px] px-3 py-2.5"
+                  style={{ background: 'var(--pa-surface-3)' }}
+                >
+                  <span className="flex items-center gap-1.5 text-[12.5px] font-semibold" style={{ color: 'var(--pa-ink)' }}>
+                    <UserCheck size={14} /> 1인 1회 참여
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={form.oncePerVisitor}
+                    onChange={(e) => patch({ oncePerVisitor: e.target.checked })}
+                    className="h-4 w-4 accent-[var(--accent)]"
+                  />
                 </span>
-                <input
-                  type="checkbox"
-                  checked={form.oncePerVisitor}
-                  onChange={(e) => patch({ oncePerVisitor: e.target.checked })}
-                  className="h-4 w-4 accent-[var(--accent)]"
-                />
-              </span>
-            </label>
+              </label>
+            ) : null}
           </div>
           <p className="-mt-2 text-[11px] leading-relaxed" style={{ color: 'var(--pa-mute-2)' }}>
-            보관 기간이 지나면 서버가 대화·연락처를 실제로 영구 삭제해요. 1인 1회를 켜면 응답을 마친 방문자는 다시 참여할 수 없어요.
+            {collect
+              ? '보관 기간이 지나면 서버가 대화·연락처를 실제로 영구 삭제해요. 1인 1회를 켜면 응답을 마친 방문자는 다시 참여할 수 없어요.'
+              : '자유 Q&A 명함의 대화는 서버 DB에 저장하지 않고 메모리에 최대 2시간만 두었다가 사라져요. IP 기록도 남기지 않아요.'}
           </p>
 
           <label className="block">

@@ -663,11 +663,12 @@ function CollectionNotice({ card, onClose }: { card: PublicCardInfo; onClose: ()
               ? fields.length
                 ? `${fields.join(', ')}, 그리고 대화 내용`
                 : '대화에서 이름·연락처와 용건'
-              : '대화 내용(답변 생성용)'}
+              : '대화 내용(답변 생성용, 저장하지 않음)'}
           </NoticeRow>
           <NoticeRow label="접속 기록 (IP)">
-            도배·악용 및 1인 1회 중복 참여 방지 목적으로만 복원 불가능한 단방향 해시값으로 처리되며, 원본 IP는 저장하지 않고
-            보관 기간 경과 시 함께 영구 삭제돼요.
+            {collect
+              ? '도배·악용 및 1인 1회 중복 참여 방지 목적으로만 복원 불가능한 단방향 해시값으로 처리되며, 원본 IP는 저장하지 않고 보관 기간 경과 시 함께 영구 삭제돼요.'
+              : '별도로 저장하지 않아요. (순간 도배 방지를 위해 메모리에서만 잠깐 확인하고 바로 버려요)'}
           </NoticeRow>
           <NoticeRow label="이용 목적">{purposeText[card.purpose] || '문의 응대'}</NoticeRow>
           <NoticeRow label="주인에게 전달">
@@ -676,9 +677,11 @@ function CollectionNotice({ card, onClose }: { card: PublicCardInfo; onClose: ()
               : '따로 전달하지 않아요. 주인 화면에도 이 대화가 표시되지 않고, 답변을 만드는 데만 쓰여요.'}
           </NoticeRow>
           <NoticeRow label="보관 기간">
-            {card.retentionDays > 0
-              ? `답변 생성을 위해 서버에 잠시 보관하며, 대화를 시작한 날로부터 ${card.retentionDays}일 뒤 자동으로 영구 삭제해요.`
-              : '서버에서 삭제하지 않고 보관해요(0일 = 영구 보관 설정).'}
+            {collect
+              ? card.retentionDays > 0
+                ? `답변 생성을 위해 서버에 잠시 보관하며, 대화를 시작한 날로부터 ${card.retentionDays}일 뒤 자동으로 영구 삭제해요.`
+                : '서버에서 삭제하지 않고 보관해요(0일 = 영구 보관 설정).'
+              : '대화 내용은 주인에게 전달·수집하지 않아요. 이 화면에서 대화를 이어가는 동안에만 서버 메모리에 잠시(최대 2시간) 두었다가 자동으로 사라져요.'}
           </NoticeRow>
           <NoticeRow label="참여 횟수">
             {card.oncePerVisitor ? '이 명함은 1인 1회만 참여할 수 있어요.' : '원할 때 여러 번 참여할 수 있어요.'}
@@ -696,7 +699,7 @@ function CollectionNotice({ card, onClose }: { card: PublicCardInfo; onClose: ()
             <span>
               {collect
                 ? '대화 내용은 이 명함의 주인에게만 전달·보관되며 외부에 공유되지 않아요. 보관 기간이 지나면 서버에서 실제로 삭제돼요.'
-                : '이 명함은 답변만 제공하며, 남긴 내용을 주인에게 전달하거나 보관하지 않아요.'}
+                : '이 명함은 답변만 제공하며, 남긴 내용을 주인에게 전달하거나 DB에 저장하지 않아요.'}
             </span>
           </div>
         </div>

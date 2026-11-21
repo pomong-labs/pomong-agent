@@ -171,6 +171,11 @@ async function main(): Promise<void> {
     check('요약 저장', Boolean(view?.summary && view.summary.includes('연락처: visitor@example.com')), view?.summary?.slice(0, 60));
     check('주인 목록 집계', cards.listCards().some((item) => item.id === card.id && item.sessions >= 1));
     check(
+      '완료 응답 카운트',
+      cards.listCards().some((item) => item.id === card.id && item.submittedCount === 1),
+      String(cards.listCards().find((item) => item.id === card.id)?.submittedCount)
+    );
+    check(
       '시스템 프롬프트에 완료 규칙',
       seenSystem.includes('COLLECT_DONE') && seenSystem.includes('필수') && seenSystem.includes('희망 일시')
     );
@@ -213,19 +218,29 @@ async function main(): Promise<void> {
     purpose: 'intro',
     bioText: '소개와 하는 일을 안내합니다.',
     deliveryMode: 'qna_only',
+    oncePerVisitor: true,
     retentionDays: 7,
   });
   const qnaCard = 'card' in qnaMade ? qnaMade.card : null;
   check('qna_only 생성', Boolean(qnaCard && qnaCard.deliveryMode === 'qna_only' && qnaCard.retentionDays === 7));
+  check('qna_only 는 1인 1회 무의미(자동 해제)', qnaCard?.oncePerVisitor === false);
   if (qnaCard) {
+    const rowsBefore = (db.prepare('SELECT COUNT(*) AS n FROM guest_sessions WHERE card_id = ?').get(qnaCard.id) as { n: number }).n;
     replyQueue = [`안내드릴게요.${completionBlock({ name: '무시', contact: 'x@example.com' })}`];
     const chat = await cards.guestChat({ card: qnaCard, brand, message: '무슨 일 하세요?', ipHash: 'ip-qna' });
-    const view = chat.sessionId ? cards.getSession(chat.sessionId) : null;
+    const view = chat.sessionId ? cards.publicSessionView(qnaCard, chat.sessionId) : null;
     check('qna_only 답변', Boolean(chat.ok && chat.reply && chat.reply.includes('안내드릴게요')));
     check('qna_only 는 완료 블록 무시', Boolean(!chat.completed && view?.status === 'active'));
     check('qna_only 답변에도 블록 미노출', Boolean(chat.reply && !chat.reply.includes('COLLECT_DONE')));
     check('qna_only 시스템 프롬프트에 완료 규칙 없음', !seenSystem.includes('COLLECT_DONE') && seenSystem.includes('전달하지 않습니다'));
     check('공개 카드에 받을 항목 비노출', cards.publicCard(qnaCard, brand).collectFields.length === 0);
+    const rowsAfter = (db.prepare('SELECT COUNT(*) AS n FROM guest_sessions WHERE card_id = ?').get(qnaCard.id) as { n: number }).n;
+    check('qna_only 는 DB 세션·IP 미저장', rowsAfter === rowsBefore && rowsBefore === 0, `세션 ${rowsAfter}건`);
+    check(
+      'qna_only 는 본문도 DB 미저장',
+      (db.prepare('SELECT COUNT(*) AS n FROM guest_messages WHERE session_id = ?').get(String(chat.sessionId)) as { n: number }).n === 0
+    );
+    check('qna_only 새로고침 복원(메모리)', Boolean(view && view.messages.length >= 2));
     const submit = await cards.submitGuestSession(qnaCard, brand, { sessionId: chat.sessionId, name: 'x', ipHash: 'ip-qna' });
     check('qna_only 제출 거부', !submit.ok && submit.code === 'qna_only', submit.code);
   }
@@ -404,6 +419,16 @@ async function main(): Promise<void> {
       guestSrc.includes('단방향 해시값') &&
       guestSrc.includes('원본 IP는 저장하지 않고')
   );
+  check(
+    'qna_only IP·보관 고지 일치',
+    guestSrc.includes('메모리에서만 잠깐 확인하고 바로 버려요') && guestSrc.includes('최대 2시간')
+  );
+  check(
+    '받은 응답 카드 — 항목 있으면 요약 생략',
+    ownerSrc.includes('const hasFields') && ownerSrc.includes('!hasFields && session.summary')
+  );
+  check('새 응답 SSE 로 목록 갱신', ownerSrc.includes("new EventSource('/api/events')") && ownerSrc.includes('refreshSessions'));
+  check('상단 카운트는 submittedCount', ownerSrc.includes('card.submittedCount || 0'));
 
         // 모델 목록 — 인증 필요(쿠키 없는 새 요청으로 확인)
         const unauthorized = await fetch(`${base}/api/agent-cards/models`).then((res) => res.status).catch(() => 0);
@@ -433,7 +458,7 @@ async function main(): Promise<void> {
         const liveCard = (created.data as { card?: LiveCard })?.card;
         check(
           '명함 생성(새 필드)',
-          created.status === 200 && liveCard?.deliveryMode === 'qna_only' && liveCard?.oncePerVisitor === true && liveCard?.retentionDays === 7,
+          created.status === 200 && liveCard?.deliveryMode === 'qna_only' && liveCard?.oncePerVisitor === false && liveCard?.retentionDays === 7,
           JSON.stringify(liveCard || {})
         );
         const pub = await call('GET', '/api/public/card/settings-card');
