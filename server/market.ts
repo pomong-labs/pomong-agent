@@ -426,12 +426,16 @@ async function quoteStock(rawQuery: string): Promise<Quote | QuoteFailure> {
     const change = prev === null ? null : price - prev;
     const changePct = prev ? ((price - prev) / prev) * 100 : null;
     const at = meta.regularMarketTime ? new Date(Number(meta.regularMarketTime) * 1000).toISOString() : null;
+    const symbol = String(meta.symbol || target.symbol);
+    // 지수는 '원'이 아니라 포인트로 보여 준다. (KOSPI 4,870원 ✕ → 4,870.00 ✓)
+    const isIndex = symbol.startsWith('^') || target.currency === 'POINT';
+    const koreanName = /[가-힣]/.test(target.label);
     return {
       kind: 'stock',
-      name: meta.shortName || meta.longName || target.label,
-      symbol: String(meta.symbol || target.symbol),
+      name: koreanName || isIndex ? target.label : meta.shortName || meta.longName || target.label,
+      symbol,
       price,
-      currency: String(meta.currency || target.currency),
+      currency: isIndex ? 'POINT' : String(meta.currency || target.currency),
       change,
       changePct,
       at,

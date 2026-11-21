@@ -387,6 +387,8 @@ async function main(): Promise<void> {
   const krStock = await market.lookupQuotes('삼성전자');
   check('국내 주식 조회', krStock.ok && krStock.quotes[0]?.symbol === '005930.KS', krStock.ok ? krStock.quotes[0].symbol : krStock.reason);
   if (krStock.ok) {
+    check('국내 주식 이름은 한글', krStock.quotes[0].name === '삼성전자', krStock.quotes[0].name);
+    check('국내 주식은 원 단위', market.formatQuotes(krStock).includes('183,100원'), market.formatQuotes(krStock).split('\n')[1] || '');
     check('국내 주식 전일 대비', Math.abs((krStock.quotes[0].changePct || 0) + 7.0) < 0.05, String(krStock.quotes[0].changePct));
   }
   const usStock = await market.lookupQuotes('AAPL');
