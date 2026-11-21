@@ -7,6 +7,7 @@
 
 import crypto from 'node:crypto';
 import { db } from './db';
+import { kstDateLabel } from './kst';
 
 export interface DDayRow {
   id: string;
@@ -88,14 +89,6 @@ export function ddayLabel(days: number): string {
   return days > 0 ? `D-${days}` : `D+${-days}`;
 }
 
-function dateLabel(ymd: string): string {
-  const parsed = parseYmd(ymd);
-  if (!parsed) return ymd;
-  const date = new Date(Date.UTC(parsed.y, parsed.m - 1, parsed.d));
-  const weekday = ['일', '월', '화', '수', '목', '금', '토'][date.getUTCDay()];
-  return `${parsed.y}년 ${parsed.m}월 ${parsed.d}일 (${weekday})`;
-}
-
 /**
  * 매년 반복이면 오늘 이후의 가장 가까운 기념일을 기준으로 계산한다.
  * (올해 기념일이 지났으면 내년 날짜로 넘어간다)
@@ -129,7 +122,7 @@ function toView(row: DDayRow, today: string): DDayView {
     notes: row.notes,
     days,
     label: ddayLabel(days),
-    dateLabel: dateLabel(next),
+    dateLabel: kstDateLabel(next),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

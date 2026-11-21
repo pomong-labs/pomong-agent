@@ -7,6 +7,8 @@
  *  · 주식: 야후 파이낸스 chart 응답(전일 종가 포함) — 국내는 `.KS`/`.KQ`, 미국은 티커.
  */
 
+import { kstStamp, kstStampFull } from './kst';
+
 const UA = 'Mozilla/5.0 (compatible; PomongAgent/0.6.16; +https://github.com/pomong-labs/pomong-agent)';
 
 export type QuoteKind = 'fx' | 'crypto' | 'stock';
@@ -127,6 +129,9 @@ async function quoteFx(base: string, quote: string): Promise<Quote | QuoteFailur
     const prev = series.values.length > 1 ? series.values[series.values.length - 2] : null;
     const change = prev === null ? null : price - prev;
     const changePct = prev ? ((price - prev) / prev) * 100 : null;
+    const lastDate = series.dates[series.dates.length - 1] || '';
+    const dateParts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(lastDate);
+    const dateLabel = dateParts ? `${Number(dateParts[2])}월 ${Number(dateParts[3])}일` : lastDate;
     return {
       kind: 'fx',
       name: `${base}/${quote}`,
@@ -135,8 +140,8 @@ async function quoteFx(base: string, quote: string): Promise<Quote | QuoteFailur
       currency: quote,
       change,
       changePct,
-      at: `${series.dates[series.dates.length - 1]}T15:00:00Z`,
-      note: prev === null ? '전일 값 없음' : 'ECB 고시',
+      at: null,
+      note: `ECB 고시${dateLabel ? ` (${dateLabel})` : ''}`,
     };
   }
   // 예비: open.er-api (USD 기준 고시 환율, 하루 1회 갱신)
@@ -532,21 +537,6 @@ function formatChange(quote: Quote): string {
   return `전일 대비 ${sign}${diff} (${sign}${pct}%)`;
 }
 
-function kstStamp(iso: string | null): string {
-  if (!iso) return '';
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return '';
-  const now = new Date();
-  const sameDay =
-    date.toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul' }) === now.toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul' });
-  return date.toLocaleString('ko-KR', {
-    timeZone: 'Asia/Seoul',
-    ...(sameDay ? {} : { month: 'numeric', day: 'numeric' }),
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
 function formatQuoteLine(quote: Quote): string {
   const head = quote.kind === 'fx' ? `${quote.name} 1 = ${formatMoney(quote.price, quote.currency, quote.kind)}` : `${quote.name} ${formatMoney(quote.price, quote.currency, quote.kind)}`;
   const parts = [head, formatChange(quote)];
@@ -598,7 +588,7 @@ export async function lookupQuotes(rawQuery: string): Promise<QuoteResult> {
 
 /** 도구 응답 문구 */
 export function formatQuotes(result: QuoteSuccess): string {
-  const lines = [`💹 시세 · ${kstStamp(new Date().toISOString())} 기준`, ...result.quotes.map(formatQuoteLine)];
+  const lines = [`💹 시세 · ${kstStampFull(new Date())} 기준`, ...result.quotes.map(formatQuoteLine)];
   if (result.source) lines.push('', `※ ${result.source}`);
   lines.push('※ 출처: ECB 고시 환율(환율) · 업비트(코인) · 야후 파이낸스(주식) — 표시 시각과 실제 체결가가 다를 수 있습니다.');
   return lines.join('\n');

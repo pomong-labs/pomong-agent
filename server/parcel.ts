@@ -12,6 +12,7 @@
 
 import https from 'node:https';
 import { APP_VERSION } from './config';
+import { kstStamp } from './kst';
 
 const API_BASE = (process.env.PARCEL_API_BASE || 'https://apis.tracker.delivery').replace(/\/+$/, '');
 const UA = `PomongAgent/${APP_VERSION} (+https://github.com/pomong-labs/pomong-agent)`;
@@ -418,19 +419,6 @@ export async function lookupParcel(input: { number: unknown; carrier?: unknown }
 /* ------------------------------------------------------------------ */
 /* 화면·도구용 문구                                                     */
 /* ------------------------------------------------------------------ */
-
-function kstStamp(iso: string): string {
-  if (!iso) return '';
-  const parsed = new Date(iso);
-  if (Number.isNaN(parsed.getTime())) return iso;
-  return parsed.toLocaleString('ko-KR', {
-    timeZone: 'Asia/Seoul',
-    month: 'numeric',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
 
 export function stateLabel(stateId: string, stateText = ''): string {
   const label = STATE_LABELS[stateId] || '';
