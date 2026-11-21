@@ -1067,7 +1067,7 @@ function CardEditor({
                 ))}
                 {!form.collectFields.length ? (
                   <p className="text-[11.5px]" style={{ color: 'var(--pa-mute-2)' }}>
-                    항목이 없으면 AI가 대화 내용만 요약해 전달해요.
+                    항목이 없으면 이름·연락처만 받아요.
                   </p>
                 ) : null}
               </div>

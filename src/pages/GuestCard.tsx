@@ -675,7 +675,7 @@ function CollectionNotice({ card, onClose }: { card: PublicCardInfo; onClose: ()
           </NoticeRow>
           <NoticeRow label="보관 기간">
             {card.retentionDays > 0
-              ? `답변 생성을 위해 서버에 잠시 보관하며, 마지막 대화일로부터 ${card.retentionDays}일 뒤 자동으로 영구 삭제해요.`
+              ? `답변 생성을 위해 서버에 잠시 보관하며, 대화를 시작한 날로부터 ${card.retentionDays}일 뒤 자동으로 영구 삭제해요.`
               : '서버에서 삭제하지 않고 보관해요(0일 = 영구 보관 설정).'}
           </NoticeRow>
           <NoticeRow label="참여 횟수">
@@ -710,7 +710,7 @@ function CollectionNotice({ card, onClose }: { card: PublicCardInfo; onClose: ()
 function NoticeRow({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex gap-3 rounded-[14px] px-3 py-2.5" style={{ background: 'var(--pa-surface-3)' }}>
-      <span className="w-[68px] shrink-0 font-semibold" style={{ color: 'var(--pa-mute)' }}>
+      <span className="w-[76px] shrink-0 font-semibold" style={{ color: 'var(--pa-mute)' }}>
         {label}
       </span>
       <span className="min-w-0 flex-1">{children}</span>

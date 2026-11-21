@@ -1013,7 +1013,15 @@ export function guestSystemPrompt(card: AgentCard, brand: Brand, visitorName: st
     '[이 명함의 방식]',
     purposeGuide(card),
   ];
-  if (card.deliveryMode === 'collect') rules.push(...COLLECT_DONE_RULES);
+  if (card.deliveryMode === 'collect') {
+    rules.push(...COLLECT_DONE_RULES);
+    // 받을 항목을 모두 지운 명함은 용건 요약을 note 로 받는다.
+    if (!card.collectFields.length) {
+      rules.push(
+        '· 이 명함은 받을 항목이 따로 없습니다. 모든 이야기를 들었으면 위 블록 안에 {"note":"손님의 용건을 한두 줄로 정리"} 만 넣어 마무리하세요.'
+      );
+    }
+  }
   if (visitorName) rules.push('', `[방문자] 이름: ${visitorName}`);
   rules.push(
     '',
@@ -1171,7 +1179,7 @@ export async function guestChat(input: {
   if (completion) {
     const structured = completionValues(card, completion);
     if (structured) {
-      const summary = composeSummary(card, structured, [...session.messages, { role: 'user', content: question }]);
+      const summary = composeSummary(card, structured, [...session.messages, { role: 'user', content: question }], structured.note || '');
       db.prepare(
         `UPDATE guest_sessions SET visitor_name = ?, visitor_contact = ?, structured_json = ?, summary_text = ?,
            status = 'submitted', turn_count = ?, updated_at = ? WHERE id = ?`
@@ -1328,7 +1336,11 @@ export function completionValues(card: AgentCard, raw: Record<string, string>): 
   }
   const missing = card.collectFields.filter((field) => field.required && !values[field.key]);
   if (missing.length) return null;
-  if (!Object.keys(values).length) return null;
+  if (!Object.keys(values).length) {
+    // 받을 항목이 없는 명함은 용건 요약(note) 하나로 완료한다.
+    const note = Object.values(raw).map((value) => String(value || '').trim()).filter(Boolean).join(' / ');
+    return note ? { note: note.slice(0, 1000) } : null;
+  }
   const trimmed: Record<string, string> = {};
   for (const [key, value] of Object.entries(values)) trimmed[key] = value.slice(0, key === 'name' ? 40 : key === 'contact' ? 120 : 400);
   return trimmed;
