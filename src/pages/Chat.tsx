@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Check,
   CheckCheck,
@@ -324,6 +324,12 @@ export default function Chat() {
   const navigate = useNavigate();
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  /** v0.7.1: 푸시 알림 딥링크(?room=&msg=&approval=) 처리 */
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [approvalFocus, setApprovalFocus] = useState<string | null>(null);
+  const activeSessionNow = useRef(activeSession);
+  activeSessionNow.current = activeSession;
+  const deepLinkKey = useRef<string>('');
   /** v0.6.5: 보낸 뒤 입력창 높이를 기본 1줄로 되돌리는 데 쓴다 */
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -547,6 +553,58 @@ export default function Chat() {
     window.setTimeout(() => setHighlight(null), 2200);
   };
 
+  /**
+   * v0.7.1: 알림을 눌러 들어온 딥링크(?room=<방>&msg=<메시지>&approval=<승인카드>).
+   * 방을 바꾼 뒤 해당 지점으로 부드럽게 내려가 잠깐 강조하고, 주소의 쿼리는 지운다.
+   */
+  useEffect(() => {
+    const room = searchParams.get('room');
+    const msgRaw = Number(searchParams.get('msg') || 0);
+    const approval = searchParams.get('approval');
+    if (!room && !msgRaw && !approval) return;
+    const key = `${room || ''}|${msgRaw || ''}|${approval || ''}`;
+    if (deepLinkKey.current === key) return;
+    deepLinkKey.current = key;
+    let cancelled = false;
+
+    const scrollToTarget = (tries: number) => {
+      if (cancelled) return;
+      const targetId = msgRaw ? `msg-${msgRaw}` : approval ? `approval-${approval}` : '';
+      const element = targetId ? document.getElementById(targetId) : null;
+      if (element) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        if (msgRaw) {
+          setHighlight(msgRaw);
+          window.setTimeout(() => setHighlight(null), 2600);
+        }
+        if (approval) {
+          setApprovalFocus(approval);
+          window.setTimeout(() => setApprovalFocus(null), 3200);
+        }
+        return;
+      }
+      if (tries < 10) window.setTimeout(() => scrollToTarget(tries + 1), 260);
+    };
+
+    const enter = async () => {
+      const switching = Boolean(room && room !== activeSessionNow.current);
+      if (switching && room) {
+        try {
+          await switchSession(room);
+        } catch {
+          /* 방이 사라졌으면 지금 방에 그대로 둔다 */
+        }
+      }
+      window.setTimeout(() => scrollToTarget(0), switching ? 460 : 90);
+      // 쿼리는 한 번 처리하면 지운다(새로고침·뒤로가기에서 다시 내려가지 않게).
+      setSearchParams({}, { replace: true });
+    };
+    void enter();
+    return () => {
+      cancelled = true;
+    };
+  }, [searchParams, setSearchParams, switchSession]);
+
   const onClear = () => {
     if (!window.confirm('대화 기록을 모두 지울까요?')) return;
     void clearChat();
@@ -732,7 +790,15 @@ export default function Chat() {
 
           {/* v0.6.18: 되돌리기 어려운 작업의 승인 카드 */}
           {approvals.map((request) => (
-            <ApprovalCard key={request.id} request={request} onApprove={approveTask} onCancel={cancelApproval} />
+            <div
+              key={request.id}
+              id={`approval-${request.id}`}
+              className={`scroll-mt-24 rounded-[24px] transition ${
+                approvalFocus === request.id ? 'ring-2 ring-[#F0A32B] ring-offset-2' : ''
+              }`}
+            >
+              <ApprovalCard request={request} onApprove={approveTask} onCancel={cancelApproval} />
+            </div>
           ))}
 
           {/* v0.7.0: 서버가 재시작되어 중단된 작업 — 이어서 하기 제안 */}

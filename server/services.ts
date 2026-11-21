@@ -130,7 +130,7 @@ export const SERVICES: ServiceEntry[] = [
     tint: '#EAF1FF',
     color: '#3A78D6',
     emoji: '🚄',
-    examples: ['이번 주 금요일 익산→서울 SRT 표 알려줘', '내 SRT 예약 확인해줘', '다음 주 귀경 열차 시간표 봐줘'],
+    examples: ['이번 주 금요일 대전→서울 SRT 표 알려줘', '내 SRT 예약 확인해줘', '다음 주 귀경 열차 시간표 봐줘'],
   },
   {
     id: 'catchtable',

@@ -96,6 +96,9 @@ export interface BrowserSessionRow {
   created_at: string;
   last_used_at: string;
   ended_at: string | null;
+  /** v0.7.1: 마지막으로 본 화면이 2단계 인증·캡차·패스키 화면이었을 때의 종류 */
+  verification: string | null;
+  verification_at: string | null;
 }
 
 export interface BrowserSessionView {
@@ -112,6 +115,9 @@ export interface BrowserSessionView {
   createdAt: string;
   lastUsedAt: string;
   alive: boolean;
+  /** v0.7.1: 지금 2단계 인증·캡차 등 추가 인증을 기다리는 중인지 */
+  awaitingVerification: boolean;
+  verificationLabel: string | null;
 }
 
 /**
@@ -512,6 +518,21 @@ function row(id: string): BrowserSessionRow | null {
 
 export function toSessionView(r: BrowserSessionRow): BrowserSessionView {
   const reason = (r.handover_reason as HandoverReason) || null;
+  /** v0.7.1: 화면이 2단계 인증·캡차 등 추가 인증 대기 중인지(카드·배너 표시용) */
+  const verificationKind = String(r.verification || '') as VerificationKind | '';
+  const verificationFresh = r.verification_at ? Date.now() - new Date(r.verification_at).getTime() < VERIFICATION_TTL_MS : false;
+  const awaitingVerification = Boolean(
+    (r.control_owner === 'user' && reason && reason !== 'login' && reason !== 'payment') ||
+      (verificationKind && verificationFresh) ||
+      (r.url && VERIFICATION_URL_RE.test(r.url))
+  );
+  const verificationLabel = awaitingVerification
+    ? verificationKind && VERIFICATION_LABELS[verificationKind]
+      ? VERIFICATION_LABELS[verificationKind]
+      : reason && HANDOVER_LABELS[reason]
+        ? HANDOVER_LABELS[reason]
+        : VERIFICATION_LABELS.otp
+    : null;
   return {
     id: r.id,
     status: r.status,
@@ -526,6 +547,8 @@ export function toSessionView(r: BrowserSessionRow): BrowserSessionView {
     createdAt: r.created_at,
     lastUsedAt: r.last_used_at,
     alive: live.has(r.id) && r.status === 'active',
+    awaitingVerification,
+    verificationLabel,
   };
 }
 
@@ -541,6 +564,150 @@ export function activeSession(): BrowserSessionRow | null {
     .prepare("SELECT * FROM browser_sessions WHERE status = 'active' ORDER BY last_used_at DESC LIMIT 1")
     .get() as BrowserSessionRow | undefined;
   return r || null;
+}
+
+/**
+ * v0.7.1 — 화면이 '추가 인증' 대기 상태인지 판단하는 도우미들
+ *
+ * 2단계 인증(OTP)·캡차·패스키·이메일 인증 화면에서는 사용자가 '브라우저 화면 보기'에서
+ * 인증을 마쳐야 한다. 그런데 모델이 그 사실을 잊고 vault_request_login(로그인 카드)을
+ * 또 띄워 카드가 두 개 겹치는 일이 있었다(IMG_3673).
+ * 그래서 마지막으로 본 화면이 인증 화면이면 세션에 표시해 두고,
+ * 로그인 카드를 만들기 전에 반드시 이 상태를 확인한다.
+ */
+export type VerificationKind = 'otp' | 'captcha' | 'identity' | 'passkey';
+
+export const VERIFICATION_LABELS: Record<VerificationKind, string> = {
+  otp: '2단계 인증(인증번호·OTP)',
+  captcha: '로봇 확인(캡차)',
+  identity: '추가 인증(본인·이메일 인증)',
+  passkey: '패스키·보안키 인증',
+};
+
+/** 주소만으로도 인증 화면임을 알 수 있는 경로들 */
+const VERIFICATION_URL_RE = /(two[-_]?factor|\/2fa|2fa\b|second[-_]?factor|\/otp\b|otp[-_/]|verification|\/verify|challenge|checkpoint|passkey|sessions\/two-factor)/i;
+
+/** 이 TTL(30분) 안에 본 인증 화면이면 아직 인증 중으로 본다. */
+const VERIFICATION_TTL_MS = 30 * 60_000;
+
+/** 스냅샷 내용에서 인증 화면 종류를 고른다. */
+function verificationFromSnapshot(data: SnapshotData): VerificationKind | null {
+  const text = `${data.text} ${data.title}`.slice(0, 6000);
+  const url = data.url || '';
+  if (
+    data.handover === 'otp' ||
+    /(인증번호|인증\s*코드|verification code|one[- ]?time|2단계\s*인증|two[- ]?factor|authenticator)/i.test(text)
+  ) {
+    return 'otp';
+  }
+  if (data.handover === 'captcha' || /(recaptcha|hcaptcha|로봇이\s*아닙니다|i'?m not a robot|캡차|captcha)/i.test(text)) {
+    return 'captcha';
+  }
+  if (/(패스키|passkey|보안\s*키|security key)/i.test(text)) return 'passkey';
+  if (
+    data.handover === 'identity' ||
+    /(본인\s*인증|휴대폰\s*인증|주민등록번호|이메일\s*인증|email\s*verification|verify your email)/i.test(text)
+  ) {
+    return 'identity';
+  }
+  if (VERIFICATION_URL_RE.test(url) && data.handover !== 'login') return 'otp';
+  return null;
+}
+
+/** 스냅샷을 본 뒤 세션에 인증 상태를 기록한다(해당 화면을 벗어나면 지운다). */
+function touchPage(id: string, data: SnapshotData): void {
+  const verification = verificationFromSnapshot(data);
+  touch(id, {
+    url: data.url,
+    title: data.title,
+    verification,
+    verification_at: verification ? new Date().toISOString() : null,
+  });
+}
+
+export interface HandoverState {
+  /** 지금 2단계 인증·캡차 등으로 사용자가 화면을 맡고 있는지 */
+  active: boolean;
+  kind: VerificationKind | null;
+  label: string | null;
+  sessionId: string | null;
+  /** 화면을 넘긴 이유·안내 문구 */
+  detail: string | null;
+  /** 판단 근거: 'lease'(제어권 넘김) | 'verification'(화면 기록) | 'url' | null */
+  source: 'lease' | 'verification' | 'url' | null;
+}
+
+/**
+ * 지금 브라우저가 추가 인증(2FA/OTP/캡차/패스키/이메일 인증) 대기 중인지.
+ * ① 사용자가 제어권을 맡고 있으면 lease/handover_reason
+ * ② 마지막으로 본 화면이 인증 화면이면 세션 기록(30분)
+ * ③ 세션 URL 이 인증 경로면 주소
+ */
+export function getHandoverState(): HandoverState {
+  const session = activeSession();
+  const empty: HandoverState = { active: false, kind: null, label: null, sessionId: null, detail: null, source: null };
+  if (!session) return empty;
+  const reason = (session.handover_reason as HandoverReason) || null;
+  if (leaseActive(session) && reason) {
+    // 'login'·'payment' 은 사용자가 인증 화면을 맡고 있는 경우가 아니다.
+    const kind: VerificationKind | null =
+      reason === 'otp'
+        ? 'otp'
+        : reason === 'captcha'
+          ? 'captcha'
+          : reason === 'identity'
+            ? 'identity'
+            : reason === 'manual'
+              ? 'identity'
+              : null;
+    return {
+      active: true,
+      kind,
+      label: kind ? VERIFICATION_LABELS[kind] : HANDOVER_LABELS[reason] || '추가 인증',
+      sessionId: session.id,
+      detail: session.control_detail || null,
+      source: 'lease',
+    };
+  }
+  const verification = String(session.verification || '') as VerificationKind | '';
+  const at = session.verification_at ? new Date(session.verification_at).getTime() : 0;
+  if (verification && Date.now() - at < VERIFICATION_TTL_MS) {
+    return {
+      active: true,
+      kind: verification,
+      label: VERIFICATION_LABELS[verification] || '추가 인증',
+      sessionId: session.id,
+      detail: session.title || null,
+      source: 'verification',
+    };
+  }
+  if (session.url && VERIFICATION_URL_RE.test(session.url)) {
+    return {
+      active: true,
+      kind: 'otp',
+      label: VERIFICATION_LABELS.otp,
+      sessionId: session.id,
+      detail: session.url,
+      source: 'url',
+    };
+  }
+  return { ...empty, sessionId: session.id };
+}
+
+/** 추가 인증 대기 중인지 (로그인 카드를 막는 판단에 쓴다) */
+export function isAwaitingVerification(): boolean {
+  return getHandoverState().active;
+}
+
+/** 모델에게 그대로 돌려줄 차단 문구 */
+export function verificationBlockMessage(state: HandoverState): string {
+  const where = state.detail ? ` (${state.detail.slice(0, 120)})` : '';
+  return (
+    `지금은 ${state.label || '추가 인증'} 대기 중이라 새 로그인 카드를 띄우지 않았습니다${where}. ` +
+    `아이디·비밀번호 입력은 끝났고, 사용자가 '브라우저 화면 보기'에서 인증만 마치면 됩니다. ` +
+    `vault_request_login이나 browser_login_with_vault를 **다시 부르지 말고**, 사용자에게 "브라우저 화면에서 인증을 마쳐 주시면 제가 바로 이어서 진행할게요"라고 안내한 뒤 답변을 마치세요. ` +
+    `사용자가 인증을 마치고 화면을 돌려주면 서버가 이 대화를 자동으로 이어서 실행합니다.`
+  );
 }
 
 function touch(id: string, patch: Partial<BrowserSessionRow> = {}): void {
@@ -1005,7 +1172,7 @@ export async function openUrl(url: string, convId?: string): Promise<OpenResult>
     '페이지 열기'
   );
   const data = await takeSnapshot(s.page);
-  touch(session.id, { url: data.url, title: data.title });
+  touchPage(session.id, data);
   logAction(session.id, 'agent', 'browser.open', { url, opened: absolute }, data.title, data.url);
   void saveState(s);
   const notes: string[] = [];
@@ -1039,7 +1206,7 @@ export async function snapshot(sessionId?: string): Promise<{ sessionId: string;
   guardAgent(session, evaluateUrl(session.url || 'about:blank').level);
   const s = await ensureLive(session.id);
   const data = await takeSnapshot(s.page);
-  touch(session.id, { url: data.url, title: data.title });
+  touchPage(session.id, data);
   logAction(session.id, 'agent', 'browser.snapshot', {}, data.title, data.url);
   return { sessionId: session.id, snapshot: formatSnapshot(data, session.id) + dialogNote(s) };
 }
@@ -1103,7 +1270,7 @@ export async function click(args: { ref?: string; text?: string; sessionId?: str
   const missing = `⚠️ 누를 요소를 찾지 못했습니다: ${args.ref || args.text}. 화면이 이미 바뀌었을 수 있습니다. 아래 최신 화면의 ref로 다시 고르세요. 로그인 모달을 연 직후라면 browser_login_with_vault(vault_id)를 바로 부르면 서버가 입력창·버튼을 스스로 찾습니다.`;
   if (!(await target.count().catch(() => 0))) {
     const data = await takeSnapshot(s.page);
-    touch(session.id, { url: data.url, title: data.title });
+    touchPage(session.id, data);
     logAction(session.id, 'agent', 'browser.click', { ...args, clicked: false }, '요소 없음', data.url);
     return { sessionId: session.id, snapshot: `${missing}\n\n${formatSnapshot(data, session.id)}${dialogNote(s)}`, clicked: false };
   }
@@ -1111,7 +1278,7 @@ export async function click(args: { ref?: string; text?: string; sessionId?: str
     await target.click({ timeout: CLICK_TIMEOUT_MS });
   } catch (err) {
     const data = await takeSnapshot(s.page);
-    touch(session.id, { url: data.url, title: data.title });
+    touchPage(session.id, data);
     const why = err instanceof Error ? err.message.split('\n')[0].slice(0, 160) : String(err);
     logAction(session.id, 'agent', 'browser.click', { ...args, clicked: false }, `클릭 실패: ${why}`, data.url);
     return {
@@ -1127,7 +1294,7 @@ export async function click(args: { ref?: string; text?: string; sessionId?: str
   }
   await s.page.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => undefined);
   const data = await takeSnapshot(s.page);
-  touch(session.id, { url: data.url, title: data.title });
+  touchPage(session.id, data);
   const note = dialogNote(s);
   logAction(
     session.id,
@@ -1175,7 +1342,7 @@ export async function typeInto(args: { ref?: string; text: string; submit?: bool
     ]);
   }
   const data = await takeSnapshot(s.page);
-  touch(session.id, { url: data.url, title: data.title });
+  touchPage(session.id, data);
   logAction(session.id, 'agent', 'browser.type', { ref: args.ref, text: args.text }, data.title, data.url);
   void saveState(s);
   return { sessionId: session.id, snapshot: formatSnapshot(data, session.id) + dialogNote(s) };
@@ -1209,7 +1376,7 @@ export async function fillFromVault(
     ]);
   }
   const data = await takeSnapshot(s.page);
-  touch(session.id, { url: data.url, title: data.title });
+  touchPage(session.id, data);
   void saveState(s);
   // 감사 로그에는 '금고 값으로 채웠다'만 남긴다.
   logAction(
@@ -1955,7 +2122,7 @@ export async function loginWithVault(input: {
     const state = await detectLoginState(s.page);
     if (state.loggedIn) {
       const data = await takeSnapshot(s.page);
-      touch(session.id, { url: data.url, title: data.title });
+      touchPage(session.id, data);
       logAction(session.id, 'agent', 'browser.login_with_vault', { vaultIdOnly: true }, '이미 로그인된 상태 — 건너뜀', data.url);
       return {
         sessionId: session.id,
@@ -2109,7 +2276,7 @@ export async function loginWithVault(input: {
       /* 핸드오버를 열지 못해도 결과는 그대로 돌려준다 */
     }
   }
-  touch(session.id, { url: data.url, title: data.title });
+  touchPage(session.id, data);
   void saveState(s);
   const note = dialogNote(s);
   logAction(
@@ -2221,7 +2388,7 @@ export async function requestHandover(reason: HandoverReason, detail: string, se
   return { sessionId: session.id, reason, label: HANDOVER_LABELS[reason], detail, expiresAt: expires };
 }
 
-export async function resumeFromHandover(sessionId?: string): Promise<{ sessionId: string; snapshot: string }> {
+export async function resumeFromHandover(sessionId?: string): Promise<{ sessionId: string; snapshot: string; convId: string | null }> {
   const session = sessionId ? row(sessionId) : activeSession();
   if (!session) throw new Error('열린 브라우저 세션이 없습니다.');
   touch(session.id, { control_owner: 'agent', handover_reason: null, control_detail: null, lease_expires_at: null });
@@ -2232,11 +2399,11 @@ export async function resumeFromHandover(sessionId?: string): Promise<{ sessionI
   );
   const s = await ensureLive(session.id);
   const data = await takeSnapshot(s.page);
-  touch(session.id, { url: data.url, title: data.title });
+  touchPage(session.id, data);
   logAction(session.id, 'user', 'handover.resume', {}, '사용자가 AI에게 제어권을 넘김', data.url);
   addLog('info', '사용자가 제어권을 AI에게 넘겼습니다');
   publish({ type: 'handover', title: '제어권을 다시 받았습니다', body: '이어서 작업을 진행할 수 있어요.', data: { sessionId: session.id, resumed: true } });
-  return { sessionId: session.id, snapshot: formatSnapshot(data, session.id) };
+  return { sessionId: session.id, snapshot: formatSnapshot(data, session.id), convId: session.conv_id };
 }
 
 /* ------------------------------------------------------------------ */

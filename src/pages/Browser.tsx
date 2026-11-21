@@ -214,9 +214,17 @@ export default function Browser() {
     if (!session) return;
     setBusy(true);
     try {
-      await api.post(`/api/browser/sessions/${session.id}/resume`);
+      // v0.7.1: 서버가 이 대화의 에이전트 턴을 자동으로 이어서 실행한다(다 됐어 입력 불필요).
+      const res = await api.post<{ autoResume?: boolean; reason?: string | null }>(
+        `/api/browser/sessions/${session.id}/resume`
+      );
       await loadStatus();
       setViewerFull(false);
+      setHint(
+        res?.autoResume
+          ? '인증을 마쳤어요. AI가 바로 이어서 진행합니다…'
+          : '화면을 돌려받았어요. 이어서 할 일이 있으면 채팅에서 말씀해 주세요.'
+      );
     } catch (err) {
       setHint(err instanceof Error ? err.message : '넘기지 못했어요.');
     } finally {
@@ -424,7 +432,7 @@ export default function Browser() {
                   onClick={giveBack}
                   disabled={busy}
                 >
-                  <CheckCircle2 size={15} /> 인증 완료 · AI 재개
+                  <CheckCircle2 size={15} /> 인증 완료 · 이어서 진행
                 </button>
                 <span className="rounded-full bg-[#FFE1EA] px-4 py-2 text-[13px] font-bold text-[#E2568B]">제어권: 나</span>
                 <Mascot name={profile.character as MascotName} hero size={44} />
@@ -595,8 +603,8 @@ export default function Browser() {
               <div className="flex items-center gap-3 rounded-[20px] bg-white px-4 py-3 shadow-card ring-1 ring-[#F6F4FB]">
                 <Mascot name={profile.character as MascotName} hero size={40} />
                 <div className="min-w-0 flex-1">
-                  <p className="text-[13.5px] font-bold text-[#3A2F7A]">실시간 화면에서 직접 입력해 주세요</p>
-                  <p className="text-[11.5px] text-[#8A8A9A]">인증이 끝나면 AI가 이어서 작업을 진행해요.</p>
+                  <p className="text-[13.5px] font-bold text-[#3A2F7A]">실시간 화면에서 인증을 마쳐 주세요</p>
+                  <p className="text-[11.5px] text-[#8A8A9A]">마친 뒤 아래 [인증 완료 · 이어서 진행]을 누르면 AI가 바로 이어갑니다.</p>
                 </div>
                 <Sparkles size={16} className="text-[#C9B8FF]" />
               </div>
@@ -716,7 +724,7 @@ export default function Browser() {
             onClick={giveBack}
             disabled={busy}
           >
-            <Sparkles size={17} /> 인증 완료 · AI에게 넘기기
+            <Sparkles size={17} /> 인증 완료 · 이어서 진행
           </button>
         </div>
       ) : null}

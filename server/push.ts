@@ -157,6 +157,26 @@ export interface PushPayload {
   tag?: string;
 }
 
+/**
+ * v0.7.1 — 알림을 누르면 그 대화·메시지·승인 카드로 바로 가는 딥링크.
+ *
+ * `/?room=<대화방>&msg=<메시지>&approval=<승인카드>` 형태로 만든다.
+ * 화면(Chat.tsx)이 이 쿼리를 읽어 방을 바꾸고 해당 지점으로 스크롤한 뒤 쿼리를 지운다.
+ * 같은 앱의 라우트(`/` = 채팅)를 그대로 쓰므로 새로고침·딥링크·PWA 실행이 모두 같은 길로 동작한다.
+ */
+export function chatDeepLink(data?: Record<string, unknown> | null): string {
+  const message = (data?.message ?? null) as { id?: unknown } | null;
+  const room = String(data?.room ?? data?.session ?? data?.sessionId ?? '').trim();
+  const messageId = Number(data?.msg ?? data?.messageId ?? message?.id ?? 0);
+  const approval = String(data?.approval ?? data?.approvalId ?? '').trim();
+  const params = new URLSearchParams();
+  if (room) params.set('room', room);
+  if (Number.isFinite(messageId) && messageId > 0) params.set('msg', String(messageId));
+  if (approval) params.set('approval', approval);
+  const query = params.toString();
+  return query ? `/?${query}` : '/';
+}
+
 export interface PushResult {
   sent: number;
   skipped: boolean;
@@ -245,7 +265,8 @@ export async function notify(payload: PushPayload, options: { force?: boolean } 
 /** 이벤트(예약·워치·핸드오버·채팅)를 백그라운드 알림으로도 내보낸다. */
 export function notifyForEvent(type: string, title: string, body: string, data?: Record<string, unknown>): void {
   // v0.5.2: 예약·워치 결과도 채팅방에 남으므로 어느 알림이든 앱을 열면 채팅이 보이게 한다.
-  const url = type === 'handover' ? '/browser' : '/';
+  // v0.7.1: 그 대화방·그 메시지·그 승인 카드로 바로 가도록 딥링크를 붙인다.
+  const url = type === 'handover' ? '/browser' : chatDeepLink(data);
   void notify({ title, body: body.slice(0, 180), url, tag: `${type}-${String(data?.jobId || data?.watcherId || data?.sessionId || '')}` }).catch(
     () => undefined
   );

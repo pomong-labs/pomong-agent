@@ -646,7 +646,7 @@ export function buildEmptyReply(
     return `${result.loopStopped}\n\n같은 시도가 반복되어 여기서 멈췄어요. 다른 방법으로 다시 해볼까요?`;
   }
   if (result.handover) {
-    return '로그인·인증 화면에서 멈췄어요. 브라우저 화면에서 직접 마무리해 주시면 그다음부터 제가 이어서 할게요.';
+    return '로그인·인증 화면에서 멈췄어요. 브라우저 화면에서 인증을 마친 뒤 화면을 돌려주시면(인증 완료 버튼) 제가 바로 이어서 진행할게요.';
   }
   if (result.blocked.length) {
     return `${result.blocked[0]} 작업은 허용되지 않아 진행하지 못했어요. 다른 방법으로 도와드릴까요?`;

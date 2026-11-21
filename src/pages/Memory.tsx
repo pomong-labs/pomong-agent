@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Brain, Check, Pencil, Plus, Search, Sparkles, Trash2, X } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Brain, Check, Network, Pencil, Pin, Plus, Search, Sparkles, Trash2, X } from 'lucide-react';
 import BackButton from '../components/BackButton';
 import Mascot from '../components/Mascot';
 import { api, type MemoryCategory, type MemoryItem } from '../lib/api';
@@ -17,6 +18,7 @@ const CATEGORY_TINT: Record<string, { bg: string; color: string }> = {
 };
 
 export default function MemoryPage() {
+  const navigate = useNavigate();
   const [items, setItems] = useState<MemoryItem[]>([]);
   const [categories, setCategories] = useState<MemoryCategory[]>([]);
   const [filter, setFilter] = useState<string>('all');
@@ -80,6 +82,22 @@ export default function MemoryPage() {
           </button>
         </div>
 
+        {/* v0.7.1: 개인 지식 그래프로 들어가는 길 */}
+        <button
+          type="button"
+          onClick={() => navigate('/memory/graph')}
+          className="mt-2.5 flex w-full items-center gap-2.5 rounded-[18px] px-4 py-3 text-left transition active:scale-[0.995]"
+          style={{ background: 'var(--accent-soft)', color: 'var(--accent-deep)' }}
+        >
+          <Network size={17} className="shrink-0" />
+          <span className="min-w-0 flex-1">
+            <span className="block text-[13.5px] font-bold">내 기억 그래프</span>
+            <span className="block text-[11.5px]" style={{ color: 'var(--accent-faint)' }}>
+              나를 중심으로 사람·프로젝트·취향이 어떻게 이어져 있는지 한눈에 봐요
+            </span>
+          </span>
+        </button>
+
         <div className="mt-3 flex items-center gap-1.5 overflow-x-auto no-scrollbar">
           {[{ id: 'all', label: '전체' }, ...categories].map((category) => (
             <button
@@ -107,6 +125,11 @@ export default function MemoryPage() {
                         {label(item.category)}
                       </span>
                       <span className="text-[10.5px] text-[#C0BCCD]">{'●'.repeat(item.importance)}{'○'.repeat(5 - item.importance)}</span>
+                      {item.pinned ? (
+                        <span className="flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-bold" style={{ background: 'var(--accent-soft)', color: 'var(--accent-deep)' }}>
+                          <Pin size={9} /> 고정
+                        </span>
+                      ) : null}
                       {item.source === 'chat' ? (
                         <span className="flex items-center gap-0.5 text-[10.5px] text-[#B9A8FF]">
                           <Sparkles size={10} /> 자동 저장

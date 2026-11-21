@@ -11,6 +11,7 @@ import Chat from './pages/Chat';
 import Login from './pages/Login';
 import FilesPage from './pages/Files';
 import MemoryPage from './pages/Memory';
+import MemoryGraphPage from './pages/MemoryGraph';
 import Monitor from './pages/Monitor';
 import More from './pages/More';
 import SettingsPage from './pages/Settings';
@@ -53,6 +54,33 @@ function SplashOverlay({ fading }: { fading: boolean }) {
       </div>
     </div>
   );
+}
+
+/**
+ * v0.7.1: 알림(서비스워커) → 화면 이동 브릿지.
+ * 알림을 누르면 서비스워커가 열린 창에 딥링크(`/?room=&msg=&approval=`)를 보내고,
+ * 이 리스너가 라우터로 이동시킨다. 창이 없으면 서비스워커가 새 창을 연다.
+ */
+function useNotificationDeepLink(): void {
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data as { type?: string; url?: string } | null;
+      if (!data || data.type !== 'pomong-deeplink' || typeof data.url !== 'string') return;
+      let target = data.url;
+      try {
+        const parsed = new URL(data.url, window.location.origin);
+        if (parsed.origin !== window.location.origin) return;
+        target = `${parsed.pathname}${parsed.search}`;
+      } catch {
+        return;
+      }
+      navigate(target || '/');
+    };
+    navigator.serviceWorker.addEventListener('message', onMessage);
+    return () => navigator.serviceWorker.removeEventListener('message', onMessage);
+  }, [navigate]);
 }
 
 function RequireAuth() {
@@ -110,6 +138,7 @@ const SPLASH_MAX_WAIT_MS = 1600;
 const SPLASH_FADE_MS = 300;
 
 export default function App() {
+  useNotificationDeepLink();
   /** PWA 실행이면 이미 네이티브 스플래시가 떴다 — 처음부터 'done'으로 시작해 건너뛴다 */
   const [splash, setSplash] = useState<'show' | 'fading' | 'done'>(() => (standalonePwa() ? 'done' : 'show'));
 
@@ -164,6 +193,7 @@ export default function App() {
             <Route path="automation" element={<Automation />} />
             <Route path="browser" element={<Browser />} />
             <Route path="memory" element={<MemoryPage />} />
+            <Route path="memory/graph" element={<MemoryGraphPage />} />
             <Route path="services" element={<Services />} />
             <Route path="tools" element={<Tools />} />
             <Route path="settings" element={<SettingsPage />} />

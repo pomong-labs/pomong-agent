@@ -1,5 +1,5 @@
 /* Pomong Agent service worker — keeps the app installable, always fresh, and receives web push. */
-const VERSION = 'pomong-agent-v0.7.0';
+const VERSION = 'pomong-agent-v0.7.1';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
@@ -83,19 +83,23 @@ self.addEventListener('notificationclick', (event) => {
   event.waitUntil(
     (async () => {
       const list = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-      for (const client of list) {
-        const url = new URL(client.url);
-        if (url.origin === self.location.origin) {
-          await client.focus();
-          if ('navigate' in client) {
-            try {
-              await client.navigate(target);
-            } catch {
-              /* focus만 해도 된다 */
-            }
-          }
-          return;
+      const sameOrigin = list.filter((client) => {
+        try {
+          return new URL(client.url).origin === self.location.origin;
+        } catch {
+          return false;
         }
+      });
+      const existing = sameOrigin.find((client) => client.focused) || sameOrigin[0];
+      if (existing) {
+        await existing.focus();
+        /**
+         * v0.7.1: 이미 열린 앱은 새로고침하지 않고, 딥링크만 화면에 넘긴다.
+         * 앱(App.tsx)이 이 메시지를 받아 해당 대화방·메시지·승인 카드로 이동한다.
+         * 메시지를 받을 리스너가 없을 때를 대비해 navigate 는 보조로만 쓴다.
+         */
+        existing.postMessage({ type: 'pomong-deeplink', url: target });
+        return;
       }
       await self.clients.openWindow(target);
     })()

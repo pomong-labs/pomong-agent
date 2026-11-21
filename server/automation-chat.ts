@@ -35,6 +35,8 @@ export interface AutomationChatResult {
   messageId: number;
   content: string;
   createdAt: string;
+  /** v0.7.1: 이 말풍선이 들어간 대화방(푸시 딥링크용) */
+  session: string;
 }
 
 const MAX_BODY_CHARS = 3500;
@@ -80,7 +82,7 @@ export function postAutomationMessage(input: AutomationChatInput): AutomationCha
       },
     });
     addLog('info', `${input.kind === 'job' ? '예약' : '워치'} 결과를 채팅방에 전달 · ${input.badge}`);
-    return { messageId, content, createdAt };
+    return { messageId, content, createdAt, session };
   } catch (err) {
     addLog('warn', `자동화 결과를 채팅방에 남기지 못했습니다: ${err instanceof Error ? err.message : String(err)}`);
     return null;

@@ -63,6 +63,7 @@ import * as mail from './mail';
 import { DEFAULT_ROUTING, TASK_KIND_META, TASK_KINDS, detectTaskKind, exaoneKeyStatus, normalizeRouting, resolveRoute, type RoutingSettings, type TaskKind } from './routing';
 import { selectToolNames, filterToolsByPrefs, normalizeToolPrefs, TOOL_GROUP_META, TOOL_GROUPS, DEFAULT_TOOL_PREFS, disabledToolNames, type ToolPrefs } from './tool-filter';
 import * as skills from './skills';
+import * as workflows from './workflows';
 import * as reactions from './reactions';
 import * as ddays from './ddays';
 import * as parcelWatch from './parcel-watch';
@@ -73,6 +74,7 @@ import { DEFAULT_CONTEXT_BUDGET } from './context-budget';
 import { guardExternalText } from './guardrails';
 import { maskingEnabled, setMaskingEnabled } from './privacy-mask';
 import type { TaskRunView } from './task-runs';
+import { HANDOVER_RESUME_COOLDOWN_MS, handoverResumeDecision, handoverResumeTrigger } from './handover-resume';
 
 ensureDataDir();
 
@@ -810,6 +812,10 @@ function systemPrompt(memoryBlock = '', skillBlock = ''): string {
       '금고에 그 사이트 계정이 이미 있으면(잠겨 있어도 vault_find_for_site로 확인돼) 로그인 카드(vault_request_login)를 띄우지 마. 금고가 잠겨 있을 때는 PIN 입력 카드 한 장만 뜨는 게 정상이고, 로그인 카드와 PIN 카드를 같이 안내하지 마. 로그인 카드는 금고에 그 서비스 계정이 진짜 없을 때만 써.'
     ),
     s(
+      '2단계 인증(OTP·인증번호)·캡차·패스키·이메일 인증 화면이 뜨거나 사용자가 브라우저 화면을 넘겨받은 상태에서는 vault_request_login(로그인 카드)을 **절대 다시 부르지 마세요**. 아이디·비밀번호 입력은 이미 끝났고, 사용자가 브라우저 화면에서 인증만 마치면 됩니다. 이때는 "브라우저 화면에서 인증을 마쳐 주시면 제가 바로 이어서 진행할게요"라고 짧게 안내하고 답변을 마치세요. 인증 후에는 서버가 이 대화를 자동으로 이어서 실행합니다. 이미 대화에 로그인 카드가 떠 있는데 사용자가 보지 못했을 수 있으니 같은 카드를 또 만들지도 마세요.',
+      '2단계 인증(OTP·인증번호)·캡차·패스키·이메일 인증 화면이 뜨거나 사용자가 브라우저 화면을 넘겨받은 상태에서는 vault_request_login(로그인 카드)을 **절대 다시 부르지 마**. 아이디·비밀번호 입력은 이미 끝났고, 사용자가 브라우저 화면에서 인증만 마치면 돼. 이때는 "브라우저 화면에서 인증을 마쳐 주시면 제가 바로 이어서 진행할게요"라고 짧게 안내하고 답변을 마쳐. 인증 뒤에는 서버가 이 대화를 자동으로 이어서 실행해. 이미 대화에 로그인 카드가 떠 있는데 사용자가 못 봤을 수 있으니까 같은 카드를 또 만들지도 마.'
+    ),
+    s(
       '쿠팡·무신사처럼 봇을 막는 사이트에서 browser_open이 막히거나 오류가 나면, 곧바로 web_search로 같은 정보를 찾아 답하세요. 사이트 안에서만 볼 수 있는 값(내 주문·장바구니·재고)은 추측하지 말고 그 사실을 알려 주세요.',
       '쿠팡·무신사처럼 봇을 막는 사이트에서 browser_open이 막히거나 오류가 나면, 바로 web_search로 같은 정보를 찾아 답해. 사이트 안에서만 볼 수 있는 값(내 주문·장바구니·재고)은 추측하지 말고 그 사실을 알려 줘.'
     ),
@@ -1100,7 +1106,7 @@ interface ChatTurnInput {
   /** 메타(카드) 판별에 쓸 사용자 요청 원문 */
   prompt: string;
   /** 로그인 카드 저장처럼 시스템이 이어서 시키는 턴 */
-  trigger?: 'login_card' | 'vault_unlock';
+  trigger?: 'login_card' | 'vault_unlock' | 'handover_resume';
   /** v0.5.4: '■ 중지' 버튼으로 끊을 수 있는 신호 */
   signal?: AbortSignal;
   /**
@@ -1427,6 +1433,18 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
           detail: info.detail,
           reason: info.reason,
         });
+        /**
+         * v0.7.1: 앱을 보고 있지 않으면 그 승인 카드로 바로 가는 알림을 보낸다.
+         * 알림을 누르면 /?room=<방>&approval=<카드> 로 열려 해당 카드가 보이는 곳까지 내려간다.
+         */
+        void push
+          .notify({
+            title: `${info.title} · 승인이 필요해요`,
+            body: info.detail.slice(0, 180),
+            url: push.chatDeepLink({ session, approval: card.id }),
+            tag: `approval-${card.id}`,
+          })
+          .catch(() => undefined);
         return { id: card.id };
       },
       onGuardrail: (_name, warning) => {
@@ -2401,16 +2419,127 @@ async function runVaultUnlockFollowUp(request: vaultUnlock.VaultUnlockRequestVie
 }
 
 
+/**
+ * v0.7.1: 브라우저 핸드오버(2FA·캡차·로그인)를 마치고 화면을 돌려주면
+ * 사용자가 "다 됐어"를 치지 않아도 그 대화의 에이전트 턴을 이어서 실행한다.
+ *
+ * 중복 실행 가드:
+ *   ① 같은 대화에서 20초 안에 또 요청되면 무시(버튼 두 번·이중 POST)
+ *   ② 그 대화의 턴이 이미 돌고 있으면 무시(liveTurns)
+ *   ③ 대화 기록이 없으면 재개할 것이 없다
+ *   ④ 사용자가 '취소'한 경우는 호출되지 않는다(이 함수는 resume 성공 때만 부른다)
+ */
+const handoverFollowUps = new Map<string, { at: number; sessionId: string }>();
+
+function scheduleHandoverFollowUp(sessionId: string, convId: string | null): { started: boolean; reason?: string } {
+  const decision = handoverResumeDecision({
+    convId,
+    now: Date.now(),
+    previousAt: convId ? handoverFollowUps.get(convId)?.at ?? null : null,
+    busy: Boolean(convId && liveTurns.has(convId)),
+    hasHistory: Boolean(convId && db.prepare('SELECT 1 AS ok FROM messages WHERE session_id = ? LIMIT 1').get(convId)),
+    cooldownMs: HANDOVER_RESUME_COOLDOWN_MS,
+  });
+  if (!decision.started || !convId) return decision;
+  handoverFollowUps.set(convId, { at: Date.now(), sessionId });
+  void runHandoverFollowUp(convId, sessionId);
+  return decision;
+}
+
+async function runHandoverFollowUp(convId: string, sessionId: string): Promise<void> {
+  const config = activeConfig();
+  if (!config.apiKeyEnc) {
+    addLog('warn', '화면은 돌려받았지만 AI 키가 없어 자동 재개를 건너뛰었습니다');
+    return;
+  }
+  const session = browser.listSessions().find((item) => item.id === sessionId) || null;
+  const stillVerifying = browser.isAwaitingVerification();
+  const state = browser.getHandoverState();
+  const trigger = handoverResumeTrigger({
+    stillVerifying,
+    label: state.label,
+    url: session?.url || null,
+    title: session?.title || null,
+  });
+  const history = db
+    .prepare('SELECT role, content FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT 20')
+    .all(convId) as { role: string; content: string }[];
+  const turns = history
+    .reverse()
+    .map((m) => ({ role: m.role === 'assistant' ? ('assistant' as const) : ('user' as const), content: m.content }));
+  turns.push({ role: 'user', content: trigger });
+  const startedAt = new Date().toISOString();
+  addLog('info', `화면 돌려받음 · 자동 재개 (${convId})`);
+  publish({
+    type: 'handover',
+    title: '이어서 진행합니다',
+    body: '인증을 마친 화면에서 바로 다음 단계를 진행할게요.',
+    data: { sessionId, conversation: convId, autoResume: true, startedAt },
+  });
+  try {
+    await runChatTurn({
+      session: convId,
+      history: turns,
+      prompt: '브라우저 인증 이어서',
+      trigger: 'handover_resume',
+    });
+  } catch (err) {
+    addLog('error', `화면 돌려받은 뒤 자동 재개 실패: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 /* ------------------------------ memory ---------------------------- */
 
 app.get('/api/memory', requireAuth, (req, res) => {
   const category = String(req.query.category || 'all');
+  const includeSuperseded = String(req.query.includeSuperseded || '') === '1';
   res.json({
     ok: true,
-    memories: memory.listMemories(category),
+    memories: memory.listMemories(category, 200, { includeSuperseded }),
     categories: memory.MEMORY_CATEGORIES,
     count: memory.memoryCount(),
+    /** v0.7.1: 같은 주제의 새 기억으로 대체된 '이전 버전' 수 */
+    supersededCount: memory.supersededCount(),
   });
+});
+
+/**
+ * v0.7.1: 개인 지식 그래프 — 나 → 분류 → 기억 + 기억끼리의 유사·수동 연결.
+ * 기억이 적어도 깨지지 않는다(나 노드만 있는 빈 그래프).
+ */
+app.get('/api/memory/graph', requireAuth, (req, res) => {
+  const category = String(req.query.category || 'all');
+  res.json({ ok: true, graph: memory.buildMemoryGraph({ category }) });
+});
+
+/** v0.7.1: 그래프에서 두 기억을 잇거나 연결을 뺀다. */
+app.post('/api/memory/graph/edge', requireAuth, (req, res) => {
+  const body = (req.body ?? {}) as { a?: unknown; b?: unknown; action?: unknown };
+  const a = String(body.a ?? '');
+  const b = String(body.b ?? '');
+  const action = String(body.action ?? 'link');
+  const ok = action === 'unlink' ? memory.unlinkMemories(a, b) : memory.linkMemories(a, b);
+  if (!ok) {
+    res.status(400).json({ ok: false, code: 'edge_failed', message: '기억 두 개를 확인해 주세요(이미 이어져 있거나 없는 기억입니다).' });
+    return;
+  }
+  res.json({ ok: true, graph: memory.buildMemoryGraph() });
+});
+
+/** v0.7.1: 중복·구버전 정리(수동). 행은 지우지 않고 '이전 버전' 표시만 한다. */
+app.post('/api/memory/consolidate', requireAuth, (_req, res) => {
+  const result = memory.consolidateMemories();
+  if (result.superseded > 0) addLog('info', `기억 최신화 · ${result.superseded}개를 이전 버전으로 정리했습니다`);
+  res.json({ ok: true, ...result, count: memory.memoryCount(), supersededCount: memory.supersededCount() });
+});
+
+/** v0.7.1: 잘못 '이전 버전'으로 표시된 기억 되살리기 */
+app.post('/api/memory/:id/restore', requireAuth, (req, res) => {
+  try {
+    res.json({ ok: true, memory: memory.restoreMemory(String(req.params.id)) });
+  } catch (err) {
+    res.status(404).json({ ok: false, code: 'memory_not_found', message: err instanceof Error ? err.message : String(err) });
+  }
 });
 
 app.post('/api/memory', requireAuth, (req, res) => {
@@ -2430,7 +2559,10 @@ app.post('/api/memory', requireAuth, (req, res) => {
 
 app.patch('/api/memory/:id', requireAuth, (req, res) => {
   try {
-    const updated = memory.updateMemory(req.params.id, req.body as { content?: string; category?: string; importance?: number });
+    const updated = memory.updateMemory(
+      req.params.id,
+      req.body as { content?: string; category?: string; importance?: number; pinned?: boolean; tags?: string[] }
+    );
     res.json({ ok: true, memory: updated });
   } catch (err) {
     res.status(400).json({ ok: false, code: 'memory_update_failed', message: err instanceof Error ? err.message : String(err) });
@@ -2754,7 +2886,28 @@ app.get('/api/tools', requireAuth, (_req, res) => {
       };
     }),
   }));
-  res.json({ ok: true, tools: TOOL_CATALOG, groups, prefs, disabledCount: disabledToolNames(prefs).size });
+  /**
+   * v0.7.1: 단계별 워크플로우 빌더가 쓰는 도구 목록 — 인자 이름·설명까지 내려보낸다.
+   * 비밀값·발송처럼 자동 실행하면 안 되는 도구는 빌더에서 빼 둔다(서버도 한 번 더 막는다).
+   */
+  const workflowTools = TOOL_SPECS.filter((spec) => !workflows.BLOCKED_TOOLS.has(spec.name)).map((spec) => {
+    const params = (spec.parameters as { properties?: Record<string, { type?: string; description?: string; enum?: string[] }> } | undefined)
+      ?.properties || {};
+    const required = ((spec.parameters as { required?: string[] } | undefined)?.required || []) as string[];
+    return {
+      name: spec.name,
+      label: TOOL_LABELS[spec.name] || spec.name,
+      summary: catalog.get(spec.name)?.summary || spec.description,
+      params: Object.entries(params).map(([name, schema]) => ({
+        name,
+        type: schema.type || 'string',
+        description: schema.description || '',
+        required: required.includes(name),
+        options: Array.isArray(schema.enum) ? schema.enum : undefined,
+      })),
+    };
+  });
+  res.json({ ok: true, tools: TOOL_CATALOG, groups, prefs, workflowTools, disabledCount: disabledToolNames(prefs).size });
 });
 
 /** 기본 도구 ON/OFF 저장 */
@@ -2767,7 +2920,67 @@ app.post('/api/tools/prefs', requireAuth, (req, res) => {
 /* ----------------------- 나만의 지침 도구(v0.6.6) ------------------ */
 
 app.get('/api/skills', requireAuth, (_req, res) => {
-  res.json({ ok: true, skills: skills.listSkills(), templates: skills.SKILL_TEMPLATES });
+  res.json({
+    ok: true,
+    skills: skills.listSkills(),
+    templates: skills.SKILL_TEMPLATES,
+    // v0.7.1: 단계별 조립 탭의 예시 워크플로우
+    workflowTemplates: skills.workflowTemplatesForClient(),
+  });
+});
+
+/**
+ * v0.7.1: 저장 전 워크플로우 테스트 실행.
+ * 넘어온 단계를 그대로 돌려 각 단계 출력·소요시간을 돌려준다(DB에 저장하지 않는다).
+ */
+app.post('/api/skills/workflow/test', requireAuth, async (req, res) => {
+  const body = (req.body ?? {}) as { steps?: unknown; input?: unknown; name?: unknown };
+  const checked = workflows.validateWorkflowSteps(body.steps);
+  if ('error' in checked) {
+    res.status(400).json({ ok: false, code: 'invalid_workflow', message: checked.error });
+    return;
+  }
+  try {
+    const run = await workflows.runWorkflowSteps(checked.steps, {
+      input: String(body.input ?? ''),
+      session: 'default',
+      name: String(body.name ?? '테스트 실행'),
+      notify: true,
+    });
+    res.json({ ok: true, run });
+  } catch (err) {
+    res.status(500).json({ ok: false, code: 'workflow_test_failed', message: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/** v0.7.1: 저장된 워크플로우 즉시 실행 */
+app.post('/api/skills/:id/run', requireAuth, async (req, res) => {
+  const skill = skills.getSkill(String(req.params.id));
+  if (!skill) {
+    res.status(404).json({ ok: false, code: 'skill_not_found', message: '도구를 찾을 수 없습니다.' });
+    return;
+  }
+  if (skill.mode !== 'workflow') {
+    res.status(400).json({ ok: false, code: 'not_workflow', message: '이 도구는 단계별 워크플로우가 아닙니다.' });
+    return;
+  }
+  if (!skill.enabled) {
+    res.status(400).json({ ok: false, code: 'skill_disabled', message: '꺼져 있는 워크플로우입니다. 먼저 켜 주세요.' });
+    return;
+  }
+  const body = (req.body ?? {}) as { input?: unknown; session?: unknown };
+  try {
+    const run = await workflows.runWorkflowSteps(skill.steps, {
+      input: String(body.input ?? ''),
+      session: String(body.session ?? 'default'),
+      name: skill.name,
+      notify: true,
+    });
+    workflows.logWorkflowRun(skill.name, run);
+    res.json({ ok: true, run });
+  } catch (err) {
+    res.status(500).json({ ok: false, code: 'workflow_run_failed', message: err instanceof Error ? err.message : String(err) });
+  }
 });
 
 app.post('/api/skills', requireAuth, (req, res) => {
@@ -2814,6 +3027,21 @@ app.post('/api/skills/templates/:id', requireAuth, (req, res) => {
     return;
   }
   addLog('info', `지침 도구 템플릿 추가 · ${result.name}`);
+  res.json({ ok: true, existing: false, skill: result });
+});
+
+/** v0.7.1: 워크플로우 템플릿 추가 */
+app.post('/api/skills/workflow-templates/:id', requireAuth, (req, res) => {
+  const result = skills.addWorkflowTemplate(String(req.params.id));
+  if ('error' in result) {
+    res.status(404).json({ ok: false, code: 'template_not_found', message: result.error });
+    return;
+  }
+  if ('existing' in result) {
+    res.json({ ok: true, existing: true, skill: result.existing });
+    return;
+  }
+  addLog('info', `워크플로우 템플릿 추가 · ${result.name}`);
   res.json({ ok: true, existing: false, skill: result });
 });
 
@@ -3259,7 +3487,12 @@ app.post('/api/browser/sessions/:id/handover', requireAuth, async (req, res) => 
 app.post('/api/browser/sessions/:id/resume', requireAuth, async (req, res) => {
   try {
     const result = await browser.resumeFromHandover(req.params.id);
-    res.json({ ok: true, sessionId: result.sessionId });
+    /**
+     * v0.7.1: '인증 완료 · AI에게 넘기기'를 누르면 그 대화의 에이전트 턴을 자동으로 이어서 실행한다.
+     * (사용자가 채팅에 "다 됐어"를 치지 않아도 된다) — 중복 실행 가드는 scheduleHandoverFollowUp 안에 있다.
+     */
+    const followUp = scheduleHandoverFollowUp(result.sessionId, result.convId);
+    res.json({ ok: true, sessionId: result.sessionId, autoResume: followUp.started, reason: followUp.reason || null });
   } catch (err) {
     res.status(400).json({ ok: false, code: 'resume_failed', message: err instanceof Error ? err.message : String(err) });
   }
@@ -3589,7 +3822,7 @@ const server = app.listen(PORT, HOST, () => {
           type: 'job',
           title: failed ? `${job.name} 실패` : approval ? `${job.name} · 승인이 필요해요` : `${job.name} 완료`,
           body: body.slice(0, 300),
-          data: { jobId: job.id, runId: run.id, status: run.status, chatMessageId: posted?.messageId || null },
+          data: { jobId: job.id, runId: run.id, status: run.status, chatMessageId: posted?.messageId || null, session: posted?.session || 'default', msg: posted?.messageId || null },
         },
         // 채팅 선톡이 이미 푸시를 보냈으면 중복 알림을 막는다.
         { push: !posted }
@@ -3617,7 +3850,7 @@ const server = app.listen(PORT, HOST, () => {
         type: 'watch',
         title: event.kind === 'changed' ? `${watcher.name} 변경 감지` : `${watcher.name} · ${event.kind}`,
         body: (event.diffSummary || '').slice(0, 300),
-        data: { watcherId: watcher.id, eventId: event.id, kind: event.kind, url: watcher.url, chatMessageId: posted?.messageId || null },
+        data: { watcherId: watcher.id, eventId: event.id, kind: event.kind, url: watcher.url, chatMessageId: posted?.messageId || null, session: posted?.session || 'default', msg: posted?.messageId || null },
       },
       { push: !posted }
     );
@@ -3655,6 +3888,8 @@ const server = app.listen(PORT, HOST, () => {
           trackingNumber: notice.watch.trackingNumber,
           carrier: notice.watch.carrier,
           chatMessageId: posted?.messageId || null,
+          session,
+          msg: posted?.messageId || null,
         },
       },
       { push: !posted }

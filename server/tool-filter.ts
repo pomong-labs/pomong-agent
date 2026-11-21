@@ -34,6 +34,8 @@ export const CORE_TOOLS = [
   'memory_search',
   // v0.6.19: 지침 본문을 매 턴 바로 꺼내 쓸 수 있게 늘 켜 둔다.
   'read_skill',
+  // v0.7.1: 단계별 워크플로우 실행(사용자가 만든 도구를 이름으로 부를 때)
+  'run_workflow',
   'tasks_list',
   'tasks_add',
   'tasks_complete',

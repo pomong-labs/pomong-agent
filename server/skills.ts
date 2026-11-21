@@ -10,6 +10,14 @@
 
 import crypto from 'node:crypto';
 import { db } from './db';
+import { normalizeWorkflowSteps, validateWorkflowSteps, WORKFLOW_TEMPLATES, type WorkflowStep } from './workflows';
+
+/**
+ * v0.7.1: 커스텀 도구는 두 모드다.
+ *  · prompt   — 지침 문장을 시스템 프롬프트에 넣는다(v0.6.6 방식 그대로)
+ *  · workflow — 단계(tool·ai·action)를 서버가 순서대로 실행한다(server/workflows.ts)
+ */
+export type SkillMode = 'prompt' | 'workflow';
 
 export interface CustomSkill {
   id: string;
@@ -23,6 +31,10 @@ export interface CustomSkill {
   /** 키워드와 상관없이 항상 적용 */
   alwaysApply: boolean;
   enabled: boolean;
+  /** v0.7.1: 'prompt'(글로 쓰기) | 'workflow'(단계별 조립) */
+  mode: SkillMode;
+  /** v0.7.1: mode='workflow'일 때의 단계들 */
+  steps: WorkflowStep[];
   createdAt: string;
   updatedAt: string;
 }
@@ -33,6 +45,9 @@ export interface SkillInput {
   instructions?: unknown;
   alwaysApply?: unknown;
   enabled?: unknown;
+  /** v0.7.1 */
+  mode?: unknown;
+  steps?: unknown;
 }
 
 export interface SkillTemplate {
@@ -122,6 +137,12 @@ export function normalizeKeywords(value: unknown): string[] {
   return out;
 }
 
+export function normalizeMode(value: unknown, fallback: SkillMode = 'prompt'): SkillMode {
+  const mode = String(value ?? '').trim().toLowerCase();
+  if (mode === 'workflow' || mode === 'prompt') return mode;
+  return fallback;
+}
+
 function toBool(value: unknown, fallback: boolean): boolean {
   if (typeof value === 'boolean') return value;
   if (value === 'true' || value === 1 || value === '1') return true;
@@ -140,8 +161,19 @@ interface SkillRow {
   instructions: string;
   always_on: number;
   enabled: number;
+  mode: string | null;
+  steps_json: string | null;
   created_at: string;
   updated_at: string;
+}
+
+function parseSteps(raw: string | null): WorkflowStep[] {
+  if (!raw) return [];
+  try {
+    return normalizeWorkflowSteps(JSON.parse(raw));
+  } catch {
+    return [];
+  }
 }
 
 function toSkill(row: SkillRow): CustomSkill {
@@ -152,12 +184,15 @@ function toSkill(row: SkillRow): CustomSkill {
     instructions: row.instructions,
     alwaysApply: Boolean(row.always_on),
     enabled: Boolean(row.enabled),
+    mode: normalizeMode(row.mode),
+    steps: parseSteps(row.steps_json),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }
 
-const SELECT = 'SELECT id, name, keywords, instructions, always_on, enabled, created_at, updated_at FROM custom_skills';
+const SELECT =
+  'SELECT id, name, keywords, instructions, always_on, enabled, mode, steps_json, created_at, updated_at FROM custom_skills';
 
 /* ------------------------------------------------------------------ */
 /* CRUD                                                               */
@@ -173,9 +208,34 @@ export function getSkill(id: string): CustomSkill | null {
   return row ? toSkill(row) : null;
 }
 
-function validInput(input: SkillInput): { name: string; keywords: string[]; instructions: string; alwaysApply: boolean; enabled: boolean } | { error: string } {
+interface CleanSkill {
+  name: string;
+  keywords: string[];
+  instructions: string;
+  alwaysApply: boolean;
+  enabled: boolean;
+  mode: SkillMode;
+  steps: WorkflowStep[];
+}
+
+function validInput(input: SkillInput): CleanSkill | { error: string } {
   const name = cleanText(input.name, SKILL_LIMITS.name);
   if (!name) return { error: '도구 이름을 입력해 주세요.' };
+  const mode = normalizeMode(input.mode);
+  if (mode === 'workflow') {
+    const checked = validateWorkflowSteps(input.steps);
+    if ('error' in checked) return checked;
+    return {
+      name,
+      keywords: normalizeKeywords(input.keywords),
+      // 워크플로우는 지침 문장이 없어도 된다(있으면 실행 후 안내 문구로 쓴다).
+      instructions: cleanText(input.instructions, SKILL_LIMITS.instructions),
+      alwaysApply: toBool(input.alwaysApply, false),
+      enabled: toBool(input.enabled, true),
+      mode,
+      steps: checked.steps,
+    };
+  }
   const instructions = cleanText(input.instructions, SKILL_LIMITS.instructions);
   if (!instructions) return { error: '지침 내용을 입력해 주세요.' };
   return {
@@ -184,6 +244,9 @@ function validInput(input: SkillInput): { name: string; keywords: string[]; inst
     instructions,
     alwaysApply: toBool(input.alwaysApply, false),
     enabled: toBool(input.enabled, true),
+    mode,
+    // v0.7.1: 글로 쓰기 모드로 돌아가도 조립해 둔 단계를 잃지 않는다(다시 전환하면 그대로 돌아온다).
+    steps: normalizeWorkflowSteps((input as { steps?: unknown }).steps),
   };
 }
 
@@ -193,8 +256,19 @@ export function createSkill(input: SkillInput): CustomSkill | { error: string } 
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
   db.prepare(
-    'INSERT INTO custom_skills(id, name, keywords, instructions, always_on, enabled, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?)'
-  ).run(id, clean.name, clean.keywords.join(', '), clean.instructions, clean.alwaysApply ? 1 : 0, clean.enabled ? 1 : 0, now, now);
+    'INSERT INTO custom_skills(id, name, keywords, instructions, always_on, enabled, mode, steps_json, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)'
+  ).run(
+    id,
+    clean.name,
+    clean.keywords.join(', '),
+    clean.instructions,
+    clean.alwaysApply ? 1 : 0,
+    clean.enabled ? 1 : 0,
+    clean.mode,
+    JSON.stringify(clean.steps),
+    now,
+    now
+  );
   return getSkill(id) as CustomSkill;
 }
 
@@ -208,12 +282,24 @@ export function updateSkill(id: string, input: SkillInput): CustomSkill | { erro
     instructions: input.instructions ?? current.instructions,
     alwaysApply: input.alwaysApply ?? current.alwaysApply,
     enabled: input.enabled ?? current.enabled,
+    mode: input.mode ?? current.mode,
+    steps: input.steps ?? current.steps,
   };
   const clean = validInput(merged);
   if ('error' in clean) return clean;
   db.prepare(
-    'UPDATE custom_skills SET name = ?, keywords = ?, instructions = ?, always_on = ?, enabled = ?, updated_at = ? WHERE id = ?'
-  ).run(clean.name, clean.keywords.join(', '), clean.instructions, clean.alwaysApply ? 1 : 0, clean.enabled ? 1 : 0, new Date().toISOString(), id);
+    'UPDATE custom_skills SET name = ?, keywords = ?, instructions = ?, always_on = ?, enabled = ?, mode = ?, steps_json = ?, updated_at = ? WHERE id = ?'
+  ).run(
+    clean.name,
+    clean.keywords.join(', '),
+    clean.instructions,
+    clean.alwaysApply ? 1 : 0,
+    clean.enabled ? 1 : 0,
+    clean.mode,
+    JSON.stringify(clean.steps),
+    new Date().toISOString(),
+    id
+  );
   return getSkill(id);
 }
 
@@ -234,7 +320,44 @@ export function addTemplate(templateId: string): CustomSkill | { error: string }
     instructions: template.instructions,
     alwaysApply: false,
     enabled: true,
+    mode: 'prompt',
   });
+}
+
+/** v0.7.1: 워크플로우 예시 템플릿도 같은 버튼으로 추가한다. */
+export function addWorkflowTemplate(templateId: string): CustomSkill | { error: string } | { existing: CustomSkill } {
+  const template = WORKFLOW_TEMPLATES.find((item) => item.id === templateId);
+  if (!template) return { error: '워크플로우 템플릿을 찾을 수 없습니다.' };
+  const existing = listSkills().find((s) => s.name === template.name);
+  if (existing) return { existing };
+  return createSkill({
+    name: template.name,
+    keywords: template.keywords,
+    instructions: template.summary,
+    alwaysApply: false,
+    enabled: true,
+    mode: 'workflow',
+    steps: template.steps.map((step) => ({ ...step, id: crypto.randomUUID(), args: step.args ? { ...step.args } : undefined })),
+  });
+}
+
+/** 화면·API에 함께 내려보내는 워크플로우 템플릿(단계 포함) */
+export function workflowTemplatesForClient(): {
+  id: string;
+  name: string;
+  summary: string;
+  keywords: string[];
+  sampleInput: string;
+  steps: WorkflowStep[];
+}[] {
+  return WORKFLOW_TEMPLATES.map((item) => ({
+    id: item.id,
+    name: item.name,
+    summary: item.summary,
+    keywords: item.keywords,
+    sampleInput: item.sampleInput,
+    steps: item.steps,
+  }));
 }
 
 /* ------------------------------------------------------------------ */
@@ -326,6 +449,7 @@ function nameHits(squeezedText: string, wordList: string[], name: string): boole
  *  · 키워드 일치(띄어쓰기·조사 차이 흡수)
  *  · 키워드가 비어 있는 지침(기본 안내)
  *  · 지침 자체를 언급한 요청("방금 만든 지침 적용해") → 활성 지침 전부
+ * v0.7.1: 워크플로우(mode='workflow')는 지침 본문이 아니라 run_workflow 로 실행하므로 여기서 빠진다.
  */
 export function matchSkills(request: string, skills: CustomSkill[] = listSkills()): CustomSkill[] {
   const text = String(request || '').toLowerCase();
@@ -334,6 +458,7 @@ export function matchSkills(request: string, skills: CustomSkill[] = listSkills(
   const explicit = mentionsSkillTools(text);
   return skills.filter((skill) => {
     if (!skill.enabled) return false;
+    if (skill.mode === 'workflow') return false;
     if (skill.alwaysApply) return true;
     if (explicit) return true;
     if (nameHits(squeezedText, wordList, skill.name)) return true;
@@ -343,8 +468,37 @@ export function matchSkills(request: string, skills: CustomSkill[] = listSkills(
   });
 }
 
+/**
+ * v0.7.1: 이번 요청에 맞는 워크플로우(실행 후보).
+ * 워크플로우는 지침처럼 매번 본문을 넣지 않고, 시스템 프롬프트에는 목록만 보여 준다.
+ */
+export function matchWorkflows(request: string, skills: CustomSkill[] = listSkills()): CustomSkill[] {
+  const text = String(request || '').toLowerCase();
+  const squeezedText = squeeze(text);
+  const wordList = words(text);
+  return skills.filter((skill) => {
+    if (!skill.enabled || skill.mode !== 'workflow') return false;
+    if (nameHits(squeezedText, wordList, skill.name)) return true;
+    return skill.keywords.some((keyword) => keywordHits(text, squeezedText, wordList, keyword));
+  });
+}
+
+/** 워크플로우 한 단계를 사람이 읽는 한 줄로 */
+export function stepSummaryLine(step: WorkflowStep, index: number): string {
+  const head = `${index + 1}. `;
+  if (step.kind === 'tool') {
+    const args = Object.entries(step.args || {})
+      .map(([key, value]) => `${key}=${String(value).replace(/\s+/g, ' ').slice(0, 40)}`)
+      .join(', ');
+    return `${head}[도구] ${step.tool || '?'}${args ? ` (${args})` : ''}`;
+  }
+  if (step.kind === 'ai') return `${head}[AI] ${String(step.prompt || '').replace(/\s+/g, ' ').slice(0, 90)}`;
+  return `${head}[${step.action === 'todo' ? '할 일' : '알림'}] ${String(step.text || '').replace(/\s+/g, ' ').slice(0, 70)}`;
+}
+
 /** 지침 한 줄 요약 — 목록·도구 응답에 쓴다 */
 export function skillSummaryLine(skill: CustomSkill): string {
+  if (skill.mode === 'workflow') return `- ${skill.name} (워크플로우 · ${skill.steps.length}단계)`;
   if (skill.alwaysApply) return '- ' + skill.name + ' (항상 적용)';
   if (skill.keywords.length === 0) return '- ' + skill.name + ' (키워드 없음 · 기본 적용)';
   return '- ' + skill.name + ' — ' + skill.keywords.join(', ');
@@ -352,6 +506,16 @@ export function skillSummaryLine(skill: CustomSkill): string {
 
 /** 지침 본문 한 덩어리 (read_skill 응답) */
 export function skillBody(skill: CustomSkill): string {
+  if (skill.mode === 'workflow') {
+    const lines = [
+      `### ${skill.name} (워크플로우 · ${skill.steps.length}단계)`,
+      skill.instructions ? skill.instructions : '',
+      ...skill.steps.map((step, index) => stepSummaryLine(step, index)),
+      skill.enabled ? '실행: run_workflow 도구에 이 이름과 입력을 넣으면 서버가 단계를 순서대로 실행합니다.' : '',
+      skill.enabled ? '' : '(이 워크플로우는 지금 꺼져 있습니다. 쓰려면 사용자가 도구 관리에서 켜야 합니다.)',
+    ].filter((line) => line !== '');
+    return lines.join('\n');
+  }
   const tag = skill.alwaysApply
     ? '항상 적용'
     : skill.keywords.length === 0
@@ -403,10 +567,13 @@ export function readSkillForTool(query: unknown, all = false): { content: string
  */
 export function skillPromptBlock(request: string, skills: CustomSkill[] = listSkills(), precomputed?: CustomSkill[]): string {
   const enabled = skills.filter((s) => s.enabled);
+  const promptSkills = enabled.filter((s) => s.mode !== 'workflow');
+  const workflows = enabled.filter((s) => s.mode === 'workflow');
   if (enabled.length === 0) return '';
-  const active = precomputed ?? matchSkills(request, enabled);
+  const active = precomputed ?? matchSkills(request, promptSkills);
   const activeIds = new Set(active.map((s) => s.id));
-  const rest = enabled.filter((s) => !activeIds.has(s.id));
+  const rest = promptSkills.filter((s) => !activeIds.has(s.id));
+  const matchedWorkflows = matchWorkflows(request, workflows);
 
   const lines: string[] = [
     '[사용자 지침 도구]',
@@ -436,6 +603,23 @@ export function skillPromptBlock(request: string, skills: CustomSkill[] = listSk
       '',
       '[다른 지침 도구 — 내용은 생략, 필요하면 read_skill로 읽기]',
       ...rest.map((s) => skillSummaryLine(s))
+    );
+  }
+  /**
+   * v0.7.1: 단계별 워크플로우 목록.
+   * 사용자가 "그 워크플로우 돌려줘"라고 하면 run_workflow(이름, input)으로 서버가 대신 실행한다.
+   * (지침 본문을 토큰으로 넣지 않고, 단계 실행은 서버가 한다)
+   */
+  if (workflows.length) {
+    lines.push(
+      '',
+      '[저장된 워크플로우 — run_workflow(이름, input)로 실행]',
+      "워크플로우는 여러 단계(도구 실행·AI 가공·알림/할 일)를 서버가 순서대로 처리합니다. 사용자가 이름을 부르거나 이번 요청이 아래 워크플로우와 맞으면, 직접 도구를 하나씩 부르지 말고 run_workflow에 이름과 입력(input)을 넣어 실행한 뒤 결과를 요약해 알려 주세요.",
+      ...workflows.map((s) =>
+        matchedWorkflows.some((m) => m.id === s.id)
+          ? `- ${s.name} (워크플로우 · ${s.steps.length}단계 · 이번 요청과 일치${s.keywords.length ? `: ${s.keywords.join(', ')}` : ''})`
+          : skillSummaryLine(s)
+      )
     );
   }
   return lines.join('\n');

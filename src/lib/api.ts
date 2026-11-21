@@ -209,6 +209,12 @@ export interface MemoryItem {
   source: string | null;
   createdAt: string;
   updatedAt: string;
+  /** v0.7.1: 이 기억을 대신하는 최신 기억(있으면 '이전 버전') */
+  supersededBy?: string | null;
+  /** v0.7.1: 중요 고정 */
+  pinned?: boolean;
+  /** v0.7.1: 검색·그래프용 키워드 */
+  tags?: string[];
 }
 
 export interface MemoryCategory {
@@ -565,8 +571,99 @@ export interface CustomSkill {
   instructions: string;
   alwaysApply: boolean;
   enabled: boolean;
+  /** v0.7.1: 'prompt'(글로 쓰기) | 'workflow'(단계별 조립) */
+  mode: 'prompt' | 'workflow';
+  /** v0.7.1: 단계별 워크플로우의 단계들 */
+  steps: WorkflowStep[];
   createdAt: string;
   updatedAt: string;
+}
+
+/** v0.7.1: 단계별 워크플로우 */
+export type WorkflowStepKind = 'tool' | 'ai' | 'action';
+
+export interface WorkflowStep {
+  id: string;
+  kind: WorkflowStepKind;
+  label: string;
+  tool?: string;
+  args?: Record<string, string>;
+  prompt?: string;
+  action?: 'notify' | 'todo';
+  text?: string;
+  continueOnError?: boolean;
+}
+
+export interface WorkflowStepResult {
+  index: number;
+  id: string;
+  kind: WorkflowStepKind;
+  label: string;
+  status: 'ok' | 'failed' | 'skipped';
+  output: string;
+  durationMs: number;
+  error?: string;
+}
+
+export interface WorkflowRun {
+  ok: boolean;
+  steps: WorkflowStepResult[];
+  output: string;
+  totalMs: number;
+  error?: string;
+}
+
+/** 워크플로우 빌더가 쓰는 도구 목록(인자 이름·설명 포함) */
+export interface WorkflowToolParam {
+  name: string;
+  type: string;
+  description: string;
+  required: boolean;
+  options?: string[];
+}
+
+export interface WorkflowTool {
+  name: string;
+  label: string;
+  summary: string;
+  params: WorkflowToolParam[];
+}
+
+/** 워크플로우 예시 템플릿 */
+export interface WorkflowTemplate {
+  id: string;
+  name: string;
+  summary: string;
+  keywords: string[];
+  sampleInput: string;
+  steps: WorkflowStep[];
+}
+
+/** v0.7.1: 개인 지식 그래프 */
+export interface MemoryGraphNode {
+  id: string;
+  kind: 'me' | 'category' | 'memory';
+  label: string;
+  category?: string;
+  content?: string;
+  importance?: number;
+  pinned?: boolean;
+  count?: number;
+  updatedAt?: string;
+}
+
+export interface MemoryGraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  kind: 'contains' | 'similar' | 'link';
+  weight: number;
+}
+
+export interface MemoryGraph {
+  nodes: MemoryGraphNode[];
+  edges: MemoryGraphEdge[];
+  counts: { memories: number; categories: number; links: number; superseded: number };
 }
 
 export interface SkillTemplate {
@@ -662,6 +759,9 @@ export interface BrowserSession {
   createdAt: string;
   lastUsedAt: string;
   alive: boolean;
+  /** v0.7.1: 2단계 인증·캡차 등 추가 인증 대기 중 */
+  awaitingVerification?: boolean;
+  verificationLabel?: string | null;
 }
 
 export interface BrowserAction {

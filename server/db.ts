@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS logs (
 );
 
 /* v0.6.6: 나만의 지침 도구(커스텀 스킬) */
+/* v0.7.1: mode('prompt'|'workflow')·steps_json — 기존 프롬프트 스킬은 그대로 호환된다. */
 CREATE TABLE IF NOT EXISTS custom_skills (
   id           TEXT PRIMARY KEY,
   name         TEXT NOT NULL,
@@ -68,6 +69,8 @@ CREATE TABLE IF NOT EXISTS custom_skills (
   instructions TEXT NOT NULL,
   always_on    INTEGER NOT NULL DEFAULT 0,
   enabled      INTEGER NOT NULL DEFAULT 1,
+  mode         TEXT NOT NULL DEFAULT 'prompt',
+  steps_json   TEXT NOT NULL DEFAULT '[]',
   created_at   TEXT NOT NULL,
   updated_at   TEXT NOT NULL
 );
@@ -101,6 +104,13 @@ function columnsOf(table: string): Set<string> {
   // v0.5.0: 금고 다중 계정 — 기본 계정 표시
   const vaultCols = columnsOf('vault_items');
   if (!vaultCols.has('is_default')) db.exec('ALTER TABLE vault_items ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0');
+}
+
+{
+  // v0.7.1: 커스텀 도구 확장 — 단계별 워크플로우(기존 'prompt' 행은 기본값으로 그대로 남는다)
+  const skillCols = columnsOf('custom_skills');
+  if (!skillCols.has('mode')) db.exec("ALTER TABLE custom_skills ADD COLUMN mode TEXT NOT NULL DEFAULT 'prompt'");
+  if (!skillCols.has('steps_json')) db.exec("ALTER TABLE custom_skills ADD COLUMN steps_json TEXT NOT NULL DEFAULT '[]'");
 }
 
 /* ------------------------------------------------------------------ */
@@ -226,6 +236,13 @@ CREATE TABLE IF NOT EXISTS policies (
   created_at TEXT NOT NULL
 );
 `);
+
+{
+  // v0.7.1: 브라우저가 2단계 인증·캡차 화면에 머무는 동안 로그인 카드를 다시 띄우지 않게 기록한다.
+  const browserCols = columnsOf('browser_sessions');
+  if (!browserCols.has('verification')) db.exec('ALTER TABLE browser_sessions ADD COLUMN verification TEXT');
+  if (!browserCols.has('verification_at')) db.exec('ALTER TABLE browser_sessions ADD COLUMN verification_at TEXT');
+}
 
 /* ------------------------------------------------------------------ */
 /* v0.5.0 schema: 영구 기억 · 채팅 작업 카드 · 웹 푸시 구독               */
@@ -637,6 +654,33 @@ CREATE TABLE IF NOT EXISTS agent_checkpoints (
 CREATE INDEX IF NOT EXISTS idx_agent_checkpoints_turn ON agent_checkpoints(turn_id, step DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_checkpoints_session ON agent_checkpoints(session_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_checkpoints_status ON agent_checkpoints(status, updated_at DESC);
+`);
+
+/* ------------------------------------------------------------------ */
+/* v0.7.1 schema: 기억 최신화(대체·고정) · 기억 그래프 연결               */
+/* 기존 memories 행은 지우지 않고 컬럼만 더한다(무손실).                  */
+/* ------------------------------------------------------------------ */
+
+{
+  const memoryCols = columnsOf('memories');
+  // 같은 주제의 새 기억이 들어오면 옛 기억을 superseded_by 로 가리킨다(행은 보존).
+  if (!memoryCols.has('superseded_by')) db.exec('ALTER TABLE memories ADD COLUMN superseded_by TEXT');
+  // 사용자가 '중요 고정'한 기억 — 매 대화 프롬프트에 항상 들어간다.
+  if (!memoryCols.has('pinned')) db.exec('ALTER TABLE memories ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0');
+  // 검색·그래프에 쓰는 키워드 태그(JSON 배열). 비어 있으면 본문에서 다시 뽑는다.
+  if (!memoryCols.has('tags_json')) db.exec("ALTER TABLE memories ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'");
+  db.exec('CREATE INDEX IF NOT EXISTS idx_memories_active ON memories(superseded_by, importance DESC)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_memories_pinned ON memories(pinned, importance DESC)');
+}
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS memory_links (
+  a_id       TEXT NOT NULL,
+  b_id       TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (a_id, b_id)
+);
+CREATE INDEX IF NOT EXISTS idx_memory_links_b ON memory_links(b_id);
 `);
 
 /* ------------------------------------------------------------------ */

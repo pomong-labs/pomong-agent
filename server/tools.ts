@@ -234,11 +234,11 @@ export const TOOL_SPECS: ToolSpec[] = [
   {
     name: 'weather_get',
     description:
-      '지정한 지역의 현재 날씨와 오늘·주간 예보를 조회한다. 사용자가 날씨·기온·비·눈·우산·옷차림을 물으면 사용한다. 한국 지명("강원도 인제", "서울", "익산")과 영문 도시명("Tokyo") 모두 된다.',
+      '지정한 지역의 현재 날씨와 오늘·주간 예보를 조회한다. 사용자가 날씨·기온·비·눈·우산·옷차림을 물으면 사용한다. 한국 지명("부산", "서울", "대전")과 영문 도시명("Tokyo") 모두 된다.',
     parameters: {
       type: 'object',
       properties: {
-        location: { type: 'string', description: '지역명 (예: "강원도 인제", "서울", "익산", "Tokyo")' },
+        location: { type: 'string', description: '지역명 (예: "부산", "서울", "대전", "Tokyo")' },
         days: { type: 'number', description: '예보 일수 1~7 (기본 3)' },
       },
       required: ['location'],
@@ -284,7 +284,7 @@ export const TOOL_SPECS: ToolSpec[] = [
     parameters: {
       type: 'object',
       properties: {
-        content: { type: 'string', description: '기억할 내용 한 문장 (예: "아침 브리핑은 강원도 인제 날씨로 받고 싶어 한다")' },
+        content: { type: 'string', description: '기억할 내용 한 문장 (예: "아침 브리핑은 부산 날씨로 받고 싶어 한다")' },
         category: {
           type: 'string',
           enum: ['profile', 'taste', 'habit', 'person', 'promise', 'project', 'rule', 'other'],
@@ -328,6 +328,22 @@ export const TOOL_SPECS: ToolSpec[] = [
         name: { type: 'string', description: '지침 도구 이름(일부만 적어도 된다) 또는 id' },
         all: { type: 'boolean', description: 'true면 켜져 있는 지침 전부를 한 번에 읽는다' },
       },
+    },
+  },
+
+  /** v0.7.1: 단계별 워크플로우 실행(도구·AI·알림/할 일을 서버가 순서대로 처리) */
+  {
+    name: 'run_workflow',
+    description:
+      "사용자가 '도구(스킬) 관리'에서 만든 단계별 워크플로우를 실행한다. 사용자가 워크플로우 이름을 부르거나('그 워크플로우 돌려줘') 이번 요청이 저장된 워크플로우와 맞으면, 도구를 하나씩 직접 부르지 말고 이 도구에 이름과 입력을 넣어 실행하고 결과를 요약해 알려 준다. 단계 실행은 서버가 하므로 토큰을 아낀다.",
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: '워크플로우 이름(일부만 적어도 된다) 또는 id' },
+        input: { type: 'string', description: '첫 단계에 넣을 입력({{input}}에 들어간다). 없으면 빈 값' },
+        list: { type: 'boolean', description: 'true면 실행하지 않고 저장된 워크플로우 목록만 보여 준다' },
+      },
+      required: ['name'],
     },
   },
 
@@ -799,7 +815,7 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
     name: 'weather_get',
     label: '날씨 조회',
     summary: '지역의 현재 날씨와 최대 7일 예보를 확인해요. (Open-Meteo · API 키 불필요)',
-    example: '강원도 인제 내일 날씨 알려줘',
+    example: '부산 내일 날씨 알려줘',
   },
   {
     name: 'tasks_list',
@@ -993,6 +1009,12 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
     summary: '같은 서버의 다른 컨테이너를 조회·로그·재시작해요. 포몽 자신의 컨테이너는 제어가 차단돼요.',
     example: '도커 컨테이너 뭐 도는지 보여줘',
   },
+  {
+    name: 'run_workflow',
+    label: '내 워크플로우 실행',
+    summary: '도구(스킬) 관리에서 단계별로 조립해 둔 워크플로우를 실행해요.',
+    example: '아침 요약 워크플로우 돌려줘',
+  },
 ];
 
 /**
@@ -1116,6 +1138,41 @@ async function runToolInner(name: string, args: Record<string, unknown>, ctx: To
     case 'read_skill': {
       // v0.6.19: 지침 본문을 매번 DB에서 새로 읽는다(방금 만든 지침도 바로 적용).
       return skills.readSkillForTool(args.name ?? args.query, Boolean(args.all));
+    }
+    case 'run_workflow': {
+      /**
+       * v0.7.1: 단계별 워크플로우 실행.
+       * 이름이 비었거나 list=true면 목록만 보여 준다(실행하지 않는다).
+       */
+      const every = skills.listSkills().filter((skill) => skill.mode === 'workflow' && skill.enabled);
+      if (!every.length) return { content: '저장된 워크플로우가 없습니다. 사용자에게 도구(스킬) 관리 > 단계별 조립에서 먼저 만들도록 안내하세요.' };
+      const catalog = every.map((skill) => `- ${skill.name} (${skill.steps.length}단계)`).join('\n');
+      const asked = String(args.name ?? args.query ?? '').trim();
+      if (Boolean(args.list) || !asked) {
+        return { content: `[저장된 워크플로우]\n${catalog}\n\n실행하려면 run_workflow에 이름과 input을 넣으세요.` };
+      }
+      const key = skills.squeeze(asked);
+      const found =
+        every.find((skill) => skill.id === asked) ||
+        every.find((skill) => skills.squeeze(skill.name) === key) ||
+        (key.length >= 2
+          ? every.find((skill) => skills.squeeze(skill.name).includes(key) || key.includes(skills.squeeze(skill.name)))
+          : undefined);
+      if (!found) {
+        return { content: `'${asked}' 워크플로우를 찾지 못했습니다.\n[저장된 워크플로우]\n${catalog}` };
+      }
+      try {
+        const { runWorkflowSteps, formatWorkflowRun, logWorkflowRun } = await import('./workflows');
+        const run = await runWorkflowSteps(found.steps, {
+          input: String(args.input ?? ''),
+          session: ctx.session || null,
+          name: found.name,
+        });
+        logWorkflowRun(found.name, run);
+        return { content: formatWorkflowRun(found.name, run) };
+      } catch (err) {
+        return { content: `워크플로우를 실행하지 못했습니다: ${err instanceof Error ? err.message : String(err)}` };
+      }
     }
     case 'tasks_list': {
       const status = String(args.status || 'open');
@@ -1265,7 +1322,7 @@ async function runToolInner(name: string, args: Record<string, unknown>, ctx: To
           detail
         );
         return {
-          content: `사용자에게 화면을 넘겼습니다(${result.label}). ${detail ? `안내: ${detail} ` : ''}사용자가 '넘겨줄게'를 누를 때까지 자동 조작은 멈춥니다. 그동안 자격증명을 읽거나 입력하지 마세요.`,
+          content: `사용자에게 화면을 넘겼습니다(${result.label}). ${detail ? `안내: ${detail} ` : ''}사용자가 브라우저 화면에서 인증을 마치고 [인증 완료 · 이어서 진행]을 누르면 서버가 이 대화를 자동으로 이어서 실행합니다. 지금은 짧게 "브라우저 화면에서 인증을 마쳐 주시면 바로 이어서 진행할게요"라고만 안내하고 답변을 마치세요. vault_request_login(로그인 카드)을 다시 띄우지 마세요.`,
           meta: 'browser',
         };
       } catch (err) {
@@ -1430,6 +1487,18 @@ async function runToolInner(name: string, args: Record<string, unknown>, ctx: To
       if (!service || !loginUrl) return { content: '서비스 이름과 로그인 주소가 필요합니다.' };
       if (!/^https?:\/\//i.test(loginUrl)) return { content: 'login_url은 http:// 또는 https://로 시작하는 주소여야 합니다.' };
       /**
+       * v0.7.1: 2단계 인증(OTP)·캡차·패스키·이메일 인증 화면에서는 로그인 카드를 다시 띄우지 않는다.
+       * (IMG_3673 — GitHub 2FA 대기 중에 로그인 카드가 또 떠서 두 카드가 겹쳤다)
+       * 아이디·비밀번호는 이미 입력됐고 사용자가 '브라우저 화면 보기'에서 인증만 마치면 된다.
+       */
+      const handover = browser.getHandoverState();
+      if (handover.active) {
+        return {
+          content: browser.verificationBlockMessage(handover),
+          meta: 'browser',
+        };
+      }
+      /**
        * v0.6.1: 금고에 그 사이트 계정이 이미 있는데 로그인 카드까지 띄워
        * 금고 PIN 카드와 둘 다 나오던 문제(IMG_3605)를 막는다.
        * 계정이 있으면 새 로그인 카드를 만들지 않고, 잠겨 있을 때는 PIN 해제 카드만 띄운다.
@@ -1578,10 +1647,10 @@ async function runToolInner(name: string, args: Record<string, unknown>, ctx: To
           ? result.blocked
             ? `\n\n※ 자동으로 더 진행할 수 없습니다(사유: ${browser.LOGIN_BLOCK_LABELS[result.blocked]}). ${
                 result.handoverOpened
-                  ? '서버가 화면을 사용자에게 자동으로 넘겼습니다 — 사용자는 브라우저 탭의 전체화면 화면에서 인증을 마치면 됩니다. 사용자에게 "브라우저 화면에서 인증을 마쳐 주세요"라고 안내하고, 같은 도구를 다시 부르지 마세요.'
+                  ? '서버가 화면을 사용자에게 자동으로 넘겼습니다 — 사용자는 브라우저 탭의 전체화면 화면에서 인증을 마치면 됩니다. 사용자에게 "브라우저 화면에서 인증을 마쳐 주시면 제가 바로 이어서 진행할게요"라고 안내하고, 같은 도구를 다시 부르지 마세요.'
                   : 'browser_handover(reason: ...)로 화면을 넘기고, 같은 도구를 다시 부르지 마세요.'
-              }`
-            : '\n\n※ 아직 로그인 화면으로 보입니다. 아이디·비밀번호가 틀렸거나 인증번호(OTP)·캡차·2단계 인증일 수 있습니다. 화면에 인증번호·캡차가 있으면 browser_handover로 사용자에게 넘기고, 그냥 로그인 실패 문구라면 사용자에게 금고의 계정 정보를 확인해 달라고 알려 주세요.'
+              }\n\n※ 이미 아이디·비밀번호 입력은 끝났으므로 vault_request_login(로그인 카드)을 다시 띄우지 마세요. 사용자가 인증을 마치고 화면을 돌려주면 서버가 이 대화를 자동으로 이어서 실행합니다.`
+            : '\n\n※ 아직 로그인 화면으로 보입니다. 아이디·비밀번호가 틀렸거나 인증번호(OTP)·캡차·2단계 인증일 수 있습니다. 화면에 인증번호·캡차가 있으면 browser_handover로 사용자에게 넘기고, 그냥 로그인 실패 문구라면 사용자에게 금고의 계정 정보를 확인해 달라고 알려 주세요. 로그인 카드(vault_request_login)를 다시 띄우지 마세요.'
           : '\n\n※ 로그인 화면을 벗어났습니다. 이어서 하려던 일을 계속하세요.';
         return { content: `${done}${noticeLine}${diag}${next}\n\n${result.snapshot}`, meta: 'browser' };
       } catch (err) {

@@ -66,7 +66,7 @@ function stripSuffix(word: string): string {
   return word;
 }
 
-/** "강원도 인제", "인제군", "제주 서귀포" 처럼 들어와도 표에서 찾을 수 있게 후보를 만든다. */
+/** "부산", "부산광역시", "제주 서귀포" 처럼 들어와도 표에서 찾을 수 있게 후보를 만든다. */
 function candidates(input: string): string[] {
   const raw = input.trim().replace(/\s+/g, ' ');
   const out: string[] = [];
@@ -79,7 +79,7 @@ function candidates(input: string): string[] {
   if (words.length > 1) push(words[words.length - 1]);
   push(stripSuffix(raw));
   for (const word of words) push(stripSuffix(word));
-  // "강원도인제" 처럼 붙여 쓴 경우
+  // "부산광역시" 처럼 붙여 쓴 경우
   for (const word of words) push(word);
   return out;
 }
@@ -189,7 +189,7 @@ export async function weatherReport(location: string, days = 3): Promise<{ conte
   const place = await findPlace(location);
   if (!place) {
     return {
-      content: `'${location}' 위치를 찾지 못했습니다. '서울', '강원도 인제', 'Iksan'처럼 도시 이름으로 다시 물어봐 주세요.`,
+      content: `'${location}' 위치를 찾지 못했습니다. '서울', '부산', 'Daejeon'처럼 도시 이름으로 다시 물어봐 주세요.`,
     };
   }
   const span = Math.min(7, Math.max(1, Math.round(days) || 3));
