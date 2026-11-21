@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
+  ArrowLeft,
   Check,
+  ChevronDown,
+  ChevronUp,
   Copy,
   Loader2,
   Plus,
@@ -12,17 +16,29 @@ import {
   MessageSquare,
   Pencil,
   Power,
-  ChevronLeft,
   Sparkles,
+  UserCheck,
 } from 'lucide-react';
 import Mascot from '../components/Mascot';
-import { api, ApiError, type AgentCard, type CardPurpose, type CollectField, type GuestSessionView } from '../lib/api';
+import {
+  api,
+  ApiError,
+  type AgentCard,
+  type CardPurpose,
+  type CollectField,
+  type DeliveryMode,
+  type GuestSessionView,
+} from '../lib/api';
 
 /**
- * v0.7.2 — 더보기 → 에이전트 명함 (주인 화면)
+ * v0.7.3 — 더보기 → 에이전트 명함 (주인 화면)
  *
- * 여러 개의 공개 명함을 만들고 용도(자기소개·미팅·설문·커스텀)를 고른 뒤
- * 링크·QR·커스텀 도메인으로 건넨다. 손님이 남긴 대화와 요약은 여기서 확인한다.
+ * v0.7.2의 공개 명함(링크·QR·용도 프리셋·PIN·커스텀 도메인)에 실사용 개선 7가지를 더했다.
+ *  · 시트를 풀스크린(z-100)으로 올리고 iOS 세이프 에어리어 안쪽에 붙였다(상단 입력칸·하단 버튼 가림 없음).
+ *  · 손님 화면의 '용건·연락 남기기' 시트 대신, 대화가 끝나면 서버가 자동으로 전달한다.
+ *  · 응답 방식(대화 완료 시 전달 / 자유 Q&A), 1인 1회, 보관 기간을 명함마다 정한다.
+ *  · '이 명함만 쓸 모델'은 연결된 모델만 고르는 드롭다운이다.
+ *  · 받은 응답은 상태·시각·턴·요약·항목 표로 한눈에 보고, 전체 대화는 접었다 편다.
  */
 
 interface PurposeMeta {
@@ -30,6 +46,30 @@ interface PurposeMeta {
   label: string;
   hint: string;
   examplePrompt: string;
+}
+
+interface DeliveryModeMeta {
+  id: DeliveryMode;
+  label: string;
+  hint: string;
+}
+
+interface ModelOption {
+  value: string;
+  model: string;
+  label: string;
+}
+
+interface ModelGroup {
+  provider: string;
+  label: string;
+  defaultModel: string;
+  models: ModelOption[];
+}
+
+interface ModelsResponse {
+  active: { provider: string; model: string; label: string };
+  groups: ModelGroup[];
 }
 
 interface CardForm {
@@ -41,6 +81,9 @@ interface CardForm {
   systemGuide: string;
   quickPrompts: string[];
   collectFields: CollectField[];
+  deliveryMode: DeliveryMode;
+  oncePerVisitor: boolean;
+  retentionDays: number;
   customDomain: string;
   pin: string;
   pinEnabled: boolean;
@@ -51,11 +94,21 @@ interface CardForm {
   enabled: boolean;
 }
 
+const RETENTION_LABELS: Record<number, string> = {
+  0: '영구 보관',
+  7: '7일',
+  14: '14일',
+  30: '30일',
+  90: '90일',
+  180: '180일',
+  365: '1년',
+};
+
 const PRESETS: Record<CardPurpose, { bioText: string; systemGuide: string; quickPrompts: string[]; collectFields: CollectField[] }> = {
   intro: {
     bioText: '안녕하세요! 제 소개와 하는 일을 편하게 물어보세요.',
     systemGuide:
-      '이 명함은 소개·질문 응대용입니다. 소개문에 적힌 내용만 근거로 답하고, 더 깊은 이야기나 협업 문의는 이름과 연락처를 남기도록 안내하세요.',
+      '이 명함은 소개·질문 응대용입니다. 소개문에 적힌 내용만 근거로 답하고, 더 깊은 이야기나 협업 문의는 대화에서 이름과 연락처를 물어 정리하세요.',
     quickPrompts: ['자기소개 해줘', '요즘 어떤 일을 하고 있어?'],
     collectFields: [
       { key: 'name', label: '이름', kind: 'text', required: false, hint: '닉네임도 괜찮아요' },
@@ -63,9 +116,9 @@ const PRESETS: Record<CardPurpose, { bioText: string; systemGuide: string; quick
     ],
   },
   meeting: {
-    bioText: '미팅 일정을 조율해 드려요. 가능한 시간대를 안내해 드리고, 원하시는 일정을 전달받아요.',
+    bioText: '미팅 일정을 조율해 드려요. 가능한 시간대를 안내하고, 원하시는 일정을 여쭤볼게요.',
     systemGuide:
-      '이 명함은 미팅 일정 조율용입니다. 아래 "가능한 시간대"에 적힌 범위 안에서만 안내하세요. 약속을 확정하지 말고 "주인에게 전달하겠다"고 말한 뒤, 희망 일시·이름·연락처를 남기게 하세요.\n\n가능한 시간대: 평일 오후 7시 이후, 주말 오후 (정확한 일정은 주인이 확인 후 회신)',
+      '이 명함은 미팅 일정 조율용입니다. 아래 "가능한 시간대"에 적힌 범위 안에서만 안내하세요. 약속을 확정하지 말고 "주인에게 전달하겠다"고 말한 뒤, 희망 일시·이름·연락처를 대화로 물어보세요.\n\n가능한 시간대: 평일 오후 7시 이후, 주말 오후 (정확한 일정은 주인이 확인 후 회신)',
     quickPrompts: ['미팅 가능한 시간 알려줘', '어떤 방식으로 진행돼?'],
     collectFields: [
       { key: 'name', label: '이름', kind: 'text', required: true },
@@ -76,7 +129,7 @@ const PRESETS: Record<CardPurpose, { bioText: string; systemGuide: string; quick
   survey: {
     bioText: '짧은 설문에 참여해 주세요. 몇 가지만 여쭤보고 답을 정리해 전달받아요.',
     systemGuide:
-      '이 명함은 대화형 설문용입니다. 한 번에 질문 하나씩 자연스럽게 물어보세요. 아래 받을 항목의 질문을 모두 들으면 "용건·연락 남기기"에서 제출하도록 안내하세요. 답을 유도하거나 평가하지 말고 사실만 정리하세요.',
+      '이 명함은 대화형 설문용입니다. 한 번에 질문 하나씩 자연스럽게 물어보세요. 아래 받을 항목의 질문을 모두 들으면 답을 정리해 마무리하세요. 답을 유도하거나 평가하지 말고 사실만 정리하세요.',
     quickPrompts: ['설문 시작할게요', '질문이 몇 개예요?'],
     collectFields: [
       { key: 'name', label: '이름(또는 닉네임)', kind: 'text', required: false },
@@ -86,7 +139,7 @@ const PRESETS: Record<CardPurpose, { bioText: string; systemGuide: string; quick
     ],
   },
   custom: {
-    bioText: '궁금한 점을 편하게 남겨 주세요.',
+    bioText: '궁금한 점을 편하게 물어보세요.',
     systemGuide: '안내 지침에 적힌 범위에서만 답하고, 그 밖의 요청은 정중히 거절하세요.',
     quickPrompts: ['무엇을 도와줄 수 있어?', '자세히 알려줘'],
     collectFields: [
@@ -107,6 +160,9 @@ function blankForm(): CardForm {
     systemGuide: preset.systemGuide,
     quickPrompts: [...preset.quickPrompts],
     collectFields: preset.collectFields.map((field) => ({ ...field })),
+    deliveryMode: 'collect',
+    oncePerVisitor: false,
+    retentionDays: 30,
     customDomain: '',
     pin: '',
     pinEnabled: false,
@@ -128,6 +184,9 @@ function formOf(card: AgentCard): CardForm {
     systemGuide: card.systemGuide,
     quickPrompts: [...card.quickPrompts],
     collectFields: card.collectFields.map((field) => ({ ...field })),
+    deliveryMode: card.deliveryMode,
+    oncePerVisitor: card.oncePerVisitor,
+    retentionDays: card.retentionDays,
     customDomain: card.customDomain || '',
     pin: '',
     pinEnabled: card.pinRequired,
@@ -140,9 +199,14 @@ function formOf(card: AgentCard): CardForm {
 }
 
 export default function AgentCards() {
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [cards, setCards] = useState<AgentCard[]>([]);
   const [purposes, setPurposes] = useState<PurposeMeta[]>([]);
+  const [deliveryModes, setDeliveryModes] = useState<DeliveryModeMeta[]>([]);
+  const [retentionChoices, setRetentionChoices] = useState<number[]>([7, 30, 90, 180, 365, 0]);
+  const [modelGroups, setModelGroups] = useState<ModelGroup[]>([]);
+  const [activeModelLabel, setActiveModelLabel] = useState('');
   const [error, setError] = useState('');
   const [form, setForm] = useState<CardForm | null>(null);
   const [saving, setSaving] = useState(false);
@@ -159,9 +223,16 @@ export default function AgentCards() {
 
   const load = useCallback(async () => {
     try {
-      const res = await api.get<{ cards: AgentCard[]; purposes: PurposeMeta[] }>('/api/agent-cards');
+      const res = await api.get<{
+        cards: AgentCard[];
+        purposes: PurposeMeta[];
+        deliveryModes?: DeliveryModeMeta[];
+        retentionChoices?: number[];
+      }>('/api/agent-cards');
       setCards(res.cards);
       setPurposes(res.purposes || []);
+      if (res.deliveryModes?.length) setDeliveryModes(res.deliveryModes);
+      if (res.retentionChoices?.length) setRetentionChoices(res.retentionChoices);
       setError('');
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '명함 목록을 불러오지 못했어요.');
@@ -172,6 +243,16 @@ export default function AgentCards() {
 
   useEffect(() => {
     void load();
+    api
+      .get<ModelsResponse>('/api/agent-cards/models')
+      .then((res) => {
+        setModelGroups(res.groups || []);
+        setActiveModelLabel(res.active?.label || '');
+      })
+      .catch(() => {
+        // 모델 목록을 못 받아도 명함 편집은 그대로 쓸 수 있다(기본 모델 사용).
+        setModelGroups([]);
+      });
   }, [load]);
 
   const copy = async (text: string, key: string) => {
@@ -266,6 +347,9 @@ export default function AgentCards() {
       systemGuide: form.systemGuide,
       quickPrompts: form.quickPrompts.map((item) => item.trim()).filter(Boolean),
       collectFields: form.collectFields,
+      deliveryMode: form.deliveryMode,
+      oncePerVisitor: form.oncePerVisitor,
+      retentionDays: form.retentionDays,
       customDomain: form.customDomain.trim() || null,
       pin: form.pinEnabled ? form.pin : null,
       clearPin: !form.pinEnabled,
@@ -297,29 +381,42 @@ export default function AgentCards() {
       systemGuide: preset.systemGuide,
       quickPrompts: [...preset.quickPrompts],
       collectFields: preset.collectFields.map((field) => ({ ...field })),
+      // v0.7.3: 대화형 설문 프리셋은 1인 1회 참여가 기본이다.
+      oncePerVisitor: purpose === 'survey' ? true : form.oncePerVisitor,
     });
   };
 
   const stats = useMemo(() => {
     const live = cards.filter((card) => card.enabled).length;
-    const sessions = cards.reduce((sum, card) => sum + (card.sessions || 0), 0);
-    return { live, sessions };
+    // 전달하지 않는(qna_only) 명함의 대화는 '받은 응답'에 세지 않는다.
+    const total = cards
+      .filter((card) => card.deliveryMode !== 'qna_only')
+      .reduce((sum, card) => sum + (card.sessions || 0), 0);
+    return { live, sessions: total };
   }, [cards]);
 
   return (
     <div className="pa-scroll h-full min-h-0 overflow-y-auto px-4 pb-10 pt-5 lg:px-8">
       <div className="mx-auto w-full max-w-[900px]">
-        <header className="flex items-center gap-3">
-          <Mascot name="poding" size={48} />
+        <header className="flex items-center gap-2">
+          <button
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl transition hover:bg-[#F7F5FF] dark:hover:bg-[#232030]"
+            style={{ color: 'var(--pa-mute)' }}
+            onClick={() => navigate('/more')}
+            aria-label="뒤로"
+          >
+            <ArrowLeft size={20} />
+          </button>
+          <Mascot name="poding" size={44} className="hidden shrink-0 lg:block" />
           <div className="min-w-0 flex-1">
-            <h1 className="text-[23px] font-bold tracking-[-0.02em]" style={{ color: 'var(--pa-ink-strong)' }}>
+            <h1 className="text-[22px] font-bold tracking-[-0.02em] lg:text-[26px]" style={{ color: 'var(--pa-ink-strong)' }}>
               에이전트 명함
             </h1>
             <p className="text-[12.5px]" style={{ color: 'var(--pa-mute)' }}>
               손님에게 건넬 공개 명함 {cards.length}개 · 응대 중 {stats.live}개 · 받은 대화 {stats.sessions}건
             </p>
           </div>
-          <button className="pa-btn-primary px-4 py-2.5 text-[13.5px]" onClick={() => setForm(blankForm())}>
+          <button className="pa-btn-primary shrink-0 px-4 py-2.5 text-[13.5px]" onClick={() => setForm(blankForm())}>
             <Plus size={16} /> 새 명함
           </button>
         </header>
@@ -330,9 +427,10 @@ export default function AgentCards() {
         >
           <p className="text-[12.5px] leading-relaxed" style={{ color: 'var(--pa-ink)' }}>
             공개 명함은 <b>로그인 없이</b> 열리는 손님 전용 대화 화면이에요. 손님에게는 이 명함에 적은 소개·지침만 보이고,
-            기억·금고·메일·파일·브라우저·쉘은 <b>아예 연결되지 않습니다</b>. 이름과 연락처를 남기면 요약과 함께 알림으로 알려드려요.
-            주소를 숨기고 싶으면 커스텀 도메인(예: <code>card.example.com</code>)을 연결하면 그 도메인에서는 공개 명함만 열리고
-            관리 화면은 전부 404로 막혀요.
+            기억·금고·메일·파일·브라우저·쉘은 <b>아예 연결되지 않습니다</b>. 대화에서 받을 항목을 다 들으면 AI가 정리해{' '}
+            <b>주인에게 자동으로 전달</b>하고, 손님 화면은 입력이 잠겨요. 전달이 필요 없는 명함은 <b>자유 Q&amp;A</b>로 두면 됩니다.
+            주소를 숨기고 싶으면 커스텀 도메인(예: <code>card.example.com</code>)을 연결하면 그 도메인에서는 공개 명함만 열리고 관리
+            화면은 전부 404로 막혀요.
           </p>
         </section>
 
@@ -391,6 +489,21 @@ export default function AgentCards() {
                       <span
                         className="rounded-full px-2 py-0.5 text-[10.5px] font-bold"
                         style={
+                          card.deliveryMode === 'qna_only'
+                            ? { background: '#EEF3FF', color: '#4B6BB5' }
+                            : { background: 'var(--accent-soft)', color: 'var(--accent-ink)' }
+                        }
+                      >
+                        {card.deliveryMode === 'qna_only' ? '자유 Q&A' : '응답 전달'}
+                      </span>
+                      {card.oncePerVisitor ? (
+                        <span className="flex items-center gap-0.5 rounded-full bg-[#F3EEFF] px-2 py-0.5 text-[10.5px] font-bold text-[#7057D6]">
+                          <UserCheck size={10} /> 1인 1회
+                        </span>
+                      ) : null}
+                      <span
+                        className="rounded-full px-2 py-0.5 text-[10.5px] font-bold"
+                        style={
                           card.enabled
                             ? { background: '#EAFBF1', color: '#0F9668' }
                             : { background: 'var(--pa-surface-3)', color: 'var(--pa-mute)' }
@@ -416,7 +529,8 @@ export default function AgentCards() {
                       <span>/c/{card.slug}</span>
                       <span>오늘 {card.dailyCount}/{card.dailyLimit}명</span>
                       <span>세션당 {card.maxTurnsPerSession}턴</span>
-                      <span>받은 대화 {card.sessions || 0}건</span>
+                      <span>보관 {card.retentionDays > 0 ? `${card.retentionDays}일` : '영구'}</span>
+                      {card.deliveryMode !== 'qna_only' ? <span>받은 응답 {card.sessions || 0}건</span> : null}
                     </div>
                   </div>
                 </div>
@@ -442,7 +556,8 @@ export default function AgentCards() {
                     style={{ background: 'var(--pa-surface-3)', color: 'var(--pa-ink)' }}
                     onClick={() => void loadSessions(card)}
                   >
-                    <MessageSquare size={13} /> 받은 대화 {card.sessions ? `(${card.sessions})` : ''}
+                    <MessageSquare size={13} /> 받은 응답
+                    {card.deliveryMode !== 'qna_only' && card.sessions ? ` (${card.sessions})` : ''}
                   </button>
                   <button
                     className="flex items-center gap-1 rounded-full px-3 py-1.5 text-[12px] font-semibold"
@@ -493,51 +608,18 @@ export default function AgentCards() {
                       <p className="flex items-center gap-2 text-[12.5px]" style={{ color: 'var(--pa-mute)' }}>
                         <Loader2 size={13} className="animate-spin" /> 불러오는 중…
                       </p>
+                    ) : card.deliveryMode === 'qna_only' ? (
+                      <p className="text-[12.5px] leading-relaxed" style={{ color: 'var(--pa-mute)' }}>
+                        자유 Q&amp;A 명함은 응답을 전달하지 않아 대화가 여기에 쌓이지 않아요.
+                      </p>
                     ) : sessions.length === 0 ? (
                       <p className="text-[12.5px]" style={{ color: 'var(--pa-mute)' }}>
-                        아직 들어온 대화가 없어요. 링크를 건네면 여기에 쌓여요.
+                        아직 들어온 응답이 없어요. 링크를 건네면 여기에 쌓여요.
                       </p>
                     ) : (
                       <ul className="space-y-2">
                         {sessions.map((session) => (
-                          <li
-                            key={session.id}
-                            className="rounded-[14px] px-3 py-2.5"
-                            style={{ background: 'var(--pa-surface)', border: '1px solid var(--pa-line-soft)' }}
-                          >
-                            <div className="flex flex-wrap items-center gap-2 text-[11.5px]">
-                              <span className="font-bold" style={{ color: 'var(--pa-ink)' }}>
-                                {session.visitorName || '이름 없음'}
-                              </span>
-                              {session.visitorContact ? (
-                                <span style={{ color: 'var(--pa-mute)' }}>{session.visitorContact}</span>
-                              ) : null}
-                              <span
-                                className="rounded-full px-1.5 py-0.5 text-[10px] font-bold"
-                                style={
-                                  session.status === 'submitted'
-                                    ? { background: '#EAFBF1', color: '#0F9668' }
-                                    : session.status === 'blocked'
-                                      ? { background: 'var(--pa-surface-3)', color: 'var(--pa-mute)' }
-                                      : { background: 'var(--accent-soft)', color: 'var(--accent-ink)' }
-                                }
-                              >
-                                {session.status === 'submitted' ? '전달됨' : session.status === 'blocked' ? '한도 도달' : '대화 중'}
-                              </span>
-                              <span className="ml-auto" style={{ color: 'var(--pa-mute-2)' }}>
-                                {session.turnCount}턴 · {stamp(session.createdAt)}
-                              </span>
-                            </div>
-                            {session.summary ? (
-                              <p className="mt-1 whitespace-pre-wrap text-[12px] leading-relaxed" style={{ color: 'var(--pa-ink)' }}>
-                                {session.summary}
-                              </p>
-                            ) : session.messages.length ? (
-                              <p className="mt-1 line-clamp-2 text-[12px] leading-relaxed" style={{ color: 'var(--pa-mute)' }}>
-                                {session.messages.filter((m) => m.role === 'user').map((m) => m.content).join(' / ')}
-                              </p>
-                            ) : null}
-                          </li>
+                          <SessionCard key={session.id} session={session} card={card} />
                         ))}
                       </ul>
                     )}
@@ -549,7 +631,8 @@ export default function AgentCards() {
         )}
 
         <p className="mt-6 text-center text-[11px]" style={{ color: 'var(--pa-mute-2)' }}>
-          손님 대화는 이 명함에만 저장되고 주인 채팅방과 섞이지 않아요. 욕설·도배·프롬프트 탈취 시도는 AI를 부르기 전에 차단됩니다.
+          손님 대화는 이 명함에만 저장되고 주인 채팅방과 섞이지 않아요. 보관 기간이 지나면 서버가 실제로 삭제하고,
+          욕설·도배·프롬프트 탈취 시도는 AI를 부르기 전에 차단합니다.
         </p>
       </div>
 
@@ -557,6 +640,10 @@ export default function AgentCards() {
         <CardEditor
           form={form}
           purposes={purposes}
+          deliveryModes={deliveryModes}
+          retentionChoices={retentionChoices}
+          modelGroups={modelGroups}
+          activeModelLabel={activeModelLabel}
           saving={saving}
           error={formError}
           onChange={setForm}
@@ -567,7 +654,7 @@ export default function AgentCards() {
       ) : null}
 
       {qr ? (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 pa-fade-in px-6" role="dialog" aria-modal="true">
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/40 pa-fade-in px-6" role="dialog" aria-modal="true">
           <div className="pa-sheet-in w-full max-w-[340px] rounded-[26px] p-5 text-center" style={{ background: 'var(--pa-surface)' }}>
             <h2 className="text-[16px] font-bold" style={{ color: 'var(--pa-ink-strong)' }}>
               {qr.card} QR
@@ -592,12 +679,133 @@ export default function AgentCards() {
 }
 
 /* ------------------------------------------------------------------ */
-/* 편집 시트                                                           */
+/* 받은 응답 한 건 — 상태·시각·턴·요약·항목 표 + 접히는 전체 대화        */
+/* ------------------------------------------------------------------ */
+
+function SessionCard({ session, card }: { session: GuestSessionView; card: AgentCard }) {
+  const [open, setOpen] = useState(false);
+  const badge =
+    session.status === 'submitted'
+      ? { label: '완료', background: '#EAFBF1', color: '#0F9668' }
+      : session.status === 'blocked'
+        ? { label: '차단', background: 'var(--pa-surface-3)', color: 'var(--pa-mute)' }
+        : { label: '진행중', background: 'var(--accent-soft)', color: 'var(--accent-ink)' };
+  const structured = session.structured || {};
+  const rows = card.collectFields
+    .filter((field) => structured[field.key])
+    .map((field) => ({ key: field.key, label: field.label, value: structured[field.key] }));
+  const known = new Set(rows.map((row) => row.key));
+  const extra = Object.entries(structured)
+    .filter(([key]) => !known.has(key) && key !== 'note')
+    .map(([key, value]) => ({ key, label: key, value }));
+  const note = structured.note || '';
+
+  return (
+    <li
+      className="rounded-[16px] px-3.5 py-3"
+      style={{ background: 'var(--pa-surface)', border: '1px solid var(--pa-line-soft)' }}
+    >
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="rounded-full px-2 py-0.5 text-[10.5px] font-bold" style={{ background: badge.background, color: badge.color }}>
+          {badge.label}
+        </span>
+        <span className="text-[13px] font-bold" style={{ color: 'var(--pa-ink)' }}>
+          {session.visitorName || '이름 없음'}
+        </span>
+        {session.visitorContact ? (
+          <span className="text-[11.5px]" style={{ color: 'var(--pa-mute)' }}>
+            {session.visitorContact}
+          </span>
+        ) : null}
+        <span className="ml-auto whitespace-nowrap text-[11px]" style={{ color: 'var(--pa-mute-2)' }}>
+          {stampFull(session.createdAt)} 참여 · {session.turnCount}턴
+        </span>
+      </div>
+
+      {session.summary ? (
+        <p
+          className="mt-2 whitespace-pre-wrap rounded-[12px] px-3 py-2 text-[12px] leading-relaxed"
+          style={{ background: 'var(--pa-surface-3)', color: 'var(--pa-ink)' }}
+        >
+          {session.summary}
+        </p>
+      ) : null}
+
+      {rows.length || extra.length || note ? (
+        <dl className="mt-2 space-y-1">
+          {[...rows, ...extra].map((row) => (
+            <div key={row.key} className="flex gap-2 rounded-[10px] px-2.5 py-1.5" style={{ background: 'var(--pa-surface-3)' }}>
+              <dt className="w-[92px] shrink-0 truncate text-[11.5px] font-semibold" style={{ color: 'var(--pa-mute)' }} title={row.label}>
+                {row.label}
+              </dt>
+              <dd className="min-w-0 flex-1 whitespace-pre-wrap break-words text-[12px]" style={{ color: 'var(--pa-ink)' }}>
+                {row.value}
+              </dd>
+            </div>
+          ))}
+          {note ? (
+            <div className="flex gap-2 rounded-[10px] px-2.5 py-1.5" style={{ background: 'var(--pa-surface-3)' }}>
+              <dt className="w-[92px] shrink-0 text-[11.5px] font-semibold" style={{ color: 'var(--pa-mute)' }}>
+                남긴 말
+              </dt>
+              <dd className="min-w-0 flex-1 whitespace-pre-wrap break-words text-[12px]" style={{ color: 'var(--pa-ink)' }}>
+                {note}
+              </dd>
+            </div>
+          ) : null}
+        </dl>
+      ) : !session.summary ? (
+        <p className="mt-2 text-[12px] leading-relaxed" style={{ color: 'var(--pa-mute)' }}>
+          {session.messages.filter((m) => m.role === 'user').slice(-2).map((m) => m.content).join(' / ') || '대화만 있고 남긴 항목이 없어요.'}
+        </p>
+      ) : null}
+
+      {session.messages.length ? (
+        <div className="mt-2">
+          <button
+            className="flex items-center gap-1 text-[11.5px] font-semibold"
+            style={{ color: 'var(--accent-ink)' }}
+            onClick={() => setOpen((prev) => !prev)}
+            aria-expanded={open}
+          >
+            {open ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+            {open ? '전체 대화 접기' : `전체 대화 보기 (${session.messages.length})`}
+          </button>
+          {open ? (
+            <div className="mt-2 max-h-[320px] space-y-1.5 overflow-y-auto pa-scroll rounded-[12px] p-2.5" style={{ background: 'var(--pa-surface-3)' }}>
+              {session.messages.map((message, index) => (
+                <div key={index} className={message.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
+                  <p
+                    className="max-w-[88%] whitespace-pre-wrap break-words rounded-[12px] px-2.5 py-1.5 text-[12px] leading-relaxed"
+                    style={
+                      message.role === 'user'
+                        ? { background: 'var(--accent-soft)', color: 'var(--pa-ink)' }
+                        : { background: 'var(--pa-surface)', color: 'var(--pa-ink)', border: '1px solid var(--pa-line-soft)' }
+                    }
+                  >
+                    {message.content}
+                  </p>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </li>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* 편집 시트 — iOS 세이프 에어리어 안쪽 풀스크린(z-100)                  */
 /* ------------------------------------------------------------------ */
 
 function CardEditor({
   form,
   purposes,
+  deliveryModes,
+  retentionChoices,
+  modelGroups,
+  activeModelLabel,
   saving,
   error,
   onChange,
@@ -607,6 +815,10 @@ function CardEditor({
 }: {
   form: CardForm;
   purposes: PurposeMeta[];
+  deliveryModes: DeliveryModeMeta[];
+  retentionChoices: number[];
+  modelGroups: ModelGroup[];
+  activeModelLabel: string;
   saving: boolean;
   error: string;
   onChange: (next: CardForm) => void;
@@ -618,6 +830,14 @@ function CardEditor({
   const purposeList = purposes.length
     ? purposes
     : (['intro', 'meeting', 'survey', 'custom'] as CardPurpose[]).map((id) => ({ id, label: id, hint: '', examplePrompt: '' }));
+  const modeList: DeliveryModeMeta[] = deliveryModes.length
+    ? deliveryModes
+    : [
+        { id: 'collect', label: '대화 완료 시 주인에게 전달', hint: '정해 둔 항목을 대화로 물어보고, 다 받으면 정리해 전달해요' },
+        { id: 'qna_only', label: '지침 내 자유 Q&A · 전달 안 함', hint: '소개·안내 범위에서 답만 하고, 제출·알림 없이 끝나요' },
+      ];
+  const collect = form.deliveryMode === 'collect';
+  const modelValues = new Set(modelGroups.flatMap((group) => group.models.map((model) => model.value)));
 
   const setPrompt = (index: number, value: string) => {
     const next = [...form.quickPrompts];
@@ -631,14 +851,20 @@ function CardEditor({
   };
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/40 pa-fade-in lg:items-center" role="dialog" aria-modal="true">
+    <div className="fixed inset-0 z-[100] flex items-stretch justify-center bg-black/40 pa-fade-in lg:items-center lg:p-4" role="dialog" aria-modal="true">
       <div
-        className="pa-sheet-in pa-scroll max-h-[92vh] w-full max-w-[620px] overflow-y-auto rounded-t-[28px] px-5 pb-[max(env(safe-area-inset-bottom),18px)] pt-4 lg:rounded-[28px]"
-        style={{ background: 'var(--pa-surface)' }}
+        className="pa-sheet-in pa-scroll flex h-full w-full flex-col overflow-y-auto bg-[var(--pa-surface)] lg:h-auto lg:max-h-[92vh] lg:max-w-[620px] lg:rounded-[28px]"
+        style={{
+          // v0.7.3: iOS 상태바·홈 인디케이터 아래로 가려지지 않게 세이프 에어리어를 더한다.
+          paddingTop: 'calc(env(safe-area-inset-top) + 16px)',
+          paddingBottom: 'calc(env(safe-area-inset-bottom) + 20px)',
+          paddingLeft: 20,
+          paddingRight: 20,
+        }}
       >
         <div className="mb-3 flex items-center gap-2">
-          <button className="flex h-8 w-8 items-center justify-center rounded-full" style={{ color: 'var(--pa-mute)' }} onClick={onClose} aria-label="닫기">
-            <ChevronLeft size={19} />
+          <button className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full" style={{ color: 'var(--pa-mute)' }} onClick={onClose} aria-label="닫기">
+            <ArrowLeft size={19} />
           </button>
           <h2 className="flex-1 text-[17px] font-bold" style={{ color: 'var(--pa-ink-strong)' }}>
             {form.id ? '명함 수정' : '새 명함'}
@@ -648,7 +874,7 @@ function CardEditor({
           </button>
         </div>
 
-        <div className="space-y-3.5">
+        <div className="space-y-3.5 pb-1">
           <label className="block">
             <span className="mb-1 block text-[12.5px] font-semibold" style={{ color: 'var(--pa-ink)' }}>
               명함 이름
@@ -657,7 +883,7 @@ function CardEditor({
               className="pa-input"
               value={form.title}
               onChange={(e) => patch({ title: e.target.value })}
-              placeholder="예: 김현준의 소개 명함"
+              placeholder="예: 소개 명함"
               maxLength={60}
             />
           </label>
@@ -686,6 +912,45 @@ function CardEditor({
             <p className="mt-1 text-[11px] leading-relaxed" style={{ color: 'var(--pa-mute-2)' }}>
               프리셋을 고르면 안내문·추천 질문·받을 항목이 기본값으로 채워져요. 그대로 고쳐도 됩니다.
             </p>
+          </div>
+
+          <div>
+            <span className="mb-1 block text-[12.5px] font-semibold" style={{ color: 'var(--pa-ink)' }}>
+              응답 방식
+            </span>
+            <div className="space-y-1.5">
+              {modeList.map((mode) => (
+                <button
+                  key={mode.id}
+                  className="flex w-full items-start gap-2.5 rounded-[14px] border px-3 py-2.5 text-left transition"
+                  style={
+                    form.deliveryMode === mode.id
+                      ? { borderColor: 'var(--accent-line)', background: 'var(--accent-soft-weak)' }
+                      : { borderColor: 'var(--pa-line)', background: 'var(--pa-surface)' }
+                  }
+                  onClick={() => patch({ deliveryMode: mode.id })}
+                  aria-pressed={form.deliveryMode === mode.id}
+                >
+                  <span
+                    className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border"
+                    style={{
+                      borderColor: form.deliveryMode === mode.id ? 'var(--accent)' : 'var(--pa-line)',
+                      background: form.deliveryMode === mode.id ? 'var(--accent)' : 'transparent',
+                    }}
+                  >
+                    {form.deliveryMode === mode.id ? <Check size={10} className="text-white" /> : null}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-[12.5px] font-semibold" style={{ color: 'var(--pa-ink)' }}>
+                      {mode.label}
+                    </span>
+                    <span className="mt-0.5 block text-[11px] leading-relaxed" style={{ color: 'var(--pa-mute)' }}>
+                      {mode.hint}
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
           </div>
 
           <label className="block">
@@ -748,61 +1013,66 @@ function CardEditor({
             </div>
           </div>
 
-          <div>
-            <div className="mb-1 flex items-center justify-between">
-              <span className="text-[12.5px] font-semibold" style={{ color: 'var(--pa-ink)' }}>
-                용건·연락 시트에서 받을 항목
-              </span>
-              <button
-                className="flex items-center gap-0.5 text-[11.5px] font-semibold"
-                style={{ color: 'var(--accent-ink)' }}
-                onClick={() =>
-                  patch({
-                    collectFields: [
-                      ...form.collectFields,
-                      { key: `q${form.collectFields.length + 1}`, label: '', kind: 'text', required: false },
-                    ],
-                  })
-                }
-              >
-                <Plus size={12} /> 항목 추가
-              </button>
+          {collect ? (
+            <div>
+              <div className="mb-1 flex items-center justify-between">
+                <span className="text-[12.5px] font-semibold" style={{ color: 'var(--pa-ink)' }}>
+                  대화에서 받을 항목
+                </span>
+                <button
+                  className="flex items-center gap-0.5 text-[11.5px] font-semibold"
+                  style={{ color: 'var(--accent-ink)' }}
+                  onClick={() =>
+                    patch({
+                      collectFields: [
+                        ...form.collectFields,
+                        { key: `q${form.collectFields.length + 1}`, label: '', kind: 'text', required: false },
+                      ],
+                    })
+                  }
+                >
+                  <Plus size={12} /> 항목 추가
+                </button>
+              </div>
+              <p className="mb-1.5 text-[11px] leading-relaxed" style={{ color: 'var(--pa-mute-2)' }}>
+                AI가 대화에서 하나씩 물어보고, 필수 항목이 다 차면 답을 정리해 주인에게 전달해요.
+              </p>
+              <div className="space-y-1.5">
+                {form.collectFields.map((field, index) => (
+                  <div key={field.key} className="flex items-center gap-1.5">
+                    <input
+                      className="pa-input flex-1"
+                      value={field.label}
+                      onChange={(e) => setField(index, { label: e.target.value })}
+                      placeholder="항목 이름 (예: 희망 일시)"
+                      maxLength={40}
+                    />
+                    <select
+                      className="pa-input w-[74px]"
+                      value={field.required ? '1' : '0'}
+                      onChange={(e) => setField(index, { required: e.target.value === '1' })}
+                      aria-label="필수 여부"
+                    >
+                      <option value="0">선택</option>
+                      <option value="1">필수</option>
+                    </select>
+                    <button
+                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-[#D93A3A]"
+                      onClick={() => patch({ collectFields: form.collectFields.filter((_, i) => i !== index) })}
+                      aria-label="항목 삭제"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
+                {!form.collectFields.length ? (
+                  <p className="text-[11.5px]" style={{ color: 'var(--pa-mute-2)' }}>
+                    항목이 없으면 AI가 대화 내용만 요약해 전달해요.
+                  </p>
+                ) : null}
+              </div>
             </div>
-            <div className="space-y-1.5">
-              {form.collectFields.map((field, index) => (
-                <div key={field.key} className="flex items-center gap-1.5">
-                  <input
-                    className="pa-input flex-1"
-                    value={field.label}
-                    onChange={(e) => setField(index, { label: e.target.value })}
-                    placeholder="항목 이름 (예: 희망 일시)"
-                    maxLength={40}
-                  />
-                  <select
-                    className="pa-input w-[74px]"
-                    value={field.required ? '1' : '0'}
-                    onChange={(e) => setField(index, { required: e.target.value === '1' })}
-                    aria-label="필수 여부"
-                  >
-                    <option value="0">선택</option>
-                    <option value="1">필수</option>
-                  </select>
-                  <button
-                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-[#D93A3A]"
-                    onClick={() => patch({ collectFields: form.collectFields.filter((_, i) => i !== index) })}
-                    aria-label="항목 삭제"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              ))}
-              {!form.collectFields.length ? (
-                <p className="text-[11.5px]" style={{ color: 'var(--pa-mute-2)' }}>
-                  항목이 없으면 이름·연락처만 받아요.
-                </p>
-              ) : null}
-            </div>
-          </div>
+          ) : null}
 
           <div className="grid grid-cols-2 gap-2">
             <label className="block">
@@ -833,6 +1103,44 @@ function CardEditor({
             </label>
           </div>
 
+          <div className="grid grid-cols-2 gap-2">
+            <label className="block">
+              <span className="mb-1 block text-[12.5px] font-semibold" style={{ color: 'var(--pa-ink)' }}>
+                대화 보관 기간
+              </span>
+              <select
+                className="pa-input"
+                value={String(form.retentionDays)}
+                onChange={(e) => patch({ retentionDays: Number(e.target.value) })}
+              >
+                {retentionChoices.map((days) => (
+                  <option key={days} value={days}>
+                    {RETENTION_LABELS[days] || `${days}일`}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex items-end">
+              <span
+                className="flex w-full items-center justify-between rounded-[12px] px-3 py-2.5"
+                style={{ background: 'var(--pa-surface-3)' }}
+              >
+                <span className="flex items-center gap-1.5 text-[12.5px] font-semibold" style={{ color: 'var(--pa-ink)' }}>
+                  <UserCheck size={14} /> 1인 1회 참여
+                </span>
+                <input
+                  type="checkbox"
+                  checked={form.oncePerVisitor}
+                  onChange={(e) => patch({ oncePerVisitor: e.target.checked })}
+                  className="h-4 w-4 accent-[var(--accent)]"
+                />
+              </span>
+            </label>
+          </div>
+          <p className="-mt-2 text-[11px] leading-relaxed" style={{ color: 'var(--pa-mute-2)' }}>
+            보관 기간이 지나면 서버가 대화·연락처를 실제로 영구 삭제해요. 1인 1회를 켜면 응답을 마친 방문자는 다시 참여할 수 없어요.
+          </p>
+
           <label className="block">
             <span className="mb-1 block text-[12.5px] font-semibold" style={{ color: 'var(--pa-ink)' }}>
               커스텀 도메인 (선택)
@@ -845,7 +1153,8 @@ function CardEditor({
               maxLength={120}
             />
             <span className="mt-1 block text-[11px] leading-relaxed" style={{ color: 'var(--pa-mute-2)' }}>
-              도메인의 DNS를 이 서버로 연결한 뒤 여기에 적으세요. 그 도메인에서는 공개 명함만 열리고 로그인·관리 화면은 404로 막혀요.
+              도메인 DNS 연결과 리버스 프록시(Cloudflare·Nginx·Caddy) SSL 설정이 필요해요. 연결된 도메인에서는 공개 명함만 열리고
+              로그인·관리 화면은 404로 차단돼요.
             </span>
           </label>
 
@@ -892,14 +1201,28 @@ function CardEditor({
             <span className="mb-1 block text-[12.5px] font-semibold" style={{ color: 'var(--pa-ink)' }}>
               이 명함만 쓸 모델 (선택)
             </span>
-            <input
+            <select
               className="pa-input"
               value={form.modelOverride}
               onChange={(e) => patch({ modelOverride: e.target.value })}
-              placeholder="예: gemini-3.8-flash 또는 openai/gpt-4o-mini"
-            />
-            <span className="mt-1 block text-[11px]" style={{ color: 'var(--pa-mute-2)' }}>
-              비우면 평소 쓰는 모델을 그대로 써요. 연결된 프로바이더의 모델만 적용돼요.
+            >
+              <option value="">기본 모델 사용{activeModelLabel ? ` (${activeModelLabel})` : ' (평소 쓰는 모델)'}</option>
+              {modelGroups.map((group) => (
+                <optgroup key={group.provider} label={group.label}>
+                  {group.models.map((model) => (
+                    <option key={model.value} value={model.value}>
+                      {model.label}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+              {/* 연결이 끊긴 프로바이더의 예전 선택값도 잃지 않게 그대로 보여 준다. */}
+              {form.modelOverride && !modelValues.has(form.modelOverride) ? (
+                <option value={form.modelOverride}>{form.modelOverride} (연결 안 됨)</option>
+              ) : null}
+            </select>
+            <span className="mt-1 block text-[11px] leading-relaxed" style={{ color: 'var(--pa-mute-2)' }}>
+              지금 API 키가 연결된 프로바이더의 모델만 보여요. 비우면 평소 쓰는 모델을 그대로 써요.
             </span>
           </label>
 
@@ -936,12 +1259,12 @@ function CardEditor({
   );
 }
 
-function stamp(iso: string): string {
+function stampFull(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return '';
-  const diff = Date.now() - date.getTime();
-  if (diff < 60_000) return '방금';
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}분 전`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}시간 전`;
-  return `${date.getMonth() + 1}월 ${date.getDate()}일`;
+  const month = date.getMonth() + 1;
+  const day = date.getDate();
+  const hh = String(date.getHours()).padStart(2, '0');
+  const mm = String(date.getMinutes()).padStart(2, '0');
+  return `${month}월 ${day}일 ${hh}:${mm}`;
 }

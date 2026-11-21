@@ -3730,7 +3730,10 @@ app.get('/api/public/card/:slug', (req, res) => {
     return;
   }
   res.setHeader('Cache-Control', 'no-store');
-  res.json({ ok: true, card: agentCards.publicCard(card, cardBrand()) });
+  const ipHash = agentCards.hashIp(requestIp(req));
+  // v0.7.3: 1인 1회 명함이면 이 방문자가 이미 응답을 마쳤는지 함께 알려 준다.
+  const participated = agentCards.hasVisitorCompleted(card, ipHash);
+  res.json({ ok: true, card: agentCards.publicCard(card, cardBrand(), participated) });
 });
 
 app.get('/api/public/card/:slug/session/:sessionId', (req, res) => {
@@ -3846,7 +3849,38 @@ app.get('/api/agent-cards', requireAuth, (req, res) => {
     ok: true,
     cards: agentCards.listCards().map((card) => ownerCardView(card, req)),
     purposes: agentCards.CARD_PURPOSES.map((id) => ({ id, ...agentCards.PURPOSE_META[id] })),
+    deliveryModes: agentCards.DELIVERY_MODES.map((id) => ({ id, ...agentCards.DELIVERY_META[id] })),
+    retentionChoices: agentCards.RETENTION_CHOICES,
   });
+});
+
+/**
+ * v0.7.3: '이 명함만 쓸 모델' 드롭다운용 목록.
+ * 지금 API 키가 연결된 프로바이더의 모델만 내려준다(연결 안 된 모델을 골라도 쓸 수 없기 때문).
+ */
+app.get('/api/agent-cards/models', requireAuth, (_req, res) => {
+  const state = llmState();
+  const groups = (Object.keys(PROVIDERS) as ProviderId[])
+    .filter((id) => Boolean(state.accounts[id]?.apiKeyEnc))
+    .map((id) => ({
+      provider: id,
+      label: PROVIDERS[id].label,
+      defaultModel: PROVIDERS[id].defaultModel,
+      models: PROVIDERS[id].models.map((model) => ({
+        value: `${id}/${model}`,
+        model,
+        label: MODEL_LABELS[model] || model,
+      })),
+    }));
+  const active = {
+    provider: state.active.provider,
+    model: normalizeModel(state.active.provider, state.active.model),
+    label: `${PROVIDERS[state.active.provider].label} · ${
+      MODEL_LABELS[normalizeModel(state.active.provider, state.active.model)] ||
+      normalizeModel(state.active.provider, state.active.model)
+    }`,
+  };
+  res.json({ ok: true, active, groups });
 });
 
 app.post('/api/agent-cards', requireAuth, (req, res) => {
@@ -3881,6 +3915,11 @@ app.get('/api/agent-cards/:id/sessions', requireAuth, (req, res) => {
   const card = agentCards.getCard(req.params.id);
   if (!card) {
     res.status(404).json({ ok: false, code: 'not_found', message: '명함을 찾을 수 없습니다.' });
+    return;
+  }
+  // v0.7.3: 전달 없이 답변만 하는(qna_only) 명함의 대화는 주인 화면에 보여 주지 않는다.
+  if (card.deliveryMode === 'qna_only') {
+    res.json({ ok: true, card: ownerCardView(card, req), sessions: [] });
     return;
   }
   const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 20));
@@ -3962,7 +4001,10 @@ function sendIndex(res: Response): void {
     res.status(503).type('text').send('UI is not built. Run `npm run build` first.');
     return;
   }
-  res.setHeader('Cache-Control', 'no-store');
+  // v0.7.3: 업데이트 직후 옛 index.html(옛 번들 해시)이 남아 빈 화면이 되지 않게 항상 재검증·저장 금지.
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   res.sendFile(file);
 }
 
@@ -3975,14 +4017,15 @@ app.use(
         res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
         return;
       }
+      // v0.7.3: 서비스워커·index 는 받을 때마다 새로 받는다(업데이트 즉시 반영).
+      if (/sw\.js$/.test(filePath) || /index\.html$/.test(filePath)) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
+        return;
+      }
       // 캐릭터 PNG 등 파일 이름이 고정된 에셋은 예전에는 immutable(1년)로 나가
       // 폰·PWA가 옛 그림을 계속 보여 줬다. 이제는 매번 재검증하게 한다.
       if (/\.(png|jpe?g|svg|webp|ico|webmanifest)$/i.test(filePath)) {
         res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
-        return;
-      }
-      if (/sw\.js$/.test(filePath)) {
-        res.setHeader('Cache-Control', 'no-cache');
       }
     },
   })
@@ -3997,6 +4040,14 @@ app.get('*', (req, res, next) => {
   }
   if (req.path === '/setup' && setupDone()) {
     serveSetupLocked(res);
+    return;
+  }
+  /*
+   * v0.7.3: 없는 정적 파일(옛 번들 /assets/index-OLD.js 등)을 index.html 로 돌려주면
+   * 브라우저가 HTML 을 JS 로 받아 모듈 로드가 실패해 빈 화면이 된다. 그래서 404 로 끊는다.
+   */
+  if (req.path.startsWith('/assets/') || /\.[a-z0-9]{1,8}$/i.test(req.path)) {
+    res.status(404).type('text').send('Not found');
     return;
   }
   if (!fs.existsSync(path.join(CLIENT_DIST, 'index.html'))) {
@@ -4124,6 +4175,23 @@ function startExaoneExpiryWatch(): void {
   exaoneTimer.unref?.();
 }
 
+/**
+ * v0.7.3: 공개 명함 대화의 실제 보관 기간 정리.
+ * 기동 직후 한 번, 이후 6시간마다 지난 대화(손님 IP 해시·연락처·본문)를 DB 에서 영구 삭제한다.
+ */
+function startGuestDataCleanup(): void {
+  const run = () => {
+    try {
+      agentCards.cleanupExpiredGuestData();
+    } catch (err) {
+      addLog('warn', `공개 명함 보관 기간 정리 실패: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+  run();
+  const timer = setInterval(run, 6 * 60 * 60 * 1000);
+  timer.unref?.();
+}
+
 const server = app.listen(PORT, HOST, () => {
   startSampler(3000);
   /**
@@ -4137,6 +4205,8 @@ const server = app.listen(PORT, HOST, () => {
   } catch (err) {
     addLog('warn', `복구 대기 정리 실패: ${err instanceof Error ? err.message : String(err)}`);
   }
+  // v0.7.3: 보관 기간이 지난 손님 대화를 바로 정리하고, 이후 주기적으로 돌린다.
+  startGuestDataCleanup();
   addLog('success', `Pomong Agent v${APP_VERSION} 가동`);
   // v0.6.0: noVNC 중계기·서버 감시·재시작 감지를 위해 이번 기동 시각을 남긴다.
   (globalThis as unknown as { __pomongBootAt?: string }).__pomongBootAt = new Date().toISOString();

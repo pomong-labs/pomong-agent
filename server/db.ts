@@ -699,6 +699,9 @@ CREATE TABLE IF NOT EXISTS agent_cards (
   system_guide         TEXT NOT NULL DEFAULT '',
   quick_prompts_json   TEXT NOT NULL DEFAULT '[]',
   collect_fields_json  TEXT NOT NULL DEFAULT '[]',
+  delivery_mode        TEXT NOT NULL DEFAULT 'collect',
+  once_per_visitor     INTEGER NOT NULL DEFAULT 0,
+  retention_days       INTEGER NOT NULL DEFAULT 30,
   custom_domain        TEXT,
   pin_hash             TEXT,
   max_turns_per_session INTEGER NOT NULL DEFAULT 20,
@@ -747,6 +750,10 @@ CREATE INDEX IF NOT EXISTS idx_guest_messages_session ON guest_messages(session_
   if (!cardCols.has('model_override')) db.exec('ALTER TABLE agent_cards ADD COLUMN model_override TEXT');
   if (!cardCols.has('daily_date')) db.exec('ALTER TABLE agent_cards ADD COLUMN daily_date TEXT');
   if (!cardCols.has('custom_domain')) db.exec('ALTER TABLE agent_cards ADD COLUMN custom_domain TEXT');
+  // v0.7.3: 응답 방식·1인 1회·보관 기간 — 기존 명함은 대화로 전달(collect)·30일 보관으로 채운다.
+  if (!cardCols.has('delivery_mode')) db.exec("ALTER TABLE agent_cards ADD COLUMN delivery_mode TEXT NOT NULL DEFAULT 'collect'");
+  if (!cardCols.has('once_per_visitor')) db.exec('ALTER TABLE agent_cards ADD COLUMN once_per_visitor INTEGER NOT NULL DEFAULT 0');
+  if (!cardCols.has('retention_days')) db.exec('ALTER TABLE agent_cards ADD COLUMN retention_days INTEGER NOT NULL DEFAULT 30');
   const sessionCols = columnsOf('guest_sessions');
   if (!sessionCols.has('blocked_count')) db.exec('ALTER TABLE guest_sessions ADD COLUMN blocked_count INTEGER NOT NULL DEFAULT 0');
   db.exec('DELETE FROM guest_messages WHERE session_id NOT IN (SELECT id FROM guest_sessions)');

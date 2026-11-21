@@ -1,13 +1,19 @@
 /* Pomong Agent service worker — keeps the app installable, always fresh, and receives web push. */
-const VERSION = 'pomong-agent-v0.7.2';
+const VERSION = 'pomong-agent-v0.7.3';
 
 self.addEventListener('install', (event) => {
-  self.skipWaiting();
+  event.skipWaiting();
+});
+
+/** v0.7.3: 열린 페이지가 새 워커를 바로 쓰게 요청하면 기다리지 않고 활성화한다. */
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     (async () => {
+      // 옛 버전 캐시를 하나도 남기지 않는다(업데이트 직후 옛 번들·그림이 섞이지 않게).
       const keys = await caches.keys();
       await Promise.all(keys.filter((k) => k !== VERSION).map((k) => caches.delete(k)));
       await self.clients.claim();
@@ -22,12 +28,33 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith('/api/')) return;
 
+  // v0.7.3: 화면 이동·index.html 은 **항상 네트워크 우선**(캐시에 저장도 하지 않는다).
+  //   새로 배포된 index.html 이 늦게 도착해 옛 번들을 가리키는 일을 막는다.
+  if (req.mode === 'navigate') {
+    event.respondWith(
+      (async () => {
+        try {
+          return await fetch(req, { cache: 'no-store' });
+        } catch (err) {
+          const cached = await caches.match('/index.html');
+          if (cached) return cached;
+          throw err;
+        }
+      })()
+    );
+    return;
+  }
+
   // network first, fall back to cache when offline
   event.respondWith(
     (async () => {
       try {
         const fresh = await fetch(req);
-        if (fresh.ok && (url.pathname.startsWith('/assets/') || url.pathname.startsWith('/mascots/'))) {
+        if (
+          fresh.ok &&
+          (url.pathname.startsWith('/assets/') || url.pathname.startsWith('/mascots/')) &&
+          !url.pathname.endsWith('index.html')
+        ) {
           const cache = await caches.open(VERSION);
           cache.put(req, fresh.clone());
         }

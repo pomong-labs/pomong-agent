@@ -809,6 +809,7 @@ export interface FileItem {
 /* ------------------------------------------------------------------ */
 
 export type CardPurpose = 'intro' | 'meeting' | 'survey' | 'custom';
+export type DeliveryMode = 'collect' | 'qna_only';
 
 export interface CollectField {
   key: string;
@@ -827,6 +828,9 @@ export interface AgentCard {
   systemGuide: string;
   quickPrompts: string[];
   collectFields: CollectField[];
+  deliveryMode: DeliveryMode;
+  oncePerVisitor: boolean;
+  retentionDays: number;
   customDomain: string | null;
   pinRequired: boolean;
   maxTurnsPerSession: number;
@@ -869,6 +873,10 @@ export interface PublicCardInfo {
   character: string;
   quickPrompts: string[];
   collectFields: CollectField[];
+  deliveryMode: DeliveryMode;
+  oncePerVisitor: boolean;
+  retentionDays: number;
+  participated: boolean;
   pinRequired: boolean;
   turnsLimit: number;
   remainingToday: number;
