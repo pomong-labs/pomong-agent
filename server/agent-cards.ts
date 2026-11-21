@@ -1140,6 +1140,10 @@ function rememberEphemeral(session: EphemeralSession): void {
   ephemeralSessions.set(session.id, session);
 }
 
+// 메모리 세션도 2시간이 지나면 실제로 사라지도록 주기적으로 비운다(서버 부하 없음).
+const ephemeralTimer = setInterval(() => pruneEphemeral(), 10 * 60 * 1000);
+ephemeralTimer.unref?.();
+
 /** qna_only 대화 — DB 저장 없이 서버 메모리의 세션으로만 이어 간다. */
 async function chatEphemeral(
   card: AgentCard,
