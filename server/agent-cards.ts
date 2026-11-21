@@ -1151,7 +1151,17 @@ async function chatEphemeral(
   input: { sessionId?: unknown; message: unknown; ipHash: string }
 ): Promise<ChatOutcome> {
   let session = ephemeralFor(card, input.sessionId);
-  if (!session) session = startEphemeral(card);
+  if (!session) {
+    // qna_only 도 '하루 응대 인원' 한도는 지킨다(세는 값은 개인정보가 아니다).
+    if (!bumpDaily(card)) {
+      return {
+        ok: false,
+        code: 'daily_limit',
+        message: '오늘 응대 가능한 인원을 모두 채웠어요. 주인에게 직접 연락해 주세요.',
+      };
+    }
+    session = startEphemeral(card);
+  }
 
   if (session.turnCount >= card.maxTurnsPerSession) {
     return {
