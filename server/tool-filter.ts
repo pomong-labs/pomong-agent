@@ -32,6 +32,8 @@ export const CORE_TOOLS = [
   'time_now',
   'memory_save',
   'memory_search',
+  // v0.6.19: 지침 본문을 매 턴 바로 꺼내 쓸 수 있게 늘 켜 둔다.
+  'read_skill',
   'tasks_list',
   'tasks_add',
   'tasks_complete',
@@ -115,6 +117,11 @@ export interface ToolFilterInput {
   hasFile?: boolean;
   /** 브라우저 작업이 이미 진행 중인 턴인지(이어서 하기) */
   browserActive?: boolean;
+  /**
+   * v0.6.19: 이번 턴에 적용되는 사용자 지침(커스텀 스킬) 본문.
+   * 지침이 브라우저·택배·시세 같은 도구를 요구하면 그 그룹도 함께 넘긴다.
+   */
+  skillText?: string;
 }
 
 export interface ToolFilterResult {
@@ -127,9 +134,13 @@ export interface ToolFilterResult {
 /** 의도를 감지해 필요한 도구 이름만 고른다(순수 함수). */
 export function selectToolNames(input: ToolFilterInput): ToolFilterResult {
   const text = String(input.userRequest || '');
+  // v0.6.19: 사용자 지침도 같은 의도 분석에 넣는다.
+  //  지침이 "택배 조회해서 알려줘" 같은 도구 사용을 요구하면 그 그룹이 빠지지 않게.
+  const skillText = String(input.skillText || '').trim();
+  const haystack = skillText ? `${text}\n${skillText}` : text;
   const groups = new Set<ToolGroup>();
   for (const { group, re } of INTENT_PATTERNS) {
-    if (re.test(text)) groups.add(group);
+    if (re.test(haystack)) groups.add(group);
   }
   if (input.hasImage || input.hasFile || (input.userRequest || '').trim() === '') groups.add('files');
   // 사진을 고쳐 달라는 요청이면 편집 도구까지 함께 넘긴다(첨부 id로 찾는다).

@@ -1150,11 +1150,16 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
   }
   const { decrypt, serverKey } = await import('./crypto');
   const apiKey = decrypt(String(config.apiKeyEnc), serverKey());
+  // v0.6.19: 지침 도구는 매 턴 DB에서 새로 읽는다(추가·수정·토글 직후 다음 턴에 바로 반영).
+  const turnSkills = skills.listSkills();
+  const activeSkills = skills.matchSkills(input.prompt, turnSkills);
   // v0.6.3: 도구가 40개를 넘어 필요할 것만 골라 넘긴다(진 의도는 전체 허용).
   const toolSelection = selectToolNames({
     userRequest: input.prompt,
     hasImage,
     browserActive: Boolean(browser.activeSession()),
+    // v0.6.19: 이번 턴에 적용되는 지침이 요구하는 도구 그룹도 함께 넘긴다.
+    skillText: activeSkills.map((s) => s.instructions).join('\n'),
   });
   const turnTools = filterToolsByPrefs(
     toolSelection.tools ? TOOL_SPECS.filter((spec) => toolSelection.tools?.includes(spec.name)) : TOOL_SPECS,
@@ -1213,7 +1218,7 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
       provider: config.provider,
       apiKey,
       model: config.model,
-      system: systemPrompt(memory.memoryPromptBlock(input.prompt), skills.skillPromptBlock(input.prompt)),
+      system: systemPrompt(memory.memoryPromptBlock(input.prompt), skills.skillPromptBlock(input.prompt, turnSkills, activeSkills)),
       history: input.history,
       tools: turnTools,
       maxSteps: MAX_STEPS,
@@ -3184,7 +3189,13 @@ const server = app.listen(PORT, HOST, () => {
       const { decrypt, serverKey } = await import('./crypto');
       const apiKey = decrypt(config.apiKeyEnc, serverKey());
       // v0.6.3: 예약 실행에도 필요한 도구만 넘긴다(허용 목록이 있으면 그 안에서).
-      const selection = selectToolNames({ userRequest: job.prompt });
+      // v0.6.19: 예약 지시에도 지침 도구를 똑같이 적용한다.
+      const jobSkills = skills.listSkills();
+      const jobActiveSkills = skills.matchSkills(job.prompt, jobSkills);
+      const selection = selectToolNames({
+        userRequest: job.prompt,
+        skillText: jobActiveSkills.map((s) => s.instructions).join('\n'),
+      });
       const allowedByJob = job.toolsAllow && job.toolsAllow.length ? job.toolsAllow : null;
       const jobTools = filterToolsByPrefs(
         TOOL_SPECS.filter((spec) => {
@@ -3198,7 +3209,7 @@ const server = app.listen(PORT, HOST, () => {
         provider: config.provider,
         apiKey,
         model: config.model,
-        system: `${systemPrompt('', skills.skillPromptBlock(job.prompt))}\n\n[예약 실행]\n지금은 사용자가 대화하지 않은 채 깨어난 예약 실행입니다. 지시를 스스로 처리하고, 결과를 사용자가 바로 읽을 수 있게 3줄 이내로 요약하세요. 결제·게시·로그인처럼 사람이 해야 할 일은 하지 말고 "사람이 필요하다"고 적으세요.`,
+        system: `${systemPrompt('', skills.skillPromptBlock(job.prompt, jobSkills, jobActiveSkills))}\n\n[예약 실행]\n지금은 사용자가 대화하지 않은 채 깨어난 예약 실행입니다. 지시를 스스로 처리하고, 결과를 사용자가 바로 읽을 수 있게 3줄 이내로 요약하세요. 결제·게시·로그인처럼 사람이 해야 할 일은 하지 말고 "사람이 필요하다"고 적으세요.`,
         history: [{ role: 'user', content: job.prompt }],
         tools: jobTools,
         maxSteps: job.maxSteps,

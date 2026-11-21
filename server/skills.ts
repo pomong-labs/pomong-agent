@@ -14,7 +14,10 @@ import { db } from './db';
 export interface CustomSkill {
   id: string;
   name: string;
-  /** 발동 키워드 (없으면 항상 적용이 아닌 한 발동하지 않는다) */
+  /**
+   * 발동 키워드.
+   * v0.6.19: 비어 있으면 '기본 안내'로 보고 매 요청에 적용한다(예전에는 영영 발동하지 않았다).
+   */
   keywords: string[];
   instructions: string;
   /** 키워드와 상관없이 항상 적용 */
@@ -238,30 +241,176 @@ export function addTemplate(templateId: string): CustomSkill | { error: string }
 /* 프롬프트 주입                                                       */
 /* ------------------------------------------------------------------ */
 
-/** 이번 요청에 발동하는 지침 (항상 적용 + 키워드 일치) */
+/**
+ * 비교용 글자 형태 — 띄어쓰기·문장부호·대소문자를 없앤다.
+ * '할 일' → '할일', '3줄  핵심 보고!' → '3줄핵심보고'
+ */
+export function squeeze(value: unknown): string {
+  return String(value ?? '')
+    .toLowerCase()
+    .replace(/[\s\u00a0]+/g, '')
+    .replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+/** 두 글자 묶음 — '회의록' → {'회의','의록'} */
+function bigrams(value: string): Set<string> {
+  const out = new Set<string>();
+  for (let i = 0; i < value.length - 1; i += 1) out.add(value.slice(i, i + 2));
+  return out;
+}
+
+/** 낱말 단위로 쪼갠 요청 (한 글자 낱말은 버린다) */
+function words(text: string): string[] {
+  return text
+    .split(/[^\p{L}\p{N}]+/u)
+    .map((w) => w.trim())
+    .filter((w) => w.length >= 2);
+}
+
+/**
+ * 지침·스킬 자체를 언급한 요청인지.
+ * "방금 만든 지침 적용해서 답해줘"처럼 스킬 이름도 키워드도 없는 요청에서
+ * 본문이 통째로 빠지던 문제를 막는다(v0.6.19).
+ */
+const SKILL_MENTION_RE =
+  /(지침|스킬|도구\s*관리|도구\s*설정|커스텀\s*(?:도구|지침|스킬)|방금\s*(?:추가|만든|등록|저장|넣)|금방\s*(?:추가|만든|등록|저장)|아까\s*(?:추가|만든|등록|저장)|방금\s*그|아까\s*그)/i;
+
+export function mentionsSkillTools(request: string): boolean {
+  return SKILL_MENTION_RE.test(String(request || ''));
+}
+
+/**
+ * 키워드 하나가 요청에 걸리는지.
+ * 띄어쓰기 차이('할 일' ↔ '할일')와 조사·어미 차이('회의록' ↔ '회의 정리')를 흡수한다.
+ */
+function keywordHits(text: string, squeezedText: string, wordList: string[], keyword: string): boolean {
+  const raw = String(keyword || '').trim().toLowerCase();
+  if (!raw) return false;
+  if (text.includes(raw)) return true;
+  const key = squeeze(raw);
+  if (!key) return false;
+  if (squeezedText.includes(key)) return true;
+  if (key.length < 2) return false;
+  // 어미만 다른 말까지: 두 글자 묶음이 절반 이상 겹치면 같은 말로 본다.
+  const keyGrams = bigrams(key);
+  if (keyGrams.size === 0) return false;
+  for (const word of wordList) {
+    const squashed = squeeze(word);
+    if (squashed.length < 2) continue;
+    let hit = 0;
+    for (const gram of bigrams(squashed)) if (keyGrams.has(gram)) hit += 1;
+    if (hit >= 1 && hit / keyGrams.size >= 0.5) return true;
+  }
+  return false;
+}
+
+/** 제목이 요청에 나오는지 — 대소문자·공백을 무시하고, 여러 낱말 제목은 절반 이상 겹치면 잡는다. */
+function nameHits(squeezedText: string, wordList: string[], name: string): boolean {
+  const full = squeeze(name);
+  if (!full) return false;
+  if (full.length >= 2 && squeezedText.includes(full)) return true;
+  const tokens = String(name || '')
+    .split(/[^\p{L}\p{N}]+/u)
+    .map((t) => squeeze(t))
+    .filter((t) => t.length >= 2);
+  if (tokens.length < 2) return false;
+  const squashedWords = wordList.map((w) => squeeze(w));
+  const matched = tokens.filter((token) => squashedWords.some((w) => w === token || w.includes(token) || token.includes(w))).length;
+  return matched >= Math.ceil(tokens.length / 2);
+}
+
+/**
+ * 이번 요청에 발동하는 지침.
+ *  · 항상 적용
+ *  · 제목이 요청에 나옴(대소문자·공백 무시)
+ *  · 키워드 일치(띄어쓰기·조사 차이 흡수)
+ *  · 키워드가 비어 있는 지침(기본 안내)
+ *  · 지침 자체를 언급한 요청("방금 만든 지침 적용해") → 활성 지침 전부
+ */
 export function matchSkills(request: string, skills: CustomSkill[] = listSkills()): CustomSkill[] {
   const text = String(request || '').toLowerCase();
+  const squeezedText = squeeze(text);
+  const wordList = words(text);
+  const explicit = mentionsSkillTools(text);
   return skills.filter((skill) => {
     if (!skill.enabled) return false;
     if (skill.alwaysApply) return true;
-    return skill.keywords.some((keyword) => text.includes(keyword));
+    if (explicit) return true;
+    if (nameHits(squeezedText, wordList, skill.name)) return true;
+    if (skill.keywords.some((keyword) => keywordHits(text, squeezedText, wordList, keyword))) return true;
+    // 키워드를 비워 둔 지침은 '기본 안내'로 보고 매번 적용한다.
+    return skill.keywords.length === 0;
   });
+}
+
+/** 지침 한 줄 요약 — 목록·도구 응답에 쓴다 */
+export function skillSummaryLine(skill: CustomSkill): string {
+  if (skill.alwaysApply) return '- ' + skill.name + ' (항상 적용)';
+  if (skill.keywords.length === 0) return '- ' + skill.name + ' (키워드 없음 · 기본 적용)';
+  return '- ' + skill.name + ' — ' + skill.keywords.join(', ');
+}
+
+/** 지침 본문 한 덩어리 (read_skill 응답) */
+export function skillBody(skill: CustomSkill): string {
+  const tag = skill.alwaysApply
+    ? '항상 적용'
+    : skill.keywords.length === 0
+      ? '키워드 없음 · 기본 적용'
+      : '발동: ' + skill.keywords.join(', ');
+  const off = skill.enabled ? '' : '\n(이 지침은 지금 꺼져 있습니다. 쓰려면 사용자가 도구 관리에서 켜야 합니다.)';
+  return '### ' + skill.name + ' (' + tag + ')\n' + skill.instructions + off;
+}
+
+/**
+ * `read_skill` 내장 도구의 본문.
+ * 이름·id로 한 개, all=true면 켜져 있는 지침 전부.
+ * 매 호출마다 DB를 새로 읽으므로 UI에서 방금 추가·수정한 지침도 바로 나온다.
+ */
+export function readSkillForTool(query: unknown, all = false): { content: string; meta: 'skills' } {
+  const every = listSkills();
+  if (all) {
+    const on = every.filter((s) => s.enabled);
+    if (!on.length) return { content: '켜져 있는 지침 도구가 없습니다.', meta: 'skills' };
+    return { content: on.map(skillBody).join('\n\n'), meta: 'skills' };
+  }
+  const asked = String(query ?? '').trim();
+  const catalog = every.length ? every.map(skillSummaryLine).join('\n') : '(없음)';
+  if (!asked) {
+    return { content: '어떤 지침을 읽을지 이름을 알려 주세요.\n[지침 목록]\n' + catalog, meta: 'skills' };
+  }
+  const key = squeeze(asked);
+  const exact = every.find((s) => s.id === asked);
+  const found =
+    exact ||
+    every.find((s) => squeeze(s.name) === key) ||
+    (key.length >= 2
+      ? every.find((s) => squeeze(s.name).includes(key) || key.includes(squeeze(s.name))) ||
+        every.find((s) => s.keywords.some((k) => squeeze(k) === key))
+      : undefined);
+  if (!found) {
+    return {
+      content: "'" + asked + "' 지침을 찾지 못했습니다.\n[지침 목록]\n" + catalog + '\n필요한 지침이 없으면 사용자에게 도구(스킬) 관리에서 추가해 달라고 안내하세요.',
+      meta: 'skills',
+    };
+  }
+  return { content: skillBody(found), meta: 'skills' };
 }
 
 /**
  * 시스템 프롬프트에 붙일 지침 블록.
- * 토큰을 아끼려고 맞은 지침만 내용을 넣고, 맞지 않는 지침은 제목+키워드 한 줄만 남긴다.
+ * 토큰을 아끼려고 맞은 지침만 내용을 넣고, 맞지 않는 지침은 제목 한 줄만 남긴다.
+ * (v0.6.19: 남은 지침도 read_skill로 즉시 꺼내 쓸 수 있다고 알려 준다)
  */
-export function skillPromptBlock(request: string, skills: CustomSkill[] = listSkills()): string {
+export function skillPromptBlock(request: string, skills: CustomSkill[] = listSkills(), precomputed?: CustomSkill[]): string {
   const enabled = skills.filter((s) => s.enabled);
   if (enabled.length === 0) return '';
-  const active = matchSkills(request, enabled);
+  const active = precomputed ?? matchSkills(request, enabled);
   const activeIds = new Set(active.map((s) => s.id));
   const rest = enabled.filter((s) => !activeIds.has(s.id));
 
   const lines: string[] = [
     '[사용자 지침 도구]',
-    "사용자가 '도구(스킬) 관리'에서 직접 만든 지침입니다. 아래 지침 중 이번 요청에 해당하는 것은 반드시 따르세요. 안전 규칙(비밀번호·결제·삭제 금지)과 충돌하면 안전 규칙이 우선입니다.",
+    "사용자가 '도구(스킬) 관리'에서 직접 만든 지침입니다. 아래에 내용이 실린 지침은 이번 요청에서 반드시 따르세요. 제목만 보이는 지침이라도 이번 요청에 필요해 보이면 read_skill 도구로 이름을 넣어 전체 내용을 읽은 뒤 따르세요(읽는 즉시 최신 내용이 적용됩니다). 안전 규칙(비밀번호·결제·삭제 금지)과 충돌하면 안전 규칙이 우선입니다.",
   ];
 
   let budget = 8000;
@@ -269,13 +418,25 @@ export function skillPromptBlock(request: string, skills: CustomSkill[] = listSk
     const body = skill.instructions.slice(0, Math.max(0, budget));
     if (!body) break;
     budget -= body.length;
-    lines.push('', `### ${skill.name}${skill.alwaysApply ? ' (항상 적용)' : ` (발동: ${skill.keywords.join(', ')})`}`, body);
+    const tag = skill.alwaysApply
+      ? ' (항상 적용)'
+      : skill.keywords.length === 0
+        ? ' (키워드 없음 · 기본 적용)'
+        : ' (발동: ' + skill.keywords.join(', ') + ')';
+    lines.push('', '### ' + skill.name + tag, body);
   }
   if (active.length === 0) {
-    lines.push('', '이번 요청에 맞는 지침은 없습니다. 아래 목록은 참고만 하고 내용은 적용하지 마세요.');
+    lines.push(
+      '',
+      '이번 요청에 자동으로 맞춰 실린 지침은 없습니다. 아래 목록에서 지금 요청과 관계있어 보이는 지침이 있으면 read_skill 도구로 이름을 넣어 전체 내용을 읽고 그대로 따르세요. 관계없으면 그냥 답하세요.'
+    );
   }
   if (rest.length) {
-    lines.push('', "[다른 지침 도구 — 이번 요청과 맞지 않아 내용은 생략]", ...rest.map((s) => `- ${s.name}${s.keywords.length ? ` — ${s.keywords.join(', ')}` : ''}`));
+    lines.push(
+      '',
+      '[다른 지침 도구 — 내용은 생략, 필요하면 read_skill로 읽기]',
+      ...rest.map((s) => skillSummaryLine(s))
+    );
   }
   return lines.join('\n');
 }

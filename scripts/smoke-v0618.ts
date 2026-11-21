@@ -54,7 +54,8 @@ async function main(): Promise<void> {
   const compose = read('docker-compose.yml');
 
   /* 1) 버전 --------------------------------------------------------------- */
-  check('버전 0.6.18', pkg.version === '0.6.18', pkg.version);
+  // v0.6.19: 버전 검사는 0.6.x 형식으로 둔다(이후 패치에서도 회귀 확인용으로 계속 돈다).
+  check('버전 0.6.x', /^0\.6\.\d+$/.test(pkg.version), pkg.version);
   check('server/config 버전', APP_VERSION === pkg.version, APP_VERSION);
   check('에셋 버전', ASSET_VERSION === pkg.version, ASSET_VERSION);
   check(

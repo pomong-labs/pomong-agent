@@ -23,6 +23,7 @@ import * as parcelWatch from './parcel-watch';
 import * as market from './market';
 import * as ddays from './ddays';
 import * as docker from './docker';
+import * as skills from './skills';
 import type { ToolSpec } from './providers';
 
 /** v0.6.3: 메일 계정을 아직 연결하지 않았을 때 안내 */
@@ -313,6 +314,20 @@ export const TOOL_SPECS: ToolSpec[] = [
         query: { type: 'string', description: '지울 기억의 내용 일부 또는 id' },
       },
       required: ['query'],
+    },
+  },
+
+  /* --------------------- v0.6.19: 지침 도구 즉시 읽기 --------------------- */
+  {
+    name: 'read_skill',
+    description:
+      "사용자가 '도구(스킬) 관리'에서 만든 지침 도구의 전체 지침을 지금 바로 읽는다. [사용자 지침 도구] 목록에 제목만 보이는 지침을 적용해야 할 때, 또는 사용자가 '지침'·'스킬'·'방금 만든 도구'를 말할 때 이름을 넣어 읽는다. 매 턴 DB에서 새로 읽으므로 방금 추가·수정·토글한 지침도 그대로 반영된다.",
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: '지침 도구 이름(일부만 적어도 된다) 또는 id' },
+        all: { type: 'boolean', description: 'true면 켜져 있는 지침 전부를 한 번에 읽는다' },
+      },
     },
   },
 
@@ -987,6 +1002,7 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
 export const TOOL_LABELS: Record<string, string> = {
   ...Object.fromEntries(TOOL_CATALOG.map((entry) => [entry.name, entry.label])),
   chat_notify: '중간 안내 말풍선',
+  read_skill: '지침 읽기',
   memory_search: '기억 검색',
   memory_delete: '기억 삭제',
   browser_snapshot: '화면 읽기',
@@ -1009,7 +1025,7 @@ export const TOOL_LABELS: Record<string, string> = {
 
 export interface ToolResult {
   content: string;
-  meta?: 'tasks' | 'server_stats' | 'browser';
+  meta?: 'tasks' | 'server_stats' | 'browser' | 'skills';
   /**
    * v0.5.3: 서버가 턴을 마무리할 때 쓰는 신호.
    * (가벼운 모델이 로그인 카드 도구를 빠뜨렸는지 서버가 판단한다)
@@ -1097,6 +1113,10 @@ export async function runTool(name: string, args: Record<string, unknown>, ctx: 
 
 async function runToolInner(name: string, args: Record<string, unknown>, ctx: ToolContext = {}): Promise<ToolResult> {
   switch (name) {
+    case 'read_skill': {
+      // v0.6.19: 지침 본문을 매번 DB에서 새로 읽는다(방금 만든 지침도 바로 적용).
+      return skills.readSkillForTool(args.name ?? args.query, Boolean(args.all));
+    }
     case 'tasks_list': {
       const status = String(args.status || 'open');
       const rows = listTaskRows(60).filter((r) =>

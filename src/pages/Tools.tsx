@@ -190,7 +190,10 @@ export default function Tools() {
   const patchSkill = async (id: string, patch: Partial<CustomSkill>) => {
     setSkills((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
     try {
-      await api.put(`/api/skills/${id}`, patch);
+      // v0.6.19: 서버가 돌려준 실제 저장값으로 목록을 맞춘다(다음 대화 턴에 바로 반영).
+      const res = await api.put<{ skill?: CustomSkill }>(`/api/skills/${id}`, patch);
+      if (res.skill) setSkills((prev) => prev.map((s) => (s.id === id ? (res.skill as CustomSkill) : s)));
+      if (typeof patch.enabled === 'boolean') flash(patch.enabled ? '지침 도구를 켰어요. 다음 대화부터 바로 따라요.' : '지침 도구를 껐어요.');
     } catch (err) {
       setError(err instanceof Error ? err.message : '지침 도구를 저장하지 못했습니다.');
       await load();
@@ -216,7 +219,7 @@ export default function Tools() {
       else await api.post('/api/skills', body);
       setForm(null);
       await load();
-      flash(form.id ? '지침 도구를 고쳤어요.' : '새 지침 도구를 만들었어요.');
+      flash(form.id ? '지침 도구를 고쳤어요. 다음 대화부터 바로 반영돼요.' : '새 지침 도구를 만들었어요. 다음 대화부터 바로 반영돼요.');
     } catch (err) {
       setError(err instanceof Error ? err.message : '지침 도구를 저장하지 못했습니다.');
     } finally {
@@ -282,7 +285,7 @@ export default function Tools() {
         >
           <Sparkles size={16} className="mt-0.5 shrink-0" />
           <span>
-            끈 도구는 AI에게 아예 전달되지 않아요. 지침 도구는 이번 요청의 키워드와 맞을 때만 내용이 실려 토큰을 아껴요.
+            끈 도구는 AI에게 아예 전달되지 않아요. 지침 도구는 이번 요청과 맞을 때 내용이 실려 토큰을 아끼고, 맞지 않아도 대화에서 "그 지침 읽어서 적용해"라고 하면 바로 읽어요.
           </span>
         </div>
 
@@ -386,7 +389,7 @@ export default function Tools() {
         </div>
 
         {/* ② 나만의 지침 도구 */}
-        <SectionTitle step="2" title="나만의 지침 도구" desc="키워드가 맞거나 '항상 적용'일 때만 AI가 이 지침을 따라요." />
+        <SectionTitle step="2" title="나만의 지침 도구" desc="키워드·제목이 맞거나 '항상 적용'이면 바로 따라요. 키워드를 비우면 기본 안내로 늘 적용되고, 제목만 보이는 지침도 대화 중에 읽어서 적용할 수 있어요." />
 
         <button
           type="button"
@@ -436,11 +439,14 @@ export default function Tools() {
                 value={form.keywords}
                 onChange={(e) => setForm({ ...form, keywords: e.target.value })}
                 maxLength={200}
-                placeholder="예: 요약, 정리, 보고"
+                placeholder="예: 요약, 정리, 보고 (비우면 항상 적용)"
                 disabled={form.alwaysApply}
                 className="w-full rounded-xl border px-3 py-2.5 text-[14px] outline-none focus:ring-2 disabled:opacity-50"
                 style={inputStyle}
               />
+              <span className="mt-1 block text-[11.5px]" style={{ color: 'var(--pa-mute)' }}>
+                비워 두면 '기본 안내'로 매 요청에 적용돼요.
+              </span>
             </label>
 
             <div className="flex items-center justify-between rounded-xl px-3 py-2.5" style={{ background: 'var(--pa-surface-3)' }}>
@@ -529,7 +535,7 @@ export default function Tools() {
                     ))}
                     {!skill.alwaysApply && skill.keywords.length === 0 ? (
                       <span className="text-[10.5px] font-semibold" style={{ color: 'var(--pa-mute-2)' }}>
-                        키워드 없음 · 발동하지 않아요
+                        키워드 없음 · 기본 적용
                       </span>
                     ) : null}
                   </span>
