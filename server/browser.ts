@@ -176,6 +176,93 @@ export function browserStateHosts(): string[] {
   return Array.from(hosts);
 }
 
+/**
+ * v0.6.18: 저장된 쿠키를 도메인별로 요약한다(금고 화면의 '로그인 세션 상태' 배지용).
+ * - 만료 시각이 지난 쿠키만 있으면 '확인 필요'
+ * - 유효한 쿠키가 있으면 '로그인 유지 중'
+ */
+export interface CookieHostState {
+  host: string;
+  cookies: number;
+  /** 가장 늦게 만료되는 쿠키의 만료 시각(ISO). 세션 쿠키(=없음)면 null */
+  expiresAt: string | null;
+  expired: boolean;
+}
+
+export function browserCookieHosts(): CookieHostState[] {
+  const state = readStorageState();
+  if (!state) return [];
+  const map = new Map<string, { cookies: number; expires: number[] }>();
+  for (const cookie of state.cookies as { domain?: string; expires?: number }[]) {
+    const domain = String(cookie?.domain || '').replace(/^\./, '').toLowerCase();
+    if (!domain) continue;
+    const entry = map.get(domain) || { cookies: 0, expires: [] };
+    entry.cookies += 1;
+    const expires = Number(cookie?.expires);
+    if (Number.isFinite(expires) && expires > 0) entry.expires.push(expires * 1000);
+    map.set(domain, entry);
+  }
+  const now = Date.now();
+  return Array.from(map.entries()).map(([host, entry]) => {
+    const latest = entry.expires.length ? Math.max(...entry.expires) : null;
+    return {
+      host,
+      cookies: entry.cookies,
+      expiresAt: latest ? new Date(latest).toISOString() : null,
+      expired: latest !== null ? latest < now : false,
+    };
+  });
+}
+
+/**
+ * v0.6.18: 특정 서비스(token)의 로그인 쿠키가 브라우저에 살아 있는지 본다.
+ * - logged_in : 유효한 쿠키 있음 (로그인 화면으로 먼저 가지 말 것)
+ * - needs_check: 쿠키는 있지만 모두 만료됨
+ * - none      : 쿠키 없음
+ */
+export function sessionCookieState(tokens: string[]): {
+  state: 'logged_in' | 'needs_check' | 'none';
+  host: string | null;
+  expiresAt: string | null;
+} {
+  const needles = tokens.map((t) => String(t || '').toLowerCase()).filter((t) => t.length > 2);
+  if (!needles.length) return { state: 'none', host: null, expiresAt: null };
+  const hosts = (() => {
+    try {
+      return browserCookieHosts();
+    } catch {
+      return [];
+    }
+  })();
+  let best: CookieHostState | null = null;
+  for (const entry of hosts) {
+    if (!needles.some((needle) => entry.host.includes(needle))) continue;
+    if (!best || entry.cookies > best.cookies) best = entry;
+  }
+  if (!best) return { state: 'none', host: null, expiresAt: null };
+  return { state: best.expired ? 'needs_check' : 'logged_in', host: best.host, expiresAt: best.expiresAt };
+}
+
+/** 지금 열린 브라우저 페이지가 이미 로그인 화면을 벗어났는지 읽는다(v0.6.18). */
+export async function currentLoginState(): Promise<{
+  loggedIn: boolean;
+  hints: string[];
+  url: string;
+  title: string;
+} | null> {
+  const session = activeSession();
+  if (!session) return null;
+  try {
+    const s = await ensureLive(session.id);
+    const state = await detectLoginState(s.page);
+    const url = s.page.url();
+    const title = await s.page.title().catch(() => '');
+    return { loggedIn: state.loggedIn, hints: state.hints, url, title };
+  } catch {
+    return null;
+  }
+}
+
 /** 설정의 '브라우저 로그인 세션 초기화' */
 export function clearSavedState(): boolean {
   try {

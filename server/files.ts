@@ -147,7 +147,7 @@ function chatItem(row: attachments.AttachmentRow): FileItem {
 
 function savedItem(row: SavedFileRow): FileItem {
   const abs = resolveInside(row.path);
-  const kind = (['image', 'pdf', 'text', 'other'] as const).includes(row.kind as attachments.AttachmentKind)
+  const kind = (['image', 'pdf', 'text', 'audio', 'other'] as const).includes(row.kind as attachments.AttachmentKind)
     ? (row.kind as attachments.AttachmentKind)
     : attachments.classify(row.name, row.mime);
   return {

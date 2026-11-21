@@ -548,6 +548,28 @@ CREATE INDEX IF NOT EXISTS idx_parcel_watches_due ON parcel_watches(enabled, nex
 `);
 
 /* ------------------------------------------------------------------ */
+/* v0.6.18 schema: 민감 작업 승인 카드 (Human-in-the-Loop)                 */
+/* 도구를 실행하기 전에 대기 상태로 남겨 두고, 사용자가 승인할 때 실행한다. */
+/* ------------------------------------------------------------------ */
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS pending_approvals (
+  id         TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  tool       TEXT NOT NULL,
+  args       TEXT NOT NULL,
+  title      TEXT NOT NULL,
+  detail     TEXT,
+  reason     TEXT,
+  status     TEXT NOT NULL DEFAULT 'pending',
+  result     TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pending_approvals_session ON pending_approvals(session_id, status, created_at DESC);
+`);
+
+/* ------------------------------------------------------------------ */
 /* Settings                                                            */
 /* ------------------------------------------------------------------ */
 

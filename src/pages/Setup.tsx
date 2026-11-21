@@ -362,7 +362,7 @@ export default function Setup() {
               <div className="mx-auto max-w-[560px] space-y-6">
                 <div>
                   <p className="mb-2.5 text-[14px] font-semibold text-[#3B3947]">1. AI 서비스 선택</p>
-                  <div className="grid grid-cols-3 overflow-hidden rounded-2xl border border-[#E9E7F2]">
+                  <div className="grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-[#E9E7F2] bg-[#E9E7F2] sm:grid-cols-4">
                     {PROVIDERS.map((p) => {
                       const active = provider === p.id;
                       return (
@@ -374,9 +374,9 @@ export default function Setup() {
                             setConnected(false);
                             setNotice('');
                           }}
-                          className={`flex items-center justify-center gap-2 py-4 text-[15px] font-semibold transition ${
-                            active ? 'bg-[#F6F2FF] text-[#7C63F6]' : 'bg-white text-[#3B3947]'
-                          } ${p.id !== 'claude' ? 'border-r border-[#E9E7F2]' : ''}`}
+                          className={`flex items-center justify-center gap-2 bg-white py-4 text-[14px] font-semibold transition sm:text-[15px] ${
+                            active ? 'bg-[#F6F2FF] text-[#7C63F6]' : 'text-[#3B3947]'
+                          }`}
                           style={active ? { boxShadow: 'inset 0 0 0 1.5px #C9B8FF' } : undefined}
                         >
                           <ProviderMark id={p.id} />

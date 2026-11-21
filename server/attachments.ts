@@ -17,7 +17,7 @@ import { addLog, db } from './db';
  * - 대화 기록에는 메타데이터(파일명·크기·종류·주소)만 남고 파일 본문은 남기지 않는다.
  */
 
-export type AttachmentKind = 'image' | 'text' | 'pdf' | 'other';
+export type AttachmentKind = 'image' | 'text' | 'pdf' | 'audio' | 'other';
 
 export const MAX_FILE_BYTES = 15 * 1024 * 1024; // 15MB
 export const MAX_FILES_PER_MESSAGE = 6;
@@ -35,6 +35,10 @@ const MAX_INLINE_PDF_BYTES = 8 * 1024 * 1024;
 const PDFTOTEXT_TIMEOUT_MS = 25_000;
 
 const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'heic', 'heif']);
+/** v0.6.18: 음성 메모·녹음 파일 — Gemini가 직접 듣고 받아쓰기·요약한다 */
+const AUDIO_EXT = new Set(['m4a', 'mp3', 'wav', 'ogg', 'oga', 'webm', 'aac', 'flac', 'amr', 'caf']);
+/** 오디오 1개 인라인 상한(base64 전 원본 바이트) */
+const MAX_INLINE_AUDIO_BYTES = 12 * 1024 * 1024;
 const TEXT_EXT = new Set([
   'txt', 'md', 'markdown', 'csv', 'tsv', 'json', 'jsonl', 'yml', 'yaml', 'xml', 'html', 'htm',
   'css', 'scss', 'js', 'jsx', 'ts', 'tsx', 'mjs', 'cjs', 'py', 'rb', 'go', 'rs', 'java', 'kt',
@@ -88,6 +92,8 @@ export function classify(filename: string, mime: string): AttachmentKind {
   const type = String(mime || '').toLowerCase();
   if (type.startsWith('image/') || IMAGE_EXT.has(ext)) return 'image';
   if (type === 'application/pdf' || ext === 'pdf') return 'pdf';
+  // v0.6.18: .webm은 영상에도 쓰지만 채팅에서는 녹음 파일로 다룬다.
+  if (type.startsWith('audio/') || AUDIO_EXT.has(ext)) return 'audio';
   if (type.startsWith('text/') || TEXT_EXT.has(ext) || /json|xml|csv|javascript|yaml/.test(type)) return 'text';
   return 'other';
 }
@@ -151,6 +157,15 @@ export function guessMime(filename: string): string {
   if (ext === 'gif') return 'image/gif';
   if (ext === 'webp') return 'image/webp';
   if (ext === 'pdf') return 'application/pdf';
+  if (ext === 'm4a') return 'audio/mp4';
+  if (ext === 'mp3') return 'audio/mpeg';
+  if (ext === 'wav') return 'audio/wav';
+  if (ext === 'ogg' || ext === 'oga') return 'audio/ogg';
+  if (ext === 'webm') return 'audio/webm';
+  if (ext === 'aac') return 'audio/aac';
+  if (ext === 'flac') return 'audio/flac';
+  if (ext === 'amr') return 'audio/amr';
+  if (ext === 'caf') return 'audio/x-caf';
   if (ext === 'json') return 'application/json';
   if (ext === 'csv') return 'text/csv';
   if (ext === 'md' || ext === 'markdown') return 'text/markdown';
@@ -425,6 +440,18 @@ export function inlineImage(row: AttachmentRow): InlineImage | null {
   }
 }
 
+/** v0.6.18: 음성 파일 1개를 AI에 넘길 base64로 (너무 크면 null) */
+export function inlineAudio(row: AttachmentRow): InlineImage | null {
+  if (row.kind !== 'audio') return null;
+  if (row.size > MAX_INLINE_AUDIO_BYTES) return null;
+  try {
+    const data = fs.readFileSync(absolutePath(row));
+    return { mime: row.mime || guessMime(row.filename), dataBase64: data.toString('base64') };
+  } catch {
+    return null;
+  }
+}
+
 export interface PromptAttachmentBlock {
   /** 프롬프트에 붙일 텍스트 블록 */
   text: string;
@@ -432,6 +459,8 @@ export interface PromptAttachmentBlock {
   images: InlineImage[];
   /** v0.6.5: 글자를 뽑지 못한 스캔본 PDF 원본(볼 수 있는 모델에만 넘긴다) */
   documents: InlineImage[];
+  /** v0.6.18: 음성 메모·녹음 파일(Gemini가 직접 듣는다) */
+  audios: InlineImage[];
 }
 
 function humanSize(bytes: number): string {
@@ -449,18 +478,34 @@ function humanSize(bytes: number): string {
  */
 export function buildPromptBlock(
   ids: string[],
-  options: { images?: boolean; pdfFiles?: boolean; maxChars?: number } = {}
+  options: { images?: boolean; pdfFiles?: boolean; audio?: boolean; maxChars?: number } = {}
 ): PromptAttachmentBlock {
   const images: InlineImage[] = [];
   const documents: InlineImage[] = [];
+  const audios: InlineImage[] = [];
   const lines: string[] = [];
   const wantImages = options.images !== false;
   const wantPdfFiles = options.pdfFiles === true;
+  const wantAudio = options.audio !== false;
   const maxChars = Math.max(400, Math.min(MAX_TEXT_CHARS, Number(options.maxChars) || MAX_TEXT_CHARS));
   for (const id of ids.slice(0, MAX_FILES_PER_MESSAGE)) {
     const row = getRow(id);
     if (!row) continue;
     const header = `- ${row.filename} (${row.kind}, ${humanSize(row.size)})`;
+    if (row.kind === 'audio') {
+      const audio = wantAudio && audios.length < 2 ? inlineAudio(row) : null;
+      if (audio) {
+        audios.push(audio);
+        lines.push(
+          `${header} — 음성 녹음 ${audios.length}번째를 함께 보냈다. 직접 듣고 받아쓰기와 핵심 요약을 할 수 있다. 요약한 뒤 할 일(D-Day·할 일)로 등록할 것이 보이면 사용자에게 먼저 알리고 tasks_add·dday_add로 등록한다.`
+        );
+      } else {
+        lines.push(
+          `${header} — 음성이 너무 크거나(12MB 초과) 형식을 읽지 못해 함께 보낼 수 없다. 파일은 서버에 저장되어 있다(data/${row.path}). 사용자에게 짧게 나눠 다시 올려 달라고 안내한다.`
+        );
+      }
+      continue;
+    }
     if (row.kind === 'image') {
       const image = wantImages && images.length < MAX_INLINE_IMAGES ? inlineImage(row) : null;
       if (image) {
@@ -504,7 +549,7 @@ export function buildPromptBlock(
       );
     }
   }
-  return { text: lines.join('\n'), images, documents };
+  return { text: lines.join('\n'), images, documents, audios };
 }
 
 /** 오래된 첨부 파일 정리(30일). DB 행은 남기고 파일만 지운다. */

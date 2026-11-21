@@ -109,9 +109,20 @@
         try {
           var font = localStorage.getItem('pomong.font');
           var root = document.documentElement;
-          if (font === 'pretendard' || font === 'kakaobigsans') {
+          var map = {
+            pretendard: 'font-pretendard',
+            kakaobigsans: 'font-kakaobigsans',
+            paperlogy: 'font-paperlogy',
+            nanumsquareround: 'font-nanumsquareround',
+          };
+          if (map[font]) {
             root.dataset.font = font;
-            root.classList.add(font === 'pretendard' ? 'font-pretendard' : 'font-kakaobigsans');
+            root.classList.add(map[font]);
+          }
+          /* v0.6.18: 볼드체도 첫 페인트부터 적용 */
+          if (localStorage.getItem('pomong.bold') === '1') {
+            root.classList.add('pa-bold');
+            root.dataset.bold = 'on';
           }
         } catch (e) {
           /* 저장된 값이 없으면 기본 글꼴 */

@@ -66,6 +66,9 @@ import * as skills from './skills';
 import * as reactions from './reactions';
 import * as ddays from './ddays';
 import * as parcelWatch from './parcel-watch';
+import * as approvals from './approvals';
+import { guardExternalText } from './guardrails';
+import { maskingEnabled, setMaskingEnabled } from './privacy-mask';
 import type { TaskRunView } from './task-runs';
 
 ensureDataDir();
@@ -171,6 +174,8 @@ interface Profile {
   personaCustom: string;
   /** v0.6.4: 앱 글꼴 */
   font: FontId;
+  /** v0.6.18: 글씨 굵게(볼드체) — 앱 전체 기본 굵기를 한 단계 도톱게 */
+  bold: boolean;
 }
 
 /** 닉네임을 비워 두었을 때 AI가 쓰는 기본 호칭 */
@@ -190,6 +195,7 @@ function profile(): Profile {
     persona: normalizePersona(stored.persona, 'default'),
     personaCustom: typeof stored.personaCustom === 'string' ? stored.personaCustom.slice(0, 200) : '',
     font: normalizeFont(stored.font, 'default'),
+    bold: stored.bold === true,
   };
 }
 
@@ -737,6 +743,14 @@ function systemPrompt(memoryBlock = '', skillBlock = ''): string {
       '사용자가 사진이나 파일(PDF·문서·텍스트)을 첨부하면 그 내용을 실제로 보고 답해. 사진은 함께 전달되니까 "볼 수 없다"고 하지 말고 뭐가 보이는지 설명해. PDF·텍스트 파일은 서버가 뽑은 본문이 [첨부] 블록에 있으니 그 내용으로 바로 요약·분석해(스캔본은 PDF 원본도 함께 보냈어). 잘렸거나 못 읽은 파일은 attachment_read 도구로 다시 읽거나 사용자에게 물어봐. 첨부와 상관없는 추측은 하지 마.'
     ),
     s(
+      '음성 메모·녹음 파일(.m4a·.mp3·.wav·.ogg·.webm)이 첨부되면 함께 전달된 음성을 직접 듣고 ① 받아쓴 내용 ② 핵심 요약 ③ 해야 할 일 순서로 정리하세요. 녹음에 약속·마감·할 일이 나오면 먼저 "할 일로 등록할까요?"라고 짧게 물은 뒤, 사용자가 등록을 바라면 tasks_add(기한이 분명하면 due)·dday_add로 등록하세요. 녹음이 너무 길거나 잘렸으면 특히 놓친 부분이 있을 수 있다고 밝히세요. 현재 모델이 Gemini가 아니어서 음성을 들을 수 없으면 그 사실을 알리고 설정에서 Gemini로 바꾸자고 제안하세요.',
+      '음성 메모·녹음 파일(.m4a·.mp3·.wav·.ogg·.webm)이 첨부되면 같이 보낸 음성을 직접 듣고 ① 받아쓴 내용 ② 핵심 요약 ③ 할 일 순서로 정리해. 녹음에 약속·마감·할 일이 나오면 먼저 "할 일로 등록할까?"라고 짧게 묻고, 원하면 tasks_add(기한이 분명하면 due)·dday_add로 등록해. 녹음이 너무 길거나 잘렸으면 놓친 부분이 있을 수 있다고 밝혀. 지금 모델이 Gemini가 아니라 음성을 못 들으면 그 사실을 알리고 설정에서 Gemini로 바꾸자고 제안해.'
+    ),
+    s(
+      '도커 컨테이너의 중지·재시작·시작·일시정지는 실행 직전에 서버가 멈추고 채팅에 [승인/취소] 카드를 띄웁니다. 그래서 사용자가 승인하기 전에는 "이미 멈췄어요"처럼 완료된 것처럼 말하지 말고, "승인 카드를 올렸어요"라고만 안내하세요. 사용자가 [승인]을 누르면 서버가 도구를 실행하고 결과를 채팅에 남깁니다.',
+      '도커 컨테이너의 중지·재시작·시작·일시정지는 실행 직전에 서버가 멈추고 채팅에 [승인/취소] 카드를 띄워. 그래서 사용자가 승인하기 전에는 "이미 멈췄어"처럼 끝난 것처럼 말하지 말고 "승인 카드를 올렸어"라고만 알려 줘. 사용자가 [승인]을 누르면 서버가 도구를 실행하고 결과를 채팅에 남겨.'
+    ),
+    s(
       '도구를 쓸 수 있습니다: 할 일 조회(tasks_list)·추가(tasks_add)·완료(tasks_complete), 금고 항목 이름 조회(vault_list), 서버 상태(server_stats), 날씨 조회(weather_get), 현재 시각(time_now), 웹 브라우저(browser_open·snapshot·click·type·extract·screenshot·handover·close), 예약·워치(automation_list·job_create·watch_create).',
       '도구를 쓸 수 있어: 할 일 조회(tasks_list)·추가(tasks_add)·완료(tasks_complete), 금고 항목 이름 조회(vault_list), 서버 상태(server_stats), 날씨 조회(weather_get), 현재 시각(time_now), 웹 브라우저(browser_open·snapshot·click·type·extract·screenshot·handover·close), 예약·워치(automation_list·job_create·watch_create).'
     ),
@@ -771,6 +785,10 @@ function systemPrompt(memoryBlock = '', skillBlock = ''): string {
     s(
       '로그인·연동이 필요한 작업일 때는 절대 "직접 로그인하세요"로 끝내지 말고 이 순서로 하세요. ① vault_find_for_site로 금고 계정을 찾습니다. ② 그 사이트를 browser_open으로 먼저 열어 화면을 확인해 이미 로그인된 상태(로그인 버튼이 없고 마이페이지·메시지함·로그아웃이 보임)면 로그인 없이 바로 요청 작업을 하고, 로그인 화면이면 계정이 있을 때 browser_login_with_vault(vault_id) 한 번으로 아이디 입력·비밀번호 입력·로그인 버튼 클릭까지 끝내고, 인증번호(OTP)·캡차·2단계 인증이 떴을 때만 browser_handover로 넘깁니다. browser_fill_vault만 부르고 끝내거나 로그인 버튼을 누르지 않은 채 사용자에게 넘기지 마세요. ③ 계정이 없으면 vault_request_login(service, login_url, site_host)을 불러 채팅에 로그인 카드를 띄우고 "아래 카드에 계정 정보를 입력해 주시면 제가 바로 로그인해 드릴게요!"라고 안내합니다(이때 브라우저는 열지 않습니다). 사용자가 카드를 저장하면 그 사실이 시스템 메시지로 전달되니, 그때 browser_open부터 이어서 로그인을 끝내세요. ④ 금고 자체가 잠겨 있으면 카드의 PIN 입력란을 안내합니다. 계정이 2개 이상인데 기본 계정이 없으면 임의로 고르지 말고 어느 계정을 쓸지 물어보세요.',
       '로그인·연동이 필요한 작업일 때는 절대 "직접 로그인해"로 끝내지 말고 이 순서로 해. ① vault_find_for_site로 금고 계정을 찾아. ② 그 사이트를 browser_open으로 먼저 열어 화면을 확인해서 이미 로그인된 상태(로그인 버튼 없고 마이페이지·메시지함·로그아웃이 보임)면 로그인 없이 바로 요청 작업을 하고, 로그인 화면이면 계정이 있을 때 browser_login_with_vault(vault_id) 한 번으로 아이디 입력·비밀번호 입력·로그인 버튼 클릭까지 끝내고, 인증번호(OTP)·캡차·2단계 인증이 떴을 때만 browser_handover로 넘겨. browser_fill_vault만 부르고 끝내거나 로그인 버튼을 누르지 않은 채 사용자에게 넘기지 마. ③ 계정이 없으면 vault_request_login(service, login_url, site_host)을 불러 채팅에 로그인 카드를 띄우고 "아래 카드에 계정 정보를 입력해 주시면 제가 바로 로그인해 드릴게요!"라고 안내해(이때 브라우저는 열지 않아). 사용자가 카드를 저장하면 그 사실이 시스템 메시지로 전달되니, 그때 browser_open부터 이어서 로그인을 끝내줘. ④ 금고 자체가 잠겨 있으면 카드의 PIN 입력란을 안내해. 계정이 2개 이상인데 기본 계정이 없으면 임의로 고르지 말고 어느 계정을 쓸지 물어봐.'
+    ),
+    s(
+      '브라우저로 사이트 작업을 할 때는 **반드시 사용자가 말한 실제 목적지 페이지부터** 엽니다(예: "받은 메시지함 확인" → 로그인 페이지가 아니라 메시지함·마이페이지 URL 또는 그 사이트 메인). 화면에 로그아웃·마이페이지·메시지함·주문 내역·프로필 중 하나라도 보이고 로그인 버튼·비밀번호 칸이 없으면 이미 로그인된 상태이므로, 로그인 페이지로 가지도 말고 vault_find_for_site·vault_request_login·browser_login_with_vault 같은 로그인 도구도 부르지 마세요. 바로 요청받은 작업을 하세요. 로그인 도구는 화면이 실제 로그인 화면(비밀번호 칸·로그인 버튼)일 때만 씁니다. 이미 로그인된 사이트에서 로그인을 다시 시도해 멈추는 것은 사용자에게 가장 답답한 실수입니다.',
+      '브라우저로 사이트 작업을 할 때는 **반드시 사용자가 말한 진짜 목적지 페이지부터** 열어(예: "받은 메시지함 확인" → 로그인 페이지 말고 메시지함·마이페이지 URL 또는 사이트 메인). 화면에 로그아웃·마이페이지·메시지함·주문 내역·프로필 중 하나라도 보이고 로그인 버튼·비밀번호 칸이 없으면 이미 로그인된 상태니까 로그인 페이지로 가지도 말고 vault_find_for_site·vault_request_login·browser_login_with_vault 같은 로그인 도구도 부르지 마. 바로 요청받은 일을 해. 로그인 도구는 화면이 실제 로그인 화면(비밀번호 칸·로그인 버튼)일 때만 써. 이미 로그인된 사이트에서 로그인을 다시 시도해서 멈추는 건 사용자에게 제일 답답한 실수야.'
     ),
     s(
       '이미 로그인된 사이트에서는 로그인을 다시 하지 마세요. 먼저 browser_open으로 그 사이트를 열고 browser_snapshot으로 화면을 확인하세요. 마이페이지·프로필·메시지함·로그아웃·알림이 보이고 로그인 버튼이 없으면 이미 로그인된 상태이므로 로그인 과정을 건너뛰고 곧바로 요청받은 작업(메시지함 열기 등)을 하세요. browser_login_with_vault가 "이미 로그인된 상태입니다"를 돌려주면 로그인을 반복하지 말고 하던 일을 이어가세요.',
@@ -1228,6 +1246,21 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
         });
       },
       onNotify: sendNotice,
+      /** v0.6.18: 되돌리기 어려운 도구는 실행 전에 멈추고 채팅에 승인 카드를 남긴다. */
+      requestApproval: async (info) => {
+        const card = approvals.createApproval({
+          sessionId: session,
+          tool: info.name,
+          args: info.args,
+          title: info.title,
+          detail: info.detail,
+          reason: info.reason,
+        });
+        return { id: card.id };
+      },
+      onGuardrail: (_name, warning) => {
+        addLog('warn', `가드레일 · ${warning.slice(0, 160)}`);
+      },
       onToolResult: (name, _content, flags) => {
         if (name.startsWith('browser_')) browserUsed = true;
         if (flags?.vaultEmpty) vaultEmptyTerm = vaultTermArgs || input.prompt;
@@ -1253,6 +1286,13 @@ async function runChatTurn(input: ChatTurnInput): Promise<ChatTurnResult> {
     }
     if (loop.cancelled && !reply.trim()) {
       reply = '알겠어요, 작업을 중지했어요. 이어서 하려면 다시 말씀해 주세요.';
+    }
+    /**
+     * v0.6.18: 승인 카드를 띄우고 멈춘 턴 — 무엇을 승인하는지 한 문장으로 알린다.
+     * (카드에서 [승인]을 누르면 서버가 그 도구를 실제로 실행한다)
+     */
+    if (loop.approval) {
+      reply = `${loop.approval.detail}\n\n이 작업은 되돌리기 어려울 수 있어 실행 전에 확인을 받을게요. 아래 카드에서 [승인]을 누르면 바로 실행하고, [취소]를 누르면 그대로 둘게요.`;
     }
 
     /**
@@ -1613,6 +1653,10 @@ function buildModelHistory(session: string): { role: 'user' | 'assistant'; conte
   const pdfRow = [...ordered]
     .reverse()
     .find((r) => r.role === 'user' && (files[r.id] || []).some((a) => a.kind === 'pdf'))?.id;
+  // v0.6.18: 음성 메모·녹음 파일도 마지막 한 메시지만 원본째로 듣게 한다.
+  const audioRow = [...ordered]
+    .reverse()
+    .find((r) => r.role === 'user' && (files[r.id] || []).some((a) => a.kind === 'audio'))?.id;
   let textBudget = 24_000;
 
   return ordered.map((row) => {
@@ -1623,11 +1667,15 @@ function buildModelHistory(session: string): { role: 'user' | 'assistant'; conte
     const block = attachments.buildPromptBlock(list.map((a) => a.id), {
       images: inlineRows.has(row.id),
       pdfFiles: row.id === pdfRow,
+      audio: row.id === audioRow,
       maxChars: textBudget > 6000 ? 6000 : Math.max(800, textBudget),
     });
     textBudget = Math.max(0, textBudget - block.text.length);
-    const content = `${rawContent}${block.text ? `\n\n[첨부]\n${block.text}` : ''}`;
-    if (!block.images.length && !block.documents.length) return { role, content };
+    // v0.6.18: 첨부 문서 안에 섞인 지시문·피싱 링크는 AI에 넣기 전에 가린다.
+    const guarded = block.text ? guardExternalText(block.text) : null;
+    const blockText = guarded && guarded.findings.length ? guarded.text : block.text;
+    const content = `${rawContent}${blockText ? `\n\n[첨부]\n${blockText}` : ''}`;
+    if (!block.images.length && !block.documents.length && !block.audios.length) return { role, content };
     return {
       role,
       content,
@@ -1635,6 +1683,7 @@ function buildModelHistory(session: string): { role: 'user' | 'assistant'; conte
         { type: 'text' as const, text: content },
         ...block.images.map((img) => ({ type: 'image' as const, mime: img.mime, dataBase64: img.dataBase64 })),
         ...block.documents.map((doc) => ({ type: 'pdf' as const, mime: doc.mime, dataBase64: doc.dataBase64 })),
+        ...block.audios.map((audio) => ({ type: 'audio' as const, mime: audio.mime, dataBase64: audio.dataBase64 })),
       ],
     };
   });
@@ -1792,8 +1841,69 @@ app.get('/api/vault/login-cards', requireAuth, (req, res) => {
     requests: loginRequests.listForSession(session),
     // v0.5.4: 금고가 잠겨 있어 PIN을 받아야 하는 카드
     unlockRequests: vaultUnlock.listForSession(session),
+    // v0.6.18: 되돌리기 어려운 작업의 승인 카드(대기 중)
+    approvals: approvals.listForSession(session),
     ...vault.vaultMeta(),
   });
+});
+
+/* ------------------- v0.6.18: 민감 작업 승인 카드 ------------------- */
+
+/** [승인] — 대기 중인 도구를 실제로 실행하고 결과를 채팅에 남긴다. */
+app.post('/api/approvals/:id/approve', requireAuth, async (req, res) => {
+  const result = await approvals.approve(String(req.params.id));
+  if (!result.ok) {
+    res.status(409).json({ ok: false, message: result.message });
+    return;
+  }
+  res.json({ ok: true, message: result.message });
+});
+
+/** [취소] — 실행하지 않고 접는다. */
+app.post('/api/approvals/:id/cancel', requireAuth, (req, res) => {
+  const result = approvals.cancel(String(req.params.id));
+  if (!result.ok) {
+    res.status(409).json({ ok: false, message: result.message });
+    return;
+  }
+  res.json({ ok: true, message: result.message });
+});
+
+/**
+ * v0.6.18: 금고 카드의 원격 브라우저 로그인 세션 상태.
+ * 저장된 로그인 항목을 서비스 카탈로그(또는 노트에 적힌 주소)로 도메인에 잇고,
+ * 브라우저에 남은 쿠키와 만료 시각으로 '로그인 유지 중 / 확인 필요 / 미로그인'을 판단한다.
+ */
+app.get('/api/vault/session-status', requireAuth, (_req, res) => {
+  const cookies = browser.browserCookieHosts();
+  const items = vault.listItems('').filter((item) => item.type === 'login');
+  const rows = items.map((item) => {
+    const haystack = `${item.title} ${item.notes || ''} ${item.usernameMasked || ''}`.toLowerCase();
+    const service = services.SERVICES.find((entry) => entry.match.some((m) => m.length > 2 && haystack.includes(m.toLowerCase())));
+    const tokens = service ? service.match.map((m) => m.toLowerCase()) : [];
+    const urlMatch = /(?:https?:\/\/)?([a-z0-9.-]+\.[a-z]{2,})/i.exec(`${item.notes || ''} ${item.title}`);
+    if (urlMatch) tokens.push(urlMatch[1].toLowerCase());
+    let host: string | null = null;
+    let best: (typeof cookies)[number] | null = null;
+    for (const cookie of cookies) {
+      if (!tokens.some((token) => token.length > 2 && cookie.host.includes(token))) continue;
+      if (!best || cookie.cookies > best.cookies) {
+        best = cookie;
+        host = cookie.host;
+      }
+    }
+    if (!tokens.length) {
+      return { itemId: item.id, host: null, status: 'unknown' as const, expiresAt: null };
+    }
+    if (!best) return { itemId: item.id, host: tokens[tokens.length - 1], status: 'not_logged_in' as const, expiresAt: null };
+    return {
+      itemId: item.id,
+      host,
+      status: best.expired ? ('needs_check' as const) : ('logged_in' as const),
+      expiresAt: best.expiresAt,
+    };
+  });
+  res.json({ ok: true, items: rows, stateFile: Boolean(browser.browserStateHosts().length) });
 });
 
 /** 카드에 입력한 계정을 금고에 저장하고, AI에게 후속 턴을 붙겨 브라우저 로그인을 이어 간다. */
@@ -2191,7 +2301,16 @@ app.get('/api/settings', requireAuth, (_req, res) => {
     routingOptions: TASK_KINDS.map((kind) => ({ kind, ...TASK_KIND_META[kind] })),
     // v0.6.3: 이메일(IMAP/SMTP) 계정 현황
     mail: mail.mailStatus(),
+    // v0.6.18: 개인정보 자동 마스킹 설정
+    privacy: { maskExternal: maskingEnabled() },
   });
+});
+
+/** v0.6.18: 외부 AI 전송 전 개인정보 자동 마스킹 ON/OFF */
+app.post('/api/settings/privacy', requireAuth, (req, res) => {
+  const body = (req.body || {}) as { maskExternal?: unknown };
+  if (typeof body.maskExternal === 'boolean') setMaskingEnabled(body.maskExternal);
+  res.json({ ok: true, privacy: { maskExternal: maskingEnabled() } });
 });
 
 /** v0.6.3: 작업별 모델 자동 라우팅 저장 */
@@ -2270,6 +2389,8 @@ app.put('/api/settings/profile', requireAuth, (req, res) => {
       typeof body.personaCustom === 'string' ? body.personaCustom.slice(0, 200) : current.personaCustom,
     // v0.6.5: 글꼴도 프로필에 저장한다(예전엔 이 라우트에서 빠져 있어 재진입하면 기본 글꼴로 돌아갔다)
     font: normalizeFont(body.font, current.font),
+    // v0.6.18: 볼드체 토글도 프로필에 저장해 기기·새로고침을 건너서 유지한다.
+    bold: typeof body.bold === 'boolean' ? body.bold : current.bold,
   });
   res.json({ ok: true, profile: profile() });
 });

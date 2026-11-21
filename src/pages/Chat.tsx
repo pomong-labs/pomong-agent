@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Check,
@@ -37,8 +37,8 @@ import AppHeader, { HEADER_SPACE } from '../components/AppHeader';
 import Mascot, { type MascotName } from '../components/Mascot';
 import ModelBar from '../components/ModelBar';
 import { StatsCard, TasksCard } from '../components/Cards';
-import { api, type ChatAttachment, type ChatMessage, type LoginRequest, type ChatSession, type MailDraftCard, type ReplyTarget, type TaskRun, type VaultUnlockRequest } from '../lib/api';
-import { formatClock, formatRoomStamp } from '../lib/format';
+import { api, type ChatAttachment, type ChatMessage, type LoginRequest, type ChatSession, type MailDraftCard, type ReplyTarget, type TaskRun, type VaultUnlockRequest, type ApprovalRequest } from '../lib/api';
+import { formatChatStamp, formatClock, formatRoomStamp, formatRoomStampFull } from '../lib/format';
 import { subjectName } from '../lib/korean';
 import {
   dictationErrorMessage,
@@ -79,22 +79,188 @@ function renderInline(text: string, keyPrefix: string) {
  * v0.6.12: 비서 이름에 받침 유무에 맞는 주격 조사(이/가)를 붙인다.
  * "라몽이 생각 중…", "퐁이가 생각 중…" 처럼 이름을 바꿔도 문장이 자연스럽게 읽힌다.
  */
+/**
+ * v0.6.18: 마크다운 코드 블록(```lang … ```)을 원터치 복사 버튼이 달린 블록으로 보여 준다.
+ */
+function CodeBlock({ code, lang }: { code: string; lang: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(code);
+    } catch {
+      const area = document.createElement('textarea');
+      area.value = code;
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.select();
+      document.execCommand('copy');
+      document.body.removeChild(area);
+    }
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1600);
+  };
+  return (
+    <div className="relative my-1.5 overflow-hidden rounded-xl bg-[#1E1B2B] ring-1 ring-[#2E2A3D]">
+      <div className="flex items-center justify-between gap-2 border-b border-[#2E2A3D] px-3 py-1.5">
+        <span className="truncate text-[10.5px] font-semibold uppercase tracking-wide text-[#9B93B8]">{lang || 'code'}</span>
+        <button
+          type="button"
+          onClick={() => void copy()}
+          className="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-semibold text-[#C9B8FF] transition hover:bg-white/10 active:scale-95"
+          aria-label="코드 복사"
+        >
+          {copied ? <Check size={11} /> : <Copy size={11} />}
+          {copied ? '복사됨' : '복사'}
+        </button>
+      </div>
+      <pre className="selectable-text overflow-x-auto px-3 py-2.5 text-[12.5px] leading-[1.65] text-[#EDEAF6]">
+        <code>{code}</code>
+      </pre>
+    </div>
+  );
+}
+
+type RichSegment = { kind: 'text'; text: string } | { kind: 'code'; lang: string; code: string };
+
+/** 코드 펜스가 닫히지 않았어도 마지막 블록으로 읽어 준다. */
+function splitRichSegments(text: string): RichSegment[] {
+  const out: RichSegment[] = [];
+  const re = /```([\w+-]*)\r?\n?([\s\S]*?)```/g;
+  let last = 0;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(text))) {
+    if (match.index > last) out.push({ kind: 'text', text: text.slice(last, match.index) });
+    out.push({ kind: 'code', lang: (match[1] || '').trim(), code: match[2].replace(/\n$/, '') });
+    last = match.index + match[0].length;
+  }
+  const rest = text.slice(last);
+  const open = rest.indexOf('```');
+  if (open >= 0) {
+    const head = rest.slice(0, open);
+    if (head.trim()) out.push({ kind: 'text', text: head });
+    const tail = rest.slice(open + 3);
+    const [firstLine, ...body] = tail.split('\n');
+    out.push({ kind: 'code', lang: firstLine.trim(), code: body.join('\n') });
+  } else if (rest) {
+    out.push({ kind: 'text', text: rest });
+  }
+  return out;
+}
+
 export function RichText({ text }: { text: string }) {
+  const segments = splitRichSegments(text);
   return (
     <div className="space-y-1.5 text-[15px] leading-[1.75] text-[#2A2A35] sm:text-[16px]">
-      {text.split('\n').map((line, i) => {
-        const bullet = /^\s*[-•*]\s+(.*)$/.exec(line);
-        if (bullet) {
-          return (
-            <div key={i} className="flex gap-2 pl-1">
-              <span className="mt-[9px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#C9B8FF]" />
-              <span className="flex-1">{renderInline(bullet[1], `l${i}`)}</span>
-            </div>
-          );
-        }
-        if (!line.trim()) return <div key={i} className="h-1" />;
-        return <p key={i}>{renderInline(line, `p${i}`)}</p>;
+      {segments.map((segment, index) => {
+        if (segment.kind === 'code') return <CodeBlock key={`code-${index}`} code={segment.code} lang={segment.lang} />;
+        return (
+          <div key={`text-${index}`} className="space-y-1.5">
+            {segment.text.split('\n').map((line, i) => {
+              const bullet = /^\s*[-•*]\s+(.*)$/.exec(line);
+              if (bullet) {
+                return (
+                  <div key={i} className="flex gap-2 pl-1">
+                    <span className="mt-[9px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#C9B8FF]" />
+                    <span className="flex-1">{renderInline(bullet[1], `l${index}-${i}`)}</span>
+                  </div>
+                );
+              }
+              if (!line.trim()) return <div key={i} className="h-1" />;
+              return <p key={i}>{renderInline(line, `p${index}-${i}`)}</p>;
+            })}
+          </div>
+        );
       })}
+    </div>
+  );
+}
+
+/**
+ * v0.6.18: 모바일 말풍선을 옆으로 밀어 답장(인용)하기.
+ *
+ * - 가로로 임계값(56px)까지 끌면 손을 뗄 때 답장 입력이 열린다.
+ * - 세로로 움직이기 시작하면(스크롤) 끼어들지 않고 바로 놓아 준다.
+ * - `touch-action: pan-y` 로 세로 스크롤은 브라우저에 그대로 맡긴다.
+ */
+function SwipeReply({
+  onReply,
+  align = 'start',
+  children,
+}: {
+  onReply: () => void;
+  align?: 'start' | 'end';
+  children: ReactNode;
+}) {
+  const THRESHOLD = 56;
+  const MAX = 84;
+  const [dx, setDx] = useState(0);
+  const dxRef = useRef(0);
+  const tracker = useRef<{ x: number; y: number; locked: boolean; dead: boolean } | null>(null);
+
+  const moveTo = (value: number) => {
+    dxRef.current = value;
+    setDx(value);
+  };
+
+  const reset = () => {
+    tracker.current = null;
+    moveTo(0);
+  };
+
+  return (
+    <div
+      className="relative"
+      style={{ touchAction: 'pan-y' }}
+      onTouchStart={(e) => {
+        const touch = e.touches[0];
+        if (!touch) return;
+        tracker.current = { x: touch.clientX, y: touch.clientY, locked: false, dead: false };
+      }}
+      onTouchMove={(e) => {
+        const gesture = tracker.current;
+        const touch = e.touches[0];
+        if (!gesture || !touch || gesture.dead) return;
+        const moveX = touch.clientX - gesture.x;
+        const moveY = touch.clientY - gesture.y;
+        if (!gesture.locked) {
+          // 세로 움직임이 더 크면 스크롤이다 — 손대지 않는다.
+          if (Math.abs(moveY) > Math.abs(moveX) + 8) {
+            gesture.dead = true;
+            moveTo(0);
+            return;
+          }
+          if (Math.abs(moveX) < 12) return;
+          gesture.locked = true;
+        }
+        if (moveX > 0) moveTo(Math.min(moveX, MAX));
+        else moveTo(0);
+      }}
+      onTouchEnd={() => {
+        const passed = dxRef.current >= THRESHOLD;
+        reset();
+        if (passed) onReply();
+      }}
+      onTouchCancel={reset}
+    >
+      <div
+        aria-hidden
+        className={`pointer-events-none absolute top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-[#F1ECFF] text-[#7C63F6] transition-opacity ${
+          align === 'end' ? 'right-0' : 'left-0'
+        }`}
+        style={{ opacity: Math.min(1, dx / THRESHOLD) }}
+      >
+        <Reply size={15} />
+      </div>
+      <div
+        style={{
+          transform: dx ? `translateX(${dx}px)` : undefined,
+          transition: dx ? 'none' : 'transform 180ms ease',
+          willChange: dx ? 'transform' : undefined,
+        }}
+      >
+        {children}
+      </div>
     </div>
   );
 }
@@ -132,6 +298,9 @@ export default function Chat() {
     taskRuns,
     loginRequests,
     unlockRequests,
+    approvals,
+    approveTask,
+    cancelApproval,
     vault,
     submitLoginCard,
     dismissLoginCard,
@@ -412,7 +581,7 @@ export default function Chat() {
       {/* messages */}
       <div
         ref={scrollRef}
-        className="pa-scroll min-h-0 flex-1 overflow-y-auto px-4 pb-4 lg:px-10 lg:pb-8"
+        className="pa-scroll min-h-0 flex-1 overflow-y-auto px-4 pb-8 lg:px-10 lg:pb-10"
         style={{ paddingTop: keyboardOpen ? HEADER_SPACE.compact : HEADER_SPACE.normal }}
       >
         <div className="mx-auto w-full max-w-[880px] space-y-5 lg:space-y-6">
@@ -468,12 +637,19 @@ export default function Chat() {
                       </button>
                     ) : null}
                     {m.content ? (
-                      <div
-                        className="selectable-text rounded-[22px] rounded-br-lg px-4 py-3 text-[15px] leading-relaxed text-[#2A2A35] shadow-[0_2px_10px_rgba(120,100,200,0.05)] sm:text-[16px]"
-                        style={{ background: 'var(--bubble-user)' }}
+                      <SwipeReply
+                        align="end"
+                        onReply={() =>
+                          setReplyTo({ id: m.id, role: 'user', content: m.content || '(첨부 파일)', createdAt: m.createdAt })
+                        }
                       >
-                        {m.content}
-                      </div>
+                        <div
+                          className="selectable-text rounded-[22px] rounded-br-lg px-4 py-3 text-[15px] leading-relaxed text-[#2A2A35] shadow-[0_2px_10px_rgba(120,100,200,0.05)] sm:text-[16px]"
+                          style={{ background: 'var(--bubble-user)' }}
+                        >
+                          {m.content}
+                        </div>
+                      </SwipeReply>
                     ) : null}
                     {/* v0.6.15: 비서가 남긴 이모지 리액션 — 말풍선 아래에 작은 뱃지로 */}
                     {m.reactions?.length ? (
@@ -493,14 +669,17 @@ export default function Chat() {
                     >
                       <Reply size={11} /> 답장
                     </button>
-                    {formatClock(m.createdAt)}
+                    {formatChatStamp(m.createdAt)}
                     <CheckCheck size={13} className="text-[#B9A8FF]" />
                   </div>
                 </div>
               ) : m.meta?.type === 'notice' ? (
                 <NoticeBubble message={m} character={profile.character} />
               ) : (
-                <AssistantBubble
+                <SwipeReply
+                  onReply={() => setReplyTo({ id: m.id, role: 'assistant', content: m.content, createdAt: m.createdAt })}
+                >
+                  <AssistantBubble
                   message={m}
                   character={profile.character}
                   agentName={profile.agentName}
@@ -517,6 +696,7 @@ export default function Chat() {
                     setReplyTo({ id: m.id, role: 'assistant', content: m.content, createdAt: m.createdAt })
                   }
                 />
+                </SwipeReply>
               )}
             </div>
           ))}
@@ -542,6 +722,11 @@ export default function Chat() {
               onSubmit={submitLoginCard}
               onDismiss={dismissLoginCard}
             />
+          ))}
+
+          {/* v0.6.18: 되돌리기 어려운 작업의 승인 카드 */}
+          {approvals.map((request) => (
+            <ApprovalCard key={request.id} request={request} onApprove={approveTask} onCancel={cancelApproval} />
           ))}
 
           {sending ? (
@@ -696,7 +881,7 @@ export default function Chat() {
                 ref={fileRef}
                 type="file"
                 multiple
-                accept="image/*,.pdf,.txt,.md,.json,.csv,.log,.ts,.tsx,.js,.jsx,.py,.html,.css,.xml,.yaml,.yml"
+                accept="image/*,.pdf,.txt,.md,.json,.csv,.log,.ts,.tsx,.js,.jsx,.py,.html,.css,.xml,.yaml,.yml,audio/*,.m4a,.mp3,.wav,.ogg,.webm,.aac,.flac"
                 className="hidden"
                 onChange={(e) => {
                   void uploadFiles(e.target.files);
@@ -950,6 +1135,15 @@ function AssistantBubble({
   onReply?: () => void;
 }) {
   const { models } = useAppStore();
+  /**
+   * v0.6.18: 긴 답변은 처음엔 접어 두고 '더 보기'로 펼친다(대화 흐름이 길어지지 않게).
+   * 첫 말풍선은 9줄·560자까지만 보여 주고, 그림자가 아니라 부드러 로 끝을 흐린다.
+   */
+  const [expanded, setExpanded] = useState(false);
+  const contentLines = message.content.split('\n');
+  const isLong = message.content.length > 640 || contentLines.length > 14;
+  const previewText = `${contentLines.slice(0, 9).join('\n').slice(0, 560).trimEnd()}\n…`;
+  const shownText = isLong && !expanded ? previewText : message.content;
   // v0.5.4: 답변 복사 (한 번 누르면 원문 그대로 클립보드로)
   const [copied, setCopied] = useState(false);
   // v0.5.5: 답변 읽어주기 — 다른 말풍선을 읽는 중이면 자동으로 멈추고 이 답변을 읽는다.
@@ -982,9 +1176,23 @@ function AssistantBubble({
       <div className="min-w-0 max-w-[92%] sm:max-w-[86%] lg:max-w-[640px]">
         {taskRun ? <TaskCard run={taskRun} /> : null}
         <div className="rounded-[24px] bg-white p-4 shadow-card ring-1 ring-[#F6F4FB] sm:p-5">
-        <div className="selectable-text">
-          <RichText text={message.content} />
+        <div className="relative selectable-text">
+          <RichText text={shownText} />
+          {isLong && !expanded ? (
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 rounded-b-[20px] bg-gradient-to-t from-white to-transparent dark:from-[#1B1923]" />
+          ) : null}
         </div>
+        {isLong ? (
+          <button
+            type="button"
+            onClick={() => setExpanded((prev) => !prev)}
+            className="mt-1.5 flex items-center gap-1 rounded-full bg-[#F7F5FF] px-2.5 py-1 text-[11.5px] font-semibold text-[#7C63F6] transition active:scale-95"
+            aria-expanded={expanded}
+          >
+            <ChevronDown size={12} className={`transition-transform ${expanded ? 'rotate-180' : ''}`} />
+            {expanded ? '접기' : `더 보기 (${contentLines.length}줄)`}
+          </button>
+        ) : null}
         {message.meta?.mailDraft ? <MailDraftCardView draft={message.meta.mailDraft as MailDraftCard} /> : null}
         {message.attachments?.length ? (
           <div className="mt-2.5 flex justify-start">
@@ -1019,7 +1227,7 @@ function AssistantBubble({
             />
           ))}
         <div className="mt-2.5 flex flex-wrap items-center gap-x-1 gap-y-1 text-[11.5px] text-[#C0BCCD]">
-          <span className="shrink-0 whitespace-nowrap">{formatClock(message.createdAt)}</span>
+          <span className="shrink-0 whitespace-nowrap">{formatChatStamp(message.createdAt)}</span>
           {answeredLabel ? (
             <span className="ml-1 hidden shrink-0 whitespace-nowrap rounded-full bg-[#FAF9FD] px-1.5 py-0.5 text-[10.5px] font-medium text-[#B4B1C2] sm:inline-block" title="실제 응답한 모델">
               {answeredLabel}
@@ -1169,6 +1377,76 @@ function NoticeBubble({ message, character }: { message: ChatMessage; character:
 }
 
 /** 채팅 안에서 계정을 받는 보안 로그인 카드 (v0.5.1) */
+/**
+ * v0.6.18: 되돌리기 어려운 작업(도커 중지·재시작 등) 실행 전 승인 카드.
+ * [승인]을 누르면 서버가 그 도구를 실제로 실행하고 결과를 채팅에 남긴다.
+ */
+function ApprovalCard({
+  request,
+  onApprove,
+  onCancel,
+}: {
+  request: ApprovalRequest;
+  onApprove: (id: string) => Promise<{ ok: boolean; message?: string }>;
+  onCancel: (id: string) => Promise<void>;
+}) {
+  const [busy, setBusy] = useState<'approve' | 'cancel' | null>(null);
+  const [error, setError] = useState('');
+
+  const approve = async () => {
+    setBusy('approve');
+    setError('');
+    const result = await onApprove(request.id);
+    setBusy(null);
+    if (!result.ok) setError(result.message || '승인한 작업을 실행하지 못했어요.');
+  };
+
+  const cancel = async () => {
+    setBusy('cancel');
+    setError('');
+    await onCancel(request.id);
+    setBusy(null);
+  };
+
+  return (
+    <div className="rounded-[24px] border-[1.5px] border-[#FFE4B8] bg-[#FFFBF2] p-4 shadow-card dark:border-[#4A3B22] dark:bg-[#241F17]">
+      <div className="flex items-start gap-2.5">
+        <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#FFF1D6] text-[#B97A11] dark:bg-[#3A2E1B]">
+          <ShieldCheck size={18} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-[13px] font-bold text-[#8A5B0B] dark:text-[#F0C77E]">승인을 기다리고 있어요</p>
+          <p className="mt-1 text-[14px] font-semibold leading-[1.5] text-[#3B3947] dark:text-[#EDEAF6]">{request.title}</p>
+          <p className="mt-1 break-words text-[12.5px] leading-[1.6] text-[#6B677A] dark:text-[#B7B2C6]">{request.detail}</p>
+          {request.reason ? (
+            <p className="mt-1.5 text-[11.5px] leading-[1.5] text-[#A9762A] dark:text-[#D8B47A]">{request.reason}</p>
+          ) : null}
+          {error ? <p className="mt-2 text-[11.5px] font-semibold text-[#E5484D]">{error}</p> : null}
+          <div className="mt-3 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void cancel()}
+              disabled={busy !== null}
+              className="flex-1 rounded-xl bg-white py-2.5 text-[13px] font-semibold text-[#6B677A] ring-1 ring-[#E9E5F0] transition active:scale-[0.99] disabled:opacity-60 dark:bg-transparent dark:text-[#C9C5D6] dark:ring-[#3C3849]"
+            >
+              {busy === 'cancel' ? '취소 중…' : '취소'}
+            </button>
+            <button
+              type="button"
+              onClick={() => void approve()}
+              disabled={busy !== null}
+              className="flex flex-1 items-center justify-center gap-1 rounded-xl bg-[#F0A32B] py-2.5 text-[13px] font-bold text-white transition active:scale-[0.99] disabled:opacity-60"
+            >
+              {busy === 'approve' ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+              {busy === 'approve' ? '실행 중…' : '승인'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function LoginCard({
   request,
   vault,
@@ -1674,7 +1952,7 @@ function RoomDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
                         </span>
                         {/* v0.6.3: 마지막 대화 시각 — 오늘이 아니면 날짜(어제·11월 19일)로 표시 */}
                         <span className="shrink-0 text-[10.5px] font-medium text-[#B4B1C2]" title={new Date(room.updatedAt).toLocaleString('ko-KR')}>
-                          {formatRoomStamp(room.updatedAt)}
+                          {formatRoomStampFull(room.updatedAt)}
                         </span>
                       </span>
                       <span className="mt-0.5 block truncate text-[11px] text-[#A8A5B8]">

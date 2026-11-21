@@ -76,6 +76,8 @@ export interface Profile {
   personaCustom: string;
   /** v0.6.4: 앱 글꼴 (기본 · 프리텐다드 · 카카오 큰글씨) */
   font: FontId;
+  /** v0.6.18: 글씨 굵게(볼드체) */
+  bold?: boolean;
 }
 
 export interface ProcessInfo {
@@ -291,6 +293,28 @@ export interface VaultStatus {
   autoLockMinutes: number;
 }
 
+/** v0.6.18: 금고 카드의 원격 브라우저 로그인 세션 상태 */
+export interface VaultSessionStatus {
+  itemId: string;
+  host: string | null;
+  status: 'logged_in' | 'needs_check' | 'not_logged_in' | 'unknown';
+  expiresAt: string | null;
+}
+
+/** v0.6.18: 되돌리기 어려운 도구 실행 전 승인 카드 */
+export interface ApprovalRequest {
+  id: string;
+  sessionId: string;
+  tool: string;
+  args: Record<string, unknown>;
+  title: string;
+  detail: string;
+  reason: string;
+  status: 'pending' | 'approved' | 'cancelled' | 'expired' | 'failed';
+  result: string | null;
+  createdAt: string;
+}
+
 /** 채팅 인라인 로그인 카드 (v0.5.1) — 비밀번호는 서버가 내려보내지 않는다. */
 export interface LoginRequest {
   id: string;
@@ -427,6 +451,8 @@ export interface SettingsResponse {
   routingOptions?: { kind: TaskKind; label: string; hint: string }[];
   /** v0.6.3: 이메일 계정 */
   mail?: { accounts: MailAccount[]; presets: MailPreset[] };
+  /** v0.6.18: 개인정보 자동 마스킹 */
+  privacy?: { maskExternal: boolean };
 }
 
 export interface ToolCatalogEntry {

@@ -42,7 +42,7 @@ import {
 import { useAppStore } from '../lib/store';
 import { PERSONA_OPTIONS, personaExample } from '../lib/persona';
 import { ACCENT_CHOICES, CHARACTER_ACCENTS, applyTheme, normalizeHex } from '../lib/theme';
-import { FONT_OPTIONS, applyFont, readStoredFont, type FontId } from '../lib/font';
+import { FONT_OPTIONS, applyBold, applyFont, readStoredBold, readStoredFont, type FontId } from '../lib/font';
 import PolicySection from '../components/PolicySection';
 
 /** VAPID 공개키(base64url) → Uint8Array (PushManager.subscribe에 필요) */
@@ -90,6 +90,10 @@ export default function SettingsPage() {
   const [accentColor, setAccentColor] = useState('#8B72F8');
   /** v0.6.4: 앱 글꼴 — v0.6.5: 첫 페인트에 이미 적용된 글꼴(localStorage)에서 시작해 체크가 깜빡이지 않게 한다 */
   const [font, setFont] = useState<FontId>(() => readStoredFont());
+  /** v0.6.18: 글씨 굵게(볼드체) */
+  const [bold, setBold] = useState<boolean>(() => readStoredBold());
+  /** v0.6.18: 외부 AI 전송 전 개인정보 자동 마스킹 */
+  const [maskExternal, setMaskExternal] = useState(true);
   /** v0.6.4: 설정 카테고리 탭 — 긴 스크롤 대신 한 묶음씩 보여 준다. */
   const [tab, setTab] = useState<'look' | 'ai' | 'mail' | 'system'>('look');
   /** v0.6.4: AI 프로바이더는 평소 1줄로 접어 두고 필요할 때 펼친다. */
@@ -153,6 +157,8 @@ export default function SettingsPage() {
         setAccentMode(r.profile.accentMode || 'purple');
         setAccentColor(r.profile.accentColor || '#8B72F8');
         setFont(r.profile.font === 'default' ? readStoredFont() : r.profile.font || 'default');
+        setBold(typeof r.profile.bold === 'boolean' ? r.profile.bold : readStoredBold());
+        if (r.privacy) setMaskExternal(r.privacy.maskExternal !== false);
         setProvider(r.active.provider);
         setModel(r.active.model);
         setEffort(r.providers.find((p) => p.id === 'exaone')?.reasoningEffort || 'low');
@@ -383,6 +389,30 @@ export default function SettingsPage() {
       })
       .then(() => refreshProfile())
       .catch(() => undefined);
+  };
+
+  /**
+   * v0.6.18: 볼드체 — 누르면 바로 앱 전체에 적용하고 서버 프로필에도 저장한다.
+   * (새로고침·다른 기기에서도 유지, 첫 페인트 전에도 적용되도록 localStorage 에도 남긴다)
+   */
+  const toggleBold = () => {
+    const next = !bold;
+    setBold(next);
+    applyBold(next);
+    setSavedFlash(next ? '글씨를 도톱게 바꿨어요' : '기본 굵기로 돌렸어요');
+    if (savedFlashTimer.current) window.clearTimeout(savedFlashTimer.current);
+    savedFlashTimer.current = window.setTimeout(() => setSavedFlash(''), 1800);
+    void api.put('/api/settings/profile', { bold: next }).then(() => refreshProfile()).catch(() => undefined);
+  };
+
+  /** v0.6.18: 외부 AI로 보내기 전 개인정보 마스킹 ON/OFF */
+  const toggleMasking = () => {
+    const next = !maskExternal;
+    setMaskExternal(next);
+    setSavedFlash(next ? '개인정보를 가린 뒤 보냅니다' : '원문 그대로 보냅니다');
+    if (savedFlashTimer.current) window.clearTimeout(savedFlashTimer.current);
+    savedFlashTimer.current = window.setTimeout(() => setSavedFlash(''), 1800);
+    void api.post('/api/settings/privacy', { maskExternal: next }).catch(() => undefined);
   };
 
   const saveProfile = async () => {
@@ -935,7 +965,7 @@ export default function SettingsPage() {
             </p>
           </div>
 
-          {/* v0.6.4: 글꼴 선택 (기본 · 프리텐다드 · 카카오 큰글씨) */}
+          {/* v0.6.4: 글꼴 선택 (기본 · 프리텐다드 · 카카오 큰글씨 · v0.6.18 페이퍼로지 · 나눔스퀘어 라운드) */}
           <div className="mt-5 border-t border-[#F1EFF8] pt-4 dark:border-[#2A2636]">
             <div className="flex items-baseline justify-between gap-2">
               <span className="flex items-center gap-1.5 text-[13px] font-semibold text-[#5B5866]">
@@ -943,7 +973,7 @@ export default function SettingsPage() {
               </span>
               <span className="text-[11.5px] text-[#B4B1C2]">누르면 바로 앱 전체에 적용돼요</span>
             </div>
-            <div className="mt-2.5 grid gap-2 sm:grid-cols-3">
+            <div className="mt-2.5 grid gap-2 grid-cols-2 sm:grid-cols-3">
               {FONT_OPTIONS.map((opt) => {
                 const active = font === opt.id;
                 return (
@@ -978,8 +1008,29 @@ export default function SettingsPage() {
               })}
             </div>
             <p className="mt-2 text-[11.5px] leading-[1.6] text-[#B4B1C2]">
-              카카오 큰글씨는 앱에 함께 들어 있어 인터넷이 느려도 바로 보여요. 프리텐다드는 처음 고를 때만 내려받습니다.
+              카카오 큰글씨·페이퍼로지·나눔스퀘어 라운드는 앱에 함께 들어 있어 인터넷이 느려도 바로 보여요. 프리텐다드는 처음 고를 때만 내려받습니다.
             </p>
+
+            {/* v0.6.18: 글씨 굵게(볼드체) 토글 */}
+            <div className="mt-4 flex items-center justify-between gap-3 rounded-2xl bg-[#FAF9FD] px-3.5 py-3">
+              <div className="min-w-0">
+                <p className="text-[13px] font-semibold text-[#3B3947]">글씨 굵게 (볼드체)</p>
+                <p className="mt-0.5 text-[11.5px] leading-[1.5] text-[#8A8A9A]">
+                  켜면 본문·버튼·말풍선 글씨가 한 단계 도톰해져요.
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={bold}
+                onClick={toggleBold}
+                className={`relative h-[30px] w-[52px] shrink-0 rounded-full transition ${bold ? 'bg-[#8B72F8]' : 'bg-[#DCD8E8]'}`}
+              >
+                <span
+                  className={`absolute top-[3px] h-6 w-6 rounded-full bg-white shadow transition-all ${bold ? 'left-[25px]' : 'left-[3px]'}`}
+                />
+              </button>
+            </div>
           </div>
         </section>
 
@@ -988,6 +1039,30 @@ export default function SettingsPage() {
 
         {tab === 'ai' ? (
           <>
+        {/* v0.6.18: 외부 AI 전송 전 개인정보 자동 마스킹 */}
+        <section className="mt-4 rounded-[24px] bg-white p-5 shadow-card ring-1 ring-[#F6F4FB] lg:p-6">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h2 className="flex items-center gap-1.5 text-[16px] font-bold text-[#1F1D2B]">
+                <ShieldCheck size={16} className="text-[#12B886]" /> 개인정보 자동 마스킹
+              </h2>
+              <p className="mt-2 text-[12.5px] leading-[1.6] text-[#8A8A9A]">
+                Gemini·OpenAI·Claude·EXAONE로 메시지를 보내기 직전에 전화번호·계좌번호·카드번호·주민등록번호·이메일을
+                <span className="font-semibold text-[#5B5866]"> [전화번호 1]</span> 같은 표시로 바꿔 보내요. 답변을 받으면 화면에는 원래 값으로 돌려서 보여 줍니다.
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={maskExternal}
+              onClick={toggleMasking}
+              className={`relative h-[30px] w-[52px] shrink-0 rounded-full transition ${maskExternal ? 'bg-[#12B886]' : 'bg-[#DCD8E8]'}`}
+            >
+              <span className={`absolute top-[3px] h-6 w-6 rounded-full bg-white shadow transition-all ${maskExternal ? 'left-[25px]' : 'left-[3px]'}`} />
+            </button>
+          </div>
+        </section>
+
         {/* AI provider — v0.6.4: 연결된 AI는 1줄 요약으로 접고, 누르면 상세를 펼친다 */}
         <section className="mt-4 rounded-[24px] bg-white p-5 shadow-card ring-1 ring-[#F6F4FB] lg:p-6">
           <div className="flex items-start justify-between gap-3">
@@ -1535,7 +1610,7 @@ export default function SettingsPage() {
           <ul className="mt-3 divide-y divide-[#F6F4FB] text-[13.5px]">
             <li className="flex items-center justify-between py-3">
               <span className="text-pomong-sub">버전</span>
-              <span className="font-semibold text-[#3B3947]">v{data?.version || '0.6.17'}</span>
+              <span className="font-semibold text-[#3B3947]">v{data?.version || '0.6.18'}</span>
             </li>
             <li className="flex items-center justify-between py-3">
               <span className="text-pomong-sub">데이터 보관</span>
@@ -1556,7 +1631,7 @@ export default function SettingsPage() {
         ) : null}
 
         <p className="mt-6 flex items-center justify-center gap-1.5 text-[12px] text-[#B4B1C2]">
-          <Sparkles size={12} /> Pomong Agent v{data?.version || '0.6.17'} · Pomong Labs
+          <Sparkles size={12} /> Pomong Agent v{data?.version || '0.6.18'} · Pomong Labs
         </p>
         </div>
       </div>

@@ -1353,18 +1353,37 @@ async function runToolInner(name: string, args: Record<string, unknown>, ctx: To
       const term = String(args.site_or_service || '').trim();
       if (!term) return { content: '어떤 사이트의 계정을 찾을지 알려 주세요.' };
       const matches = vault.findForSite(term);
+      /**
+       * v0.6.18: 브라우저에 그 사이트 로그인 세션(쿠키)이 남아 있으면
+       * 금고 계정이 없다는 이유로 로그인 카드를 먼저 띄우지 않는다.
+       */
+      const knownService = findServiceInText(term);
+      const session = browser.sessionCookieState(knownService ? knownService.match : [term]);
+      const sessionLine =
+        session.state === 'logged_in'
+          ? `\n[로그인 세션] 브라우저에 ${session.host} 로그인 쿠키가 살아 있습니다(${
+              session.expiresAt ? `만료 ${session.expiresAt.slice(0, 10)}` : '세션 쿠키'
+            }). 로그인 페이지를 먼저 열지 말고, 사용자가 말한 목적지 페이지(메시지함·마이페이지 등)를 browser_open으로 바로 열어 로그인 상태를 확인하세요. 이미 로그인돼 있으면 로그인 도구를 부르지 마세요.`
+          : '';
       if (!matches.length) {
         // v0.5.3: 카드 도구를 빼먹고 "직접 하세요"로 끝내는 일을 막는다(첫 줄에 필수 행동).
-        const service = findServiceInText(term);
+        const service = knownService;
         const catalog = service
           ? `\n\n[서비스 카탈로그] ${service.name} · login_url=${service.loginUrl}${service.note ? ` · ${service.note}` : ''}${
               service.loginNote ? `\n[로그인 화면 특이사항] ${service.loginNote}` : ''
             }`
           : '\n\n[서비스 카탈로그] 일치하는 서비스를 찾지 못했습니다. login_url은 사용자가 말한 사이트의 실제 로그인 주소를 쓰세요.';
+        if (session.state === 'logged_in') {
+          return {
+            content:
+              `금고에는 '${term}' 계정이 없지만 브라우저에 이 사이트 로그인 세션이 남아 있습니다.${sessionLine}\n` +
+              `그러니 vault_request_login(로그인 카드)을 만들지 말고, 먼저 사용자가 말한 목적지 페이지를 browser_open으로 열어 로그인 상태를 확인하세요. 화면에 로그인 버튼만 있고 마이페이지·메시지함 같은 흔적이 없어 로그인 화면이면 그때만 vault_request_login으로 카드를 띄웁니다.${catalog}`,
+          };
+        }
         return {
           content:
             `[필수] vault_request_login 도구를 지금 호출하세요. 이것 없이 답변을 끝내면 사용자 화면에는 로그인 카드가 뜨지 않습니다.\n` +
-            `금고에 '${term}' 계정이 없습니다. 사용자에게 직접 하라고 안내하지 말고, vault_request_login(service, login_url)으로 채팅에 로그인 카드를 띄운 뒤 "아래 카드에 계정 정보를 입력해 주시면 제가 바로 로그인해 드릴게요!"라고 답하세요.${catalog}`,
+            `금고에 '${term}' 계정이 없습니다. 사용자에게 직접 하라고 안내하지 말고, vault_request_login(service, login_url)으로 채팅에 로그인 카드를 띄운 뒤 "아래 카드에 계정 정보를 입력해 주시면 제가 바로 로그인해 드릴게요!"라고 답하세요.${sessionLine}${catalog}`,
           flags: { vaultEmpty: true },
         };
       }
@@ -1379,7 +1398,7 @@ async function runToolInner(name: string, args: Record<string, unknown>, ctx: To
           ? '\n⚠️ 같은 서비스에 계정이 여러 개이고 기본 계정이 없습니다. 임의로 고르지 말고, 채팅에서 어느 계정을 쓸지 사용자에게 물어보세요.'
           : '';
       return {
-        content: `금고에서 '${term}' 계정 ${matches.length}개를 찾았습니다(비밀번호는 표시하지 않음):\n${lines.join('\n')}\n입력은 browser_fill_vault(vault_id, field, ref)로 서버가 직접 합니다.${hint}`,
+        content: `금고에서 '${term}' 계정 ${matches.length}개를 찾았습니다(비밀번호는 표시하지 않음):\n${lines.join('\n')}\n입력은 browser_fill_vault(vault_id, field, ref)로 서버가 직접 합니다.${sessionLine}${hint}`,
       };
     }
     case 'vault_request_login': {
@@ -1397,6 +1416,21 @@ async function runToolInner(name: string, args: Record<string, unknown>, ctx: To
        * (사용자가 "새 계정 추가"를 직접 부탁한 경우만 예외)
        */
       const wantsNewAccount = /(새\s*계정|다른\s*계정|계정\s*추가|추가\s*등록|새로\s*(등록|추가))/.test(ctx.userRequest || '');
+      /**
+       * v0.6.18: 브라우저에 그 사이트 로그인 세션이 살아 있으면 로그인 카드를 띄우지 않는다.
+       * (목적지 페이지를 먼저 열어 보라는 지침과 함께) — 불필요한 재로그인 방지.
+       */
+      if (!wantsNewAccount) {
+        const entry = findServiceInText(service);
+        const session = browser.sessionCookieState(entry ? entry.match : [siteHost || service]);
+        if (session.state === 'logged_in') {
+          return {
+            content:
+              `로그인 카드를 만들지 않았습니다. 브라우저에 ${session.host} 로그인 세션이 살아 있습니다. ` +
+              `사용자가 말한 목적지 페이지를 browser_open으로 먼저 열어 로그인 상태를 확인하고, 로그인 화면일 때만 다시 요청하세요.`,
+          };
+        }
+      }
       if (!wantsNewAccount) {
         const host = siteHost || (() => {
           try {
@@ -1424,7 +1458,7 @@ async function runToolInner(name: string, args: Record<string, unknown>, ctx: To
           return {
             content:
               `로그인 카드를 만들지 않았습니다. 금고에 '${account.title}' 계정이 이미 있습니다(id: ${account.id}). ` +
-              `browser_open(로그인 주소) → browser_login_with_vault(vault_id: ${account.id})로 바로 로그인하고, 하던 일을 이어서 하세요.`,
+              `먼저 사용자가 말한 목적지 페이지(예: 메시지함·마이페이지)를 browser_open으로 열어 이미 로그인돼 있는지 확인하고, 로그인 화면일 때만 browser_login_with_vault(vault_id: ${account.id})를 부르세요.`,
             flags: { vaultHasAccount: true },
           };
         }
@@ -1445,6 +1479,19 @@ async function runToolInner(name: string, args: Record<string, unknown>, ctx: To
       const field = String(args.field || '') === 'password' ? 'password' : 'username';
       const ref = String(args.ref || '');
       if (!vaultId || !ref) return { content: '금고 항목 id와 입력창 ref가 필요합니다.' };
+      /**
+       * v0.6.18: 지금 화면이 이미 로그인된 상태(로그인 버튼·비밀번호 칸 없이
+       * 마이페이지·로그아웃·메시지함이 보임)면 금고 값을 채우지 않는다.
+       */
+      const state = await browser.currentLoginState();
+      if (state?.loggedIn) {
+        return {
+          content: `이미 로그인된 상태입니다(${state.title || state.url})${
+            state.hints.length ? ` · 화면 근거: ${state.hints.join(', ')}` : ''
+          }. 금고 값을 채우지 않았습니다. 로그인을 다시 시도하지 말고 사용자가 요청한 작업을 바로 이어서 하세요.`,
+          flags: { alreadyLoggedIn: true },
+        };
+      }
       try {
         const values = vault.secretForFill(vaultId);
         const value = field === 'password' ? values.secret : values.username;

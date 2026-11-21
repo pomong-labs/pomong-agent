@@ -1,3 +1,5 @@
+import { createMaskerIfEnabled, maskDeep, restoreDeep, type PrivacyMasker } from './privacy-mask';
+
 export type ProviderId = 'gemini' | 'openai' | 'claude' | 'exaone';
 
 /** v0.6.2: EXAONE(K-EXAONE 2.5) — LG AI연구원 무료 API, OpenAI 호환 */
@@ -42,7 +44,9 @@ export interface ChatMessage {
 export type AgentPart =
   | { type: 'text'; text: string }
   | { type: 'image'; mime: string; dataBase64: string }
-  | { type: 'pdf'; mime: string; dataBase64: string };
+  | { type: 'pdf'; mime: string; dataBase64: string }
+  /** v0.6.18: 음성 메모·녹음 파일(.m4a/.mp3/.wav/.ogg/.webm) — Gemini가 직접 듣는다 */
+  | { type: 'audio'; mime: string; dataBase64: string };
 
 /** 도구 호출을 주고받는 에이전트 루프용 메시지 (도구 결과 포함) */
 export type AgentMessage =
@@ -479,6 +483,12 @@ function openAiMessages(turns: ToolRunMessage[], imageSupport: boolean): OpenAiM
           }
           continue;
         }
+        if (part.type === 'audio') {
+          notes.push(
+            '[첨부 오디오] 이 모델은 음성을 직접 듣지 못합니다. 받아쓰기·요약이 필요하면 Gemini로 바꾸라고 사용자에게 안내하세요.'
+          );
+          continue;
+        }
         // pdf — 글자를 뽑지 못한 스캔본의 원본. 본문 텍스트는 이미 텍스트 파트에 들어 있다.
         notes.push(
           '[첨부 PDF] 이 모델은 PDF 원본 페이지를 직접 볼 수 없습니다. 위 [첨부] 블록의 본문 텍스트로 답하고, 원본 그림을 봐야 한다면 Gemini처럼 PDF를 보는 모델로 바꾸라고 사용자에게 안내하세요.'
@@ -655,6 +665,9 @@ async function claudeStep(
           if (part.type === 'pdf') {
             return { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: part.dataBase64 } };
           }
+          if (part.type === 'audio') {
+            return { type: 'text', text: '[첨부 오디오] 이 모델은 음성을 직접 듣지 못합니다. 필요하면 Gemini로 바꾸라고 사용자에게 안내하세요.' };
+          }
           return { type: 'image', source: { type: 'base64', media_type: part.mime, data: part.dataBase64 } };
         })
       );
@@ -707,6 +720,54 @@ async function claudeStep(
 /* ------------------------------------------------------------------ */
 
 export async function runAgentStep(
+  provider: ProviderId,
+  apiKey: string,
+  model: string,
+  messages: AgentMessage[],
+  tools?: ToolSpec[],
+  allowFallback = false,
+  signal?: AbortSignal,
+  providerOptions?: ProviderOptions
+): Promise<ChatResult> {
+  /**
+   * v0.6.18: 외부 AI로 나가기 직전에 개인정보를 가린다(설정에서 끌 수 있다).
+   * 대화 전체를 한 번에 훑어 번호를 매기므로, 다음 단계에서 다시 마스킹해도 같은 값은 같은 번호다.
+   */
+  const masker = createMaskerIfEnabled();
+  const outgoing = masker ? messages.map((message) => maskAgentMessage(message, masker)) : messages;
+  const result = await runAgentStepRaw(provider, apiKey, model, outgoing, tools, allowFallback, signal, providerOptions);
+  if (!masker) return result;
+  return restoreChatResult(result, masker);
+}
+
+function maskAgentMessage(message: AgentMessage, masker: PrivacyMasker): AgentMessage {
+  if (message.role === 'user') {
+    return {
+      ...message,
+      content: masker.mask(message.content),
+      parts: message.parts?.map((part) => (part.type === 'text' ? { ...part, text: masker.mask(part.text) } : part)),
+    };
+  }
+  if (message.role === 'assistant') {
+    return {
+      ...message,
+      content: masker.mask(message.content),
+      toolCalls: message.toolCalls?.map((call) => ({ ...call, args: maskDeep(call.args, masker) })),
+    };
+  }
+  if (message.role === 'tool') return { ...message, content: masker.mask(message.content) };
+  return { ...message, content: masker.mask(message.content) };
+}
+
+function restoreChatResult(result: ChatResult, masker: PrivacyMasker): ChatResult {
+  return {
+    ...result,
+    text: masker.restore(result.text),
+    toolCalls: result.toolCalls.map((call) => ({ ...call, args: restoreDeep(call.args, masker) })),
+  };
+}
+
+async function runAgentStepRaw(
   provider: ProviderId,
   apiKey: string,
   model: string,

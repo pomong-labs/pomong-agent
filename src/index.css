@@ -29,6 +29,53 @@
 }
 
 /*
+ * v0.6.18: 저장소에 함께 넣은 OFL 폰트 2종(public/fonts).
+ * 인터넷이 느려도 바로 보이도록 앱에 내장해 서빙한다.
+ */
+@font-face {
+  font-family: 'Paperlogy';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/paperlogy/Paperlogy-4Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Paperlogy';
+  font-style: normal;
+  font-weight: 500 600;
+  font-display: swap;
+  src: url('/fonts/paperlogy/Paperlogy-6SemiBold.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Paperlogy';
+  font-style: normal;
+  font-weight: 700 900;
+  font-display: swap;
+  src: url('/fonts/paperlogy/Paperlogy-7Bold.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'NanumSquareRound';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/nanumsquareround/NanumSquareRoundR.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'NanumSquareRound';
+  font-style: normal;
+  font-weight: 500 700;
+  font-display: swap;
+  src: url('/fonts/nanumsquareround/NanumSquareRoundB.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'NanumSquareRound';
+  font-style: normal;
+  font-weight: 800 900;
+  font-display: swap;
+  src: url('/fonts/nanumsquareround/NanumSquareRoundEB.woff2') format('woff2');
+}
+
+/*
  * 테마 변수 (v0.5.6)
  * - 라이트/다크 표면·글자·선은 --pa-* 로 모았다.
  * - 포인트 컬러(--accent*)는 src/lib/theme.ts가 라이트/다크에 맞춰 계산해 넣는다.
@@ -80,9 +127,41 @@ html.font-kakaobigsans {
   --pa-font: 'Kakao Big Sans', 'Apple SD Gothic Neo', system-ui, -apple-system, sans-serif;
 }
 
+html.font-paperlogy {
+  --pa-font: 'Paperlogy', 'Apple SD Gothic Neo', system-ui, -apple-system, sans-serif;
+}
+
+html.font-nanumsquareround {
+  --pa-font: 'NanumSquareRound', 'Apple SD Gothic Neo', system-ui, -apple-system, sans-serif;
+}
+
 html.font-pretendard body,
-html.font-kakaobigsans body {
+html.font-kakaobigsans body,
+html.font-paperlogy body,
+html.font-nanumsquareround body {
   font-family: var(--pa-font);
+}
+
+/*
+ * v0.6.18: 글씨 굵게(볼드체) 토글.
+ * 모든 글자에 font-weight 를 덮어쓰면 제목 위계가 무너지므로,
+ * 본문 상속값을 한 단계 올리고(400→500), 굵기 유틸리티도 한 단계씩 올린다.
+ * 클래스 두 개짜리 선택자라 Tailwind 유틸리티보다 우선한다.
+ */
+html.pa-bold body {
+  font-weight: 500;
+}
+html.pa-bold .font-normal {
+  font-weight: 500;
+}
+html.pa-bold .font-medium {
+  font-weight: 600;
+}
+html.pa-bold .font-semibold {
+  font-weight: 700;
+}
+html.pa-bold .font-bold {
+  font-weight: 800;
 }
 
 html.dark {
@@ -345,8 +424,34 @@ html.dark {
    * 살짝 숨을 두는 값이 필요하다 — 세이프 에어리어에서 18px 을 빼서 아이폰(34px)은 16px,
    * 세이프 에어리어가 없는 기기(0px)에서는 8px. (탭바만 쓰는 클래스다)
    */
+  /**
+   * v0.6.18: 하단 알약을 홈 인디케이터 바로 위까지 내렸다(아이폰 34px → 6px).
+   * v0.6.13의 16px 띄움은 알약이 떠 보였고, 그 아래 여백이 길었다.
+   */
   .pb-safe {
-    padding-bottom: max(8px, calc(var(--safe-bottom) - 18px));
+    padding-bottom: max(4px, calc(var(--safe-bottom) - 28px));
+  }
+
+  /**
+   * v0.6.18: 탭바 바로 위에서 본문이 일자로 잘리지 않도록 은은히 사라지는 페이드.
+   * 알약(nav)의 위쪽에만 얇게 깔리고 색은 본문 표면색이라, 평평한 배경에서는 보이지 않고
+   * 카드·글이 그 아래로 지나갈 때만 자연스럽게 흐려진다. nav 자체는 여전히 투명하다.
+   */
+  .pa-tabbar-fade {
+    position: relative;
+  }
+  .pa-tabbar-fade::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 100%;
+    height: 26px;
+    pointer-events: none;
+    background: linear-gradient(to top, var(--pa-surface), rgba(255, 255, 255, 0));
+  }
+  html.dark .pa-tabbar-fade::before {
+    background: linear-gradient(to top, var(--pa-surface), rgba(16, 15, 22, 0));
   }
 
   .pt-safe {

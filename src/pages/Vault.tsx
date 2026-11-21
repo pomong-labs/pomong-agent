@@ -18,7 +18,7 @@ import {
   X,
 } from 'lucide-react';
 import Mascot from '../components/Mascot';
-import { api, ApiError, type VaultItem, type VaultStatus } from '../lib/api';
+import { api, ApiError, type VaultItem, type VaultSessionStatus, type VaultStatus } from '../lib/api';
 import { formatDate, formatRelative } from '../lib/format';
 import { keepFieldVisible, modalMaxHeight, useVisualViewportHeight } from '../lib/useKeyboardModal';
 
@@ -27,6 +27,35 @@ const TYPE_META = {
   login: { label: '로그인', bg: '#EBFBF3', fg: '#12B886', icon: Globe },
   memo: { label: '메모', bg: '#FFF6E7', fg: '#E49B18', icon: FileText },
 } as const;
+
+/**
+ * v0.6.18: 금고 카드의 로그인 세션 배지.
+ * 저장된 쿠키가 살아 있으면 '로그인 유지 중', 만료됐으면 '확인 필요'.
+ */
+function SessionBadge({ state }: { state: VaultSessionStatus }) {
+  const meta =
+    state.status === 'logged_in'
+      ? { label: '로그인 유지 중', bg: '#EAFBF1', fg: '#0F9F74', dot: true }
+      : state.status === 'needs_check'
+        ? { label: '확인 필요', bg: '#FFF6E7', fg: '#C98A12', dot: true }
+        : { label: '미로그인', bg: '#F4F2F8', fg: '#8A8A9A', dot: false };
+  const title =
+    state.status === 'logged_in'
+      ? `${state.host || '사이트'} 쿠키가 살아 있어요${state.expiresAt ? ` · 만료 ${formatDate(state.expiresAt)}` : ''}`
+      : state.status === 'needs_check'
+        ? `${state.host || '사이트'} 쿠키가 만료되어 다시 로그인해야 할 수 있어요`
+        : '원격 브라우저에 이 사이트 로그인 기록이 없어요';
+  return (
+    <span
+      className="inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-0.5 text-[11px] font-semibold"
+      style={{ background: meta.bg, color: meta.fg }}
+      title={title}
+    >
+      <span className={`h-1.5 w-1.5 rounded-full ${meta.dot ? '' : 'opacity-60'}`} style={{ background: meta.fg }} />
+      {meta.label}
+    </span>
+  );
+}
 
 export async function copyText(text: string): Promise<boolean> {
   try {
@@ -55,6 +84,8 @@ export async function copyText(text: string): Promise<boolean> {
 export default function Vault() {
   const [status, setStatus] = useState<VaultStatus | null>(null);
   const [items, setItems] = useState<VaultItem[]>([]);
+  /** v0.6.18: 저장된 사이트의 원격 브라우저 로그인 세션 상태(쿠키 기준) */
+  const [sessions, setSessions] = useState<Record<string, VaultSessionStatus>>({});
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<'all' | 'apikey' | 'login' | 'memo'>('all');
   const [pin, setPin] = useState('');
@@ -94,6 +125,15 @@ export default function Vault() {
         setItems([]);
         await loadStatus();
       }
+    }
+    /** v0.6.18: 사이트별 로그인 세션 상태 배지 — 금고 잠금과 무관한 정보라 따로 받아 온다. */
+    try {
+      const s = await api.get<{ items: VaultSessionStatus[] }>('/api/vault/session-status');
+      const map: Record<string, VaultSessionStatus> = {};
+      for (const row of s.items || []) map[row.itemId] = row;
+      setSessions(map);
+    } catch {
+      setSessions({});
     }
   }, [loadStatus]);
 
@@ -356,6 +396,9 @@ export default function Vault() {
                         </span>
                         {item.isDefault ? (
                           <span className="shrink-0 rounded-lg bg-[#F1ECFF] px-2 py-0.5 text-[11.5px] font-semibold text-[#7C63F6]">기본</span>
+                        ) : null}
+                        {item.type === 'login' && sessions[item.id] && sessions[item.id].status !== 'unknown' ? (
+                          <SessionBadge state={sessions[item.id]} />
                         ) : null}
                       </div>
 

@@ -1,5 +1,6 @@
 import { higherTierModel, runAgentStep, type AgentMessage, type AgentPart, type ProviderId, type ProviderOptions, type ToolSpec } from './providers';
 import type { ToolResult } from './tools';
+import { EXTERNAL_TOOLS, guardExternalText } from './guardrails';
 
 /**
  * 에이전트 도구 루프 (Phase 1 구조 그대로).
@@ -22,6 +23,8 @@ export interface AgentLoopOptions {
   toolsAllow?: string[] | null;
   /** 잡 실행처럼 무인으로 도는 경우: confirm 등급 도구를 만나면 멈춘다 */
   unattended?: boolean;
+  /** v0.6.18: 외부 글에서 인젝션·피싱 의심을 걷어냈을 때 알림 */
+  onGuardrail?: (name: string, warning: string, findings: { kind: string; label: string }[]) => void;
   /** 이 시각(epoch ms)을 넘으면 중단 */
   deadline?: number;
   cancelled?: () => boolean;
@@ -39,6 +42,17 @@ export interface AgentLoopOptions {
   onNotify?: (text: string) => void | Promise<void>;
   /** v0.6.2: 프로바이더별 추가 설정(EXAONE 추론 강도 등) */
   providerOptions?: ProviderOptions;
+  /**
+   * v0.6.18: 되돌리기 어려운 도구(도커 상태 변경)를 실행하기 직전에 호출된다.
+   * 승인 카드를 만들었으면 그 id를 돌려주고, 이 턴은 실행하지 않고 멈춘다.
+   */
+  requestApproval?: (info: {
+    name: string;
+    args: Record<string, unknown>;
+    title: string;
+    detail: string;
+    reason: string;
+  }) => Promise<{ id: string } | null>;
 }
 
 export interface AgentLoopResult {
@@ -61,6 +75,8 @@ export interface AgentLoopResult {
   emptyRetries: number;
   /** v0.6.2: 경량 모델에서 상위 모델로 올렸다면 그 모델 이름 */
   escalatedTo: string | null;
+  /** v0.6.18: 승인 카드를 띄우고 멈췄다면 그 카드 정보 */
+  approval: { id: string; title: string; detail: string } | null;
 }
 
 export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoopResult> {
@@ -88,6 +104,8 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
   /** v0.6.2: 브라우저 작업 중 빈 응답·잘못된 함수 호출로 다시 시도한 횟수 */
   let emptyRetries = 0;
   let escalatedTo: string | null = null;
+  /** v0.6.18: 사용자 승인을 기다리는 카드 */
+  let approval: { id: string; title: string; detail: string } | null = null;
   const stopped = (): boolean => Boolean(options.signal?.aborted) || Boolean(options.cancelled?.());
 
   const done = (extra: Partial<AgentLoopResult> = {}): AgentLoopResult => ({
@@ -103,6 +121,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
     handover,
     emptyRetries,
     escalatedTo,
+    approval,
     ...extra,
   });
 
@@ -230,6 +249,28 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
         conversation.push({ role: 'tool', toolCallId: call.id, name: 'chat_notify', content: `사용자에게 "${text}" 안내를 보냈습니다.` });
         continue;
       }
+      /**
+       * v0.6.18: 민감한 도구는 실행 전에 멈추고 승인 카드를 띄운다.
+       * (도커 stop/restart/start/pause/unpause — 되돌리기 어려운 상태 변경)
+       */
+      if (options.requestApproval) {
+        const { sensitiveToolCall } = await import('./approvals');
+        const risk = sensitiveToolCall(call.name, call.args);
+        if (risk) {
+          const card = await options.requestApproval({ name: call.name, args: call.args, ...risk });
+          if (card) {
+            approval = { id: card.id, title: risk.title, detail: risk.detail };
+            needsApproval = call.name;
+            conversation.push({
+              role: 'tool',
+              toolCallId: call.id,
+              name: call.name,
+              content: '이 작업은 사용자 승인 카드가 떠 있어 아직 실행하지 않았습니다. 사용자가 승인하면 이어서 실행됩니다.',
+            });
+            break;
+          }
+        }
+      }
       if (options.unattended && (await needsHumanApproval(call.name, call.args))) {
         needsApproval = call.name;
         conversation.push({
@@ -257,6 +298,17 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
           content: `도구 실행 중 오류가 났습니다: ${message}`,
         });
         continue;
+      }
+      /**
+       * v0.6.18: 바깥에서 온 글(웹페이지·메일·첨부)은 모델에 넣기 전에 가드레일을 거친다.
+       * 안에 섞인 지시문은 가리고, 피싱 의심 링크는 표시한다.
+       */
+      if (EXTERNAL_TOOLS.has(call.name)) {
+        const guarded = guardExternalText(output.content, call.name.startsWith('browser_') ? '웹페이지' : undefined);
+        if (guarded.findings.length) {
+          output = { ...output, content: guarded.text };
+          options.onGuardrail?.(call.name, guarded.warning, guarded.findings);
+        }
       }
       used.push(call.name);
       lastTool = { name: call.name, content: output.content };

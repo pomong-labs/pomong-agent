@@ -10,11 +10,12 @@ import {
   type ModelsResponse,
   type Profile,
   type TaskRun,
+  type ApprovalRequest,
   type VaultUnlockRequest,
 } from './api';
 import { decideTurnOutcome, isBusyState, isNetworkError } from './network';
 import { applyStoredTheme, applyTheme, watchSystemTheme } from './theme';
-import { applyFont, readStoredFont } from './font';
+import { applyBold, applyFont, readStoredBold, readStoredFont } from './font';
 import { mergeMessages, mergeTaskRuns } from './chat-merge';
 
 export type AgentState = 'idle' | 'thinking' | 'working' | 'responding' | 'error';
@@ -57,6 +58,10 @@ interface AppStoreValue {
   loginRequests: LoginRequest[];
   /** 채팅에 떠 있는 금고 PIN 입력 카드 (v0.5.4) */
   unlockRequests: VaultUnlockRequest[];
+  /** v0.6.18: 되돌리기 어려운 작업의 승인 카드 */
+  approvals: ApprovalRequest[];
+  approveTask: (id: string) => Promise<{ ok: boolean; message?: string }>;
+  cancelApproval: (id: string) => Promise<void>;
   /** 금고가 잠겨 있으면 카드에서 PIN을 받아야 한다 */
   vault: { configured: boolean; unlocked: boolean };
   submitLoginCard: (
@@ -104,6 +109,8 @@ const DEFAULT_PROFILE: Profile = {
   personaCustom: '',
   // v0.6.4: 첫 페인트에 이미 칠해 둔 글꼴에서 시작해, 프로필을 받아 오기 전에 되돌아가지 않게 한다.
   font: readStoredFont(),
+  // v0.6.18: 첫 페인트에 이미 칠해 둔 볼드체에서 시작
+  bold: readStoredBold(),
 };
 
 /**
@@ -239,6 +246,8 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   const [loadedBySession, setLoadedBySession] = useState<Record<string, boolean>>({});
   const [runtimeBySession, setRuntimeBySession] = useState<Record<string, SessionRuntime>>({});
   const [loginRequests, setLoginRequests] = useState<LoginRequest[]>([]);
+  /** v0.6.18: 승인 대기 카드 */
+  const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   const [unlockRequests, setUnlockRequests] = useState<VaultUnlockRequest[]>([]);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSession, setActiveSession] = useState<string>(() => {
@@ -363,6 +372,19 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       api.put('/api/settings/profile', { font: next }).catch(() => undefined);
     }
   }, [profile.font]);
+
+  /**
+   * v0.6.18: 글씨 굵게(볼드체) — 서버 프로필이 최종값이지만,
+   * 아직 서버에 저장 전(구버전 프로필)이면 이 기기(localStorage) 값을 유지한다.
+   */
+  useEffect(() => {
+    const stored = readStoredBold();
+    const next = typeof profile.bold === 'boolean' ? profile.bold : stored;
+    applyBold(next);
+    if (typeof profile.bold !== 'boolean' && next) {
+      api.put('/api/settings/profile', { bold: next }).catch(() => undefined);
+    }
+  }, [profile.bold]);
 
   // 첫 로드: 프로필 · 모델 목록 · 지난 대화
   useEffect(() => {
@@ -706,12 +728,15 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       const r = await api.get<{
         requests: LoginRequest[];
         unlockRequests?: VaultUnlockRequest[];
+        /** v0.6.18: 승인 카드 */
+        approvals?: ApprovalRequest[];
         configured: boolean;
         unlocked: boolean;
       }>(`/api/vault/login-cards?session=${encodeURIComponent(id)}`);
       if (id !== activeSessionRef.current) return;
       setLoginRequests(r.requests || []);
       setUnlockRequests(r.unlockRequests || []);
+      setApprovals(r.approvals || []);
       setVaultState({ configured: r.configured, unlocked: r.unlocked });
     } catch {
       /* ignore */
@@ -935,6 +960,8 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
           if (run.endedAt || run.status !== 'running') patchRuntime(session, { liveTask: null });
         }
         setAiReady(true);
+        /** v0.6.18: 이번 턴에 생긴 승인 카드·로그인 카드를 바로 보여 준다. */
+        void loadLoginCards(session);
       } catch (err) {
         if (err instanceof ApiError && err.code === 'cancelled') {
           // 사용자가 '■ 중지'를 누른 경우는 오류가 아니다.
@@ -967,7 +994,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         }, 600);
       }
     },
-    [isSending, loadMessages, patchMessages, patchRuns, patchRuntime, refreshModels, refreshSessions, setDraft, watchServerTurn]
+    [isSending, loadMessages, loadLoginCards, patchMessages, patchRuns, patchRuntime, refreshModels, refreshSessions, setDraft, watchServerTurn]
   );
 
   const clearChat = useCallback(async () => {
@@ -1011,6 +1038,32 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     await api.post(`/api/vault/login-card/${id}/cancel`).catch(() => undefined);
     setLoginRequests((prev) => prev.filter((r) => r.id !== id));
   }, []);
+
+  /**
+   * v0.6.18: 승인 카드 — [승인]은 서버가 그 도구를 실제로 실행하고 결과를 채팅에 남긴다.
+   * 실행 뒤에는 대화를 다시 불러와 결과 말풍선을 바로 보여 준다.
+   */
+  const approveTask = useCallback(
+    async (id: string) => {
+      try {
+        await api.post(`/api/approvals/${id}/approve`);
+        setApprovals((prev) => prev.filter((r) => r.id !== id));
+        await loadMessages();
+        return { ok: true };
+      } catch (err) {
+        setApprovals((prev) => prev.filter((r) => r.id !== id));
+        await loadMessages();
+        return { ok: false, message: err instanceof Error ? err.message : '승인한 작업을 실행하지 못했습니다.' };
+      }
+    },
+    [loadMessages]
+  );
+
+  const cancelApproval = useCallback(async (id: string) => {
+    await api.post(`/api/approvals/${id}/cancel`).catch(() => undefined);
+    setApprovals((prev) => prev.filter((r) => r.id !== id));
+    await loadMessages();
+  }, [loadMessages]);
 
   /** v0.5.4: 금고 PIN 입력 카드 — PIN은 서버로만 보내고 저장하지 않는다. */
   const submitUnlockCard = useCallback(
@@ -1057,6 +1110,9 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       aiReady,
       loginRequests,
       unlockRequests,
+      approvals,
+      approveTask,
+      cancelApproval,
       vault: vaultState,
       submitLoginCard,
       dismissLoginCard,
@@ -1098,6 +1154,9 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       aiReady,
       loginRequests,
       unlockRequests,
+      approvals,
+      approveTask,
+      cancelApproval,
       vaultState,
       submitLoginCard,
       dismissLoginCard,

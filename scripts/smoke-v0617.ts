@@ -53,7 +53,7 @@ async function main(): Promise<void> {
   /* 1) 버전 --------------------------------------------------------------- */
   const pkg = JSON.parse(read('package.json')) as { version: string };
   const compose = read('docker-compose.yml');
-  check('버전 0.6.17', pkg.version === '0.6.17', pkg.version);
+  check('버전 0.6.x', /^0\.6\.\d+$/.test(pkg.version), pkg.version);
   check('server/config 버전', APP_VERSION === pkg.version, APP_VERSION);
   check('에셋 버전', ASSET_VERSION === pkg.version, ASSET_VERSION);
   check(

@@ -25,6 +25,40 @@ export function formatRelative(iso: string | null): string {  if (!iso) return '
   return new Date(iso).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' });
 }
 
+/**
+ * v0.6.18: 말풍선 시각 — 오늘은 시각만, 지난 날은 날짜가 함께 보이게 한다.
+ *  · 오늘       → 오후 7:54
+ *  · 어제       → 어제 · 오후 7:54
+ *  · 올해       → 11월 19일 · 오후 7:54
+ *  · 그 이전     → 2025. 11. 19. · 오후 7:54
+ */
+export function formatChatStamp(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const now = new Date();
+  const clock = formatClock(iso);
+  const sameDay =
+    d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+  if (sameDay) return clock;
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (
+    d.getFullYear() === yesterday.getFullYear() &&
+    d.getMonth() === yesterday.getMonth() &&
+    d.getDate() === yesterday.getDate()
+  ) {
+    return `어제 · ${clock}`;
+  }
+  if (d.getFullYear() === now.getFullYear()) return `${d.getMonth() + 1}월 ${d.getDate()}일 · ${clock}`;
+  return `${d.getFullYear()}. ${d.getMonth() + 1}. ${d.getDate()}. · ${clock}`;
+}
+
+/** v0.6.18: 채팅방 목록용 — 날짜(또는 어제)와 시각을 함께 보여 준다. */
+export function formatRoomStampFull(iso: string | null): string {
+  if (!iso) return '';
+  return formatChatStamp(iso);
+}
+
 export function formatDate(iso: string | null): string {
   if (!iso) return '';
   const d = new Date(iso);

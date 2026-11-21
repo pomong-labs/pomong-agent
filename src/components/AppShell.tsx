@@ -1,5 +1,5 @@
 import { useLocation, NavLink, Outlet } from 'react-router-dom';
-import { Activity, AlarmClock, FolderOpen, Globe, ListChecks, Lock, MessageCircle, Settings as SettingsIcon } from 'lucide-react';
+import { Activity, AlarmClock, FolderOpen, Globe, LayoutGrid, ListChecks, Lock, MessageCircle, Settings as SettingsIcon } from 'lucide-react';
 import Logo from './Logo';
 import MiniStatus from './MiniStatus';
 import MobileTabBar from './MobileTabBar';
@@ -19,6 +19,8 @@ const nav = [
   { to: '/files', label: t.nav.files, icon: FolderOpen },
   { to: '/browser', label: t.nav.browser, icon: Globe },
   { to: '/settings', label: t.nav.settings, icon: SettingsIcon },
+  /** v0.6.18: PC 좌상단 사이드바에서도 '더보기'(도구 관리·서비스 등)로 바로 들어간다. */
+  { to: '/more', label: t.nav.more, icon: LayoutGrid },
 ];
 
 export default function AppShell() {
